@@ -93,12 +93,10 @@ mv `pwd`/../autoscaler `pwd`/go/src/k8s.io
 %endif
 
 %build
-GOPATH=`pwd`/go
-cd go/src/k8s.io/autoscaler/cluster-autoscaler
 %if 0%{do_build}
 %if 0%{make_redistributable}
 # Create Binaries for all internally defined arches
-%{os_git_vars} make build-binary
+%{os_git_vars} make build-cross
 %else
 # Create Binaries only for building arch
 %ifarch x86_64
@@ -116,7 +114,7 @@ cd go/src/k8s.io/autoscaler/cluster-autoscaler
 %ifarch s390x
   BUILD_PLATFORM="linux/s390x"
 %endif
-OS_ONLY_BUILD_PLATFORMS="${BUILD_PLATFORM}" %{os_git_vars} make build-binary
+OS_ONLY_BUILD_PLATFORMS="${BUILD_PLATFORM}" %{os_git_vars} make build-cross
 %endif
 %endif
 
@@ -126,12 +124,11 @@ PLATFORM="$(go env GOHOSTOS)/$(go env GOHOSTARCH)"
 install -d %{buildroot}%{_bindir}
 
 # install binary
-install -d %{buildroot}%{_bindir}
-install -p -m 755 go/src/k8s.io/autoscaler/cluster-autoscaler/cluster-autoscaler %{buildroot}%{_bindir}/cluster-autoscaler
+install -p -m 755 _output/local/bin/${PLATFORM}/cluster-autoscaler %{buildroot}%{_bindir}/cluster-autoscaler
 
 %files
-%doc go/src/k8s.io/autoscaler/cluster-autoscaler/README.md
-%license go/src/k8s.io/autoscaler/LICENSE
+%doc cluster-autoscaler/README.md
+%license LICENSE
 %{_bindir}/cluster-autoscaler
 
 %changelog
