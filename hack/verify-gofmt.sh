@@ -1,4 +1,5 @@
 #!/bin/bash
+source "$(dirname "${BASH_SOURCE}")/lib/init.sh"
 
 # Copyright 2014 The Kubernetes Authors.
 #
@@ -40,12 +41,10 @@ find_files() {
     \) -name '*.go'
 }
 
-DOCKER_IMAGE=`grep 'FROM golang' builder/Dockerfile | sed 's/FROM //'`
-GOFMT="docker run -v $(pwd):/code -w /code $DOCKER_IMAGE gofmt -s"
-
-bad_files=$(find_files | xargs $GOFMT -l)
+bad_files=$(os::util::list_go_src_files | xargs gofmt -s -l)
 if [[ -n "${bad_files}" ]]; then
   echo "Please run hack/update-gofmt.sh to fix the following files:"
-  echo "${bad_files}"
-  exit 1
+	echo "${bad_files}"
+	os::log::fatal "Try running 'gofmt -s -d [path]'
+Or autocorrect with 'hack/verify-gofmt.sh | xargs -n 1 gofmt -s -w'"
 fi
