@@ -66,7 +66,7 @@ Summary:        Cluster Autoscaler for OpenShift and Kubernetes
 License:        ASL 2.0
 URL:            https://%{import_path}
 
-Source0:        https://%{import_path}/archive/%{commit}/cluster-autoscaler-%{version}.tar.gz
+Source0:        https://%{import_path}/archive/%{commit}/cluster-autoscaler-%{shortcommit}.tar.gz
 BuildRequires:  golang >= %{golang_version}
 
 # If go_arches not defined fall through to implicit golang archs
@@ -85,11 +85,10 @@ have a place to run and there are no unneeded nodes.
 
 %prep
 %if 0%{do_prep}
-%setup -n kubernetes-autoscaler-cluster-autoscaler-%{version}
-mkdir `pwd`/../autoscaler
-mv * `pwd`/../autoscaler
-mkdir -p `pwd`/go/src/k8s.io
-mv `pwd`/../autoscaler `pwd`/go/src/k8s.io
+%setup -n kubernetes-autoscaler-cluster-autoscaler-%{commit}
+# Expected by `make build-rpms`
+rm -rf ../%{name}-%{version}
+ln -s kubernetes-autoscaler-cluster-autoscaler-%{commit} ../%{name}-%{version}
 %endif
 
 %build
@@ -119,7 +118,6 @@ OS_ONLY_BUILD_PLATFORMS="${BUILD_PLATFORM}" %{os_git_vars} make build-cross
 %endif
 
 %install
-
 PLATFORM="$(go env GOHOSTOS)/$(go env GOHOSTARCH)"
 install -d %{buildroot}%{_bindir}
 
