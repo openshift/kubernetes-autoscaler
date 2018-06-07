@@ -3,8 +3,8 @@ package oscmd
 import (
 	"regexp"
 
-	"github.com/openshift/origin/tools/junitreport/pkg/api"
-	"github.com/openshift/origin/tools/junitreport/pkg/parser/stack"
+	"k8s.io/autoscaler/tools/junitreport/pkg/api"
+	"k8s.io/autoscaler/tools/junitreport/pkg/parser/stack"
 )
 
 func newTestDataParser() stack.TestDataParser {
