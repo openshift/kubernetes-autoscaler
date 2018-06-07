@@ -3,7 +3,7 @@ package parser
 import (
 	"bufio"
 
-	"github.com/openshift/origin/tools/junitreport/pkg/api"
+	"k8s.io/autoscaler/tools/junitreport/pkg/api"
 )
 
 // TestOutputParser knows how to parse test output to create a collection of test suites
