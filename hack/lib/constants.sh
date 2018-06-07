@@ -125,10 +125,13 @@ function os::util::list_test_packages_under() {
     find ${basedir} -not \(                   \
         \(                                    \
               -path 'vendor'                  \
+              -o -path 'tools'                \
+              -o -path 'tools'                \
               -o -path '*_output'             \
               -o -path '*.git'                \
               -o -path '*vendor/*'            \
-              -o -path '*test/*'              \
+              -o -path 'addon-resizer'        \
+              -o -path 'vertical-pod-autoscaler' \
         \) -prune                             \
     \) -name '*_test.go' | xargs -n1 dirname | sort -u | xargs -n1 printf "${OS_GO_PACKAGE}/%s\n"
 }
@@ -136,7 +139,7 @@ readonly -f os::util::list_test_packages_under
 
 # os::util::list_go_deps outputs the list of dependencies for the project.
 function os::util::list_go_deps() {
-  go list -f '{{.ImportPath}}{{.Imports}}' ./pkg/... ./cmd/... | tr '[]' '  ' |
+  go list -f '{{.ImportPath}}{{.Imports}}' ./cluster-autoscaler/... ./vertical-pod-autoscaler/... | tr '[]' '  ' |
     sed -e 's|${OS_GO_PACKAGE}/vendor/||g'
 }
 
