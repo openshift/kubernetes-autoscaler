@@ -1,6 +1,6 @@
 package stack
 
-import "github.com/openshift/origin/tools/junitreport/pkg/api"
+import "k8s.io/autoscaler/tools/junitreport/pkg/api"
 
 // TestDataParser knows how to take raw test data and extract the useful information from it
 type TestDataParser interface {
