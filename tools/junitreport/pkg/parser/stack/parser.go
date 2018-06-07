@@ -6,9 +6,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/openshift/origin/tools/junitreport/pkg/api"
-	"github.com/openshift/origin/tools/junitreport/pkg/builder"
-	"github.com/openshift/origin/tools/junitreport/pkg/parser"
+	"k8s.io/autoscaler/tools/junitreport/pkg/api"
+	"k8s.io/autoscaler/tools/junitreport/pkg/builder"
+	"k8s.io/autoscaler/tools/junitreport/pkg/parser"
 )
 
 // NewParser returns a new parser that's capable of parsing Go unit test output
