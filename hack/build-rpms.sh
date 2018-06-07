@@ -83,8 +83,7 @@ else
 		--define "os_git_vars ${OS_RPM_GIT_VARS}" \
 		--define 'dist .el7' --define "_topdir ${rpm_tmp_dir}"
 
-	working_dir_realpath="$(realpath ${rpm_tmp_dir}/BUILD/${OS_RPM_NAME}-${OS_RPM_VERSION})"
-	output_directory="$( find "${working_dir_realpath}" -type d -path "*/_output/local" )"
+	output_directory="$( find "${rpm_tmp_dir}" -type d -path "*/BUILD/${OS_RPM_NAME}-${OS_RPM_VERSION}/_output/local" )"
 	if [[ -z "${output_directory}" ]]; then
 		os::log::fatal 'No _output artifact directory found in rpmbuild artifacts!'
 	fi
