@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/openshift/origin/tools/junitreport/pkg/cmd"
+	"k8s.io/autoscaler/tools/junitreport/pkg/cmd"
 )
 
 var (
