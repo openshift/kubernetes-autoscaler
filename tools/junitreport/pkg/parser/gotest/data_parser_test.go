@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/openshift/origin/tools/junitreport/pkg/api"
+	"k8s.io/autoscaler/tools/junitreport/pkg/api"
 )
 
 func TestExtractRunOk(t *testing.T) {
