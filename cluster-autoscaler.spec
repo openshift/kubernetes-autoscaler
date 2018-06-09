@@ -66,7 +66,7 @@ Summary:        Cluster Autoscaler for OpenShift and Kubernetes
 License:        ASL 2.0
 URL:            https://%{import_path}
 
-Source0:        https://%{import_path}/archive/%{commit}/cluster-autoscaler-%{shortcommit}.tar.gz
+Source0:        https://%{import_path}/archive/%{commit}/%{name}-%{version}.tar.gz
 BuildRequires:  golang >= %{golang_version}
 
 # If go_arches not defined fall through to implicit golang archs
@@ -85,10 +85,7 @@ have a place to run and there are no unneeded nodes.
 
 %prep
 %if 0%{do_prep}
-%setup -n kubernetes-autoscaler-cluster-autoscaler-%{commit}
-# Expected by `make build-rpms`
-rm -rf ../%{name}-%{version}
-ln -s kubernetes-autoscaler-cluster-autoscaler-%{commit} ../%{name}-%{version}
+%setup -q
 %endif
 
 %build
