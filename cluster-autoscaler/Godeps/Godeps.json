@@ -5625,9 +5625,36 @@
 			"Rev": "66066c83e385e385ccc3c964b44fd7dcd413d0ed"
 		},
 		{
-			"ImportPath": "sigs.k8s.io/yaml",
-			"Comment": "v1.1.0",
-			"Rev": "fd68e9863619f6ec2fdd8625fe1f02e7c877e480"
+			"ImportPath": "sigs.k8s.io/cluster-api/pkg/apis/cluster/common",
+			"Comment": "0.0.0-alpha.3-17-g36eecfab0",
+			"Rev": "36eecfab0fd0702b3b0a3edf9bf8bd41996477b0"
+		},
+		{
+			"ImportPath": "sigs.k8s.io/cluster-api/pkg/apis/cluster/v1alpha1",
+			"Comment": "0.0.0-alpha.3-17-g36eecfab0",
+			"Rev": "36eecfab0fd0702b3b0a3edf9bf8bd41996477b0"
+		},
+		{
+			"ImportPath": "sigs.k8s.io/cluster-api/pkg/client/clientset_generated/clientset",
+			"Comment": "0.0.0-alpha.3-17-g36eecfab0",
+			"Rev": "36eecfab0fd0702b3b0a3edf9bf8bd41996477b0"
+		},
+		{
+			"ImportPath": "sigs.k8s.io/cluster-api/pkg/client/clientset_generated/clientset/scheme",
+			"Comment": "0.0.0-alpha.3-17-g36eecfab0",
+			"Rev": "36eecfab0fd0702b3b0a3edf9bf8bd41996477b0"
+		},
+		{
+			"ImportPath": "sigs.k8s.io/cluster-api/pkg/client/clientset_generated/clientset/typed/cluster/v1alpha1",
+			"Comment": "0.0.0-alpha.3-17-g36eecfab0",
+			"Rev": "36eecfab0fd0702b3b0a3edf9bf8bd41996477b0"
+		},
+		{
+			"ImportPath": "sigs.k8s.io/controller-runtime/pkg/runtime/scheme",
+			"Comment": "v0.1.4-25-g26e59af7",
+			"Rev": "26e59af72836db80f816314dc8d1c37fe5733298"
+		},
+		{
 		}
 	]
 }
