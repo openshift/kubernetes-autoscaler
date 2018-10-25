@@ -23,6 +23,7 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/aws"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/azure"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/clusterapi"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gke"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/kubemark"
@@ -44,6 +45,7 @@ var AvailableCloudProviders = []string{
 	gce.ProviderNameGCE,
 	gke.ProviderNameGKE,
 	kubemark.ProviderName,
+	clusterapi.ProviderName,
 }
 
 // DefaultCloudProvider is GCE.
@@ -76,6 +78,8 @@ func NewCloudProvider(opts config.AutoscalingOptions) cloudprovider.CloudProvide
 		return buildAzure(opts, do, rl)
 	case kubemark.ProviderName:
 		return buildKubemark(opts, do, rl)
+	case clusterapi.ProviderName:
+		return buildClusterAPI(clusterapi.ProviderName, opts, do, rl)
 	case "":
 		// Ideally this would be an error, but several unit tests of the
 		// StaticAutoscaler depend on this behaviour.
@@ -217,5 +221,14 @@ func buildKubemark(opts config.AutoscalingOptions, do cloudprovider.NodeGroupDis
 	if err != nil {
 		glog.Fatalf("Failed to create Kubemark cloud provider: %v", err)
 	}
+	return provider
+}
+
+func buildClusterAPI(name string, opts config.AutoscalingOptions, do cloudprovider.NodeGroupDiscoveryOptions, rl *cloudprovider.ResourceLimiter) cloudprovider.CloudProvider {
+	provider, err := clusterapi.NewProvider(name, opts, do, rl)
+	if err != nil {
+		glog.Fatalf("Failed to create %q cloud provider: %v", name, err)
+	}
+
 	return provider
 }
