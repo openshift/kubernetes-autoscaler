@@ -115,4 +115,6 @@ type AutoscalingOptions struct {
 	ExpendablePodsPriorityCutoff int
 	// Regional tells whether the cluster is regional.
 	Regional bool
+	// Path to kube configuration if available
+	KubeConfigPath string
 }

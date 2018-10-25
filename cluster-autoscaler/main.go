@@ -207,6 +207,7 @@ func createAutoscalingOptions() config.AutoscalingOptions {
 		UnremovableNodeRecheckTimeout:    *unremovableNodeRecheckTimeout,
 		ExpendablePodsPriorityCutoff:     *expendablePodsPriorityCutoff,
 		Regional:                         *regional,
+		KubeConfigPath:                   *kubeConfigFile,
 	}
 }
 
