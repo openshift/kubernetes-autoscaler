@@ -46,7 +46,7 @@
 # Customize from here.
 #
 
-%global golang_version 1.9.1
+%global golang_version 1.10.4
 %{!?version: %global version 1.2.0}
 %{!?release: %global release 1}
 
