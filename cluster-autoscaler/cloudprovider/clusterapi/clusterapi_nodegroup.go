@@ -18,39 +18,36 @@ package clusterapi
 
 import (
 	"fmt"
-	"strconv"
 	"time"
 
-	"github.com/golang/glog"
 	apiv1 "k8s.io/api/core/v1"
-	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	schedulercache "k8s.io/kubernetes/pkg/scheduler/cache"
-	v1alpha1 "sigs.k8s.io/cluster-api/pkg/apis/cluster/v1alpha1"
 )
 
 const (
-	machineDeleteAnnotationKey    = "sigs.k8s.io/cluster-api-delete-machine"
-	nodeGroupMinSizeAnnotationKey = "sigs.k8s.io/cluster-api-autoscaler-node-group-min-size"
-	nodeGroupMaxSizeAnnotationKey = "sigs.k8s.io/cluster-api-autoscaler-node-group-max-size"
+	machineDeleteAnnotationKey = "sigs.k8s.io/cluster-api-delete-machine"
 )
 
 var _ cloudprovider.NodeGroup = (*nodegroup)(nil)
 
 type nodegroup struct {
-	*provider
-	*v1alpha1.MachineSet
-	minSize int
-	maxSize int
-	nodes   []string
+	maxSize   int
+	minSize   int
+	name      string
+	namespace string
+	nodeNames []string
+	provider  *provider
+	replicas  int32
 }
 
 func (ng *nodegroup) Name() string {
-	return ng.MachineSet.Name
+	return ng.name
 }
 
 func (ng *nodegroup) Namespace() string {
-	return ng.MachineSet.Namespace
+	return ng.namespace
 }
 
 func (ng *nodegroup) MinSize() int {
@@ -62,79 +59,28 @@ func (ng *nodegroup) MaxSize() int {
 }
 
 func (ng *nodegroup) Replicas() int {
-	if ng.MachineSet.Spec.Replicas == nil {
-		return 0
-	}
-	glog.Infof("machineset: %q has %d replicas", ng.MachineSet.Name, *ng.MachineSet.Spec.Replicas)
-	return int(*ng.MachineSet.Spec.Replicas)
+	return int(ng.replicas)
 }
 
 func (ng *nodegroup) SetSize(nreplicas int) error {
-	ms, err := ng.clusterapi.MachineSets(ng.MachineSet.Namespace).Get(ng.MachineSet.Name, v1.GetOptions{})
+	machineSet, err := ng.provider.clusterapi.MachineSets(ng.namespace).Get(ng.name, v1.GetOptions{})
 	if err != nil {
-		return fmt.Errorf("Unable to get machineset %q: %v", ng.MachineSet.Name, err)
+		return fmt.Errorf("unable to get machineset %q: %v", ng.name, err)
 	}
 
-	newMachineSet := ms.DeepCopy()
+	machineSet = machineSet.DeepCopy()
 	replicas := int32(nreplicas)
-	newMachineSet.Spec.Replicas = &replicas
+	machineSet.Spec.Replicas = &replicas
 
-	_, err = ng.clusterapi.MachineSets(ng.MachineSet.Namespace).Update(newMachineSet)
+	_, err = ng.provider.clusterapi.MachineSets(ng.namespace).Update(machineSet)
 	if err != nil {
-		return fmt.Errorf("Unable to update number of replicas of machineset %q: %v", ng.MachineSet.Name, err)
+		return fmt.Errorf("unable to update number of replicas of machineset %q: %v", ng, err)
 	}
-
 	return nil
 }
 
 func (ng *nodegroup) String() string {
-	return fmt.Sprintf("%s/%s", ng.Namespace(), ng.Name())
-}
-
-func parseAnnotation(ms *v1alpha1.MachineSet, key string) (int, error) {
-	val, exists := ms.Annotations[key]
-	if !exists {
-		glog.Infof("machineset %q has no annotation for %q", machineSetID(ms), key)
-		return 0, nil
-	}
-
-	u, err := strconv.ParseUint(val, 10, 32)
-	if err != nil {
-		// Returns "... cannot parse annotation <key> as an integral value: strconv.ParseUint: parsing "<val>": invalid syntax"
-		return 0, fmt.Errorf("machineset %q: cannot parse annotation %q as an integral value: %v", machineSetID(ms), key, err)
-	}
-
-	return int(u), nil
-}
-
-func newClusterMachineSet(m *provider, ms *v1alpha1.MachineSet, nodes []string) (*nodegroup, error) {
-	cms := nodegroup{
-		provider:   m,
-		MachineSet: ms,
-		nodes:      nodes,
-	}
-
-	minSize, err := parseAnnotation(ms, nodeGroupMinSizeAnnotationKey)
-	if err != nil {
-		return nil, err
-	}
-
-	maxSize, err := parseAnnotation(ms, nodeGroupMaxSizeAnnotationKey)
-	if err != nil {
-		return nil, err
-	}
-
-	if maxSize < minSize {
-		return nil, fmt.Errorf("machineset %q: max value (%q:%d) must be >= min value (%q:%d)",
-			machineSetID(ms),
-			nodeGroupMaxSizeAnnotationKey, maxSize,
-			nodeGroupMinSizeAnnotationKey, minSize)
-	}
-
-	cms.minSize = minSize
-	cms.maxSize = maxSize
-
-	return &cms, nil
+	return fmt.Sprintf("%s/%s", ng.namespace, ng.name)
 }
 
 // TargetSize returns the current target size of the node group. It is
@@ -166,26 +112,13 @@ func (ng *nodegroup) IncreaseSize(delta int) error {
 // group. This function should wait until node group size is updated.
 // Implementation required.
 func (ng *nodegroup) DeleteNodes(nodes []*apiv1.Node) error {
-	if len(nodes) == 0 {
-		return nil
-	}
-
-	snapshot := ng.getClusterState()
-
 	for _, node := range nodes {
-		msid := machineSetID(ng.MachineSet)
-		nodemap, exists := snapshot.NodeMap[msid]
-		if !exists {
-			return fmt.Errorf("unknown machineset %q", msid)
-		}
-
-		name, exists := nodemap[node.Name]
-		if !exists {
-			return fmt.Errorf("cannot map node %q to machine", node.Name)
-		}
-		machine, err := ng.clusterapi.Machines(ng.MachineSet.Namespace).Get(name, v1.GetOptions{})
+		machine, err := ng.provider.clusterController.findMachine(node)
 		if err != nil {
-			return fmt.Errorf("cannot get machine %s/%s: %v", ng.MachineSet.Namespace, name, err)
+			return err
+		}
+		if machine == nil {
+			return fmt.Errorf("unknown machine")
 		}
 
 		machine = machine.DeepCopy()
@@ -196,15 +129,14 @@ func (ng *nodegroup) DeleteNodes(nodes []*apiv1.Node) error {
 
 		machine.Annotations[machineDeleteAnnotationKey] = time.Now().String()
 
-		_, err = ng.clusterapi.Machines(ng.MachineSet.Namespace).Update(machine)
-		if err != nil {
-			return fmt.Errorf("unable to update machine %q: %v", machine.Name, err)
+		if _, err := ng.provider.clusterapi.Machines(machine.Namespace).Update(machine); err != nil {
+			return fmt.Errorf("failed to update machine %s/%s: %v", machine.Namespace, machine.Name, err)
 		}
 	}
 
 	replicas := ng.Replicas()
 	if replicas-len(nodes) <= 0 {
-		return fmt.Errorf("unable to delete %d machines in %s, machine replicas are <= 0 ", len(nodes), ng.Name())
+		return fmt.Errorf("unable to delete %d machines in %s, machine replicas are <= 0 ", len(nodes), ng.name)
 	}
 
 	return ng.SetSize(replicas - len(nodes))
@@ -231,7 +163,7 @@ func (ng *nodegroup) DecreaseTargetSize(delta int) error {
 		return err
 	}
 
-	if int(size)+delta < len(nodes) {
+	if size+delta < len(nodes) {
 		return fmt.Errorf("attempt to delete existing nodes targetSize:%d delta:%d existingNodes: %d",
 			size, delta, len(nodes))
 	}
@@ -241,7 +173,7 @@ func (ng *nodegroup) DecreaseTargetSize(delta int) error {
 
 // Id returns an unique identifier of the node group.
 func (ng *nodegroup) Id() string {
-	return ng.Name()
+	return ng.name
 }
 
 // Debug returns a string containing all information regarding this node group.
@@ -251,7 +183,7 @@ func (ng *nodegroup) Debug() string {
 
 // Nodes returns a list of all nodes that belong to this node group.
 func (ng *nodegroup) Nodes() ([]string, error) {
-	return ng.nodes, nil
+	return ng.nodeNames, nil
 }
 
 // TemplateNodeInfo returns a schedulercache.NodeInfo structure of an
