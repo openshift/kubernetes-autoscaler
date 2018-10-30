@@ -18,41 +18,113 @@ package clusterapi
 
 import (
 	"fmt"
-	"sync"
 	"time"
 
+	"github.com/golang/glog"
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	"k8s.io/autoscaler/cluster-autoscaler/config"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/errors"
-	kubeclient "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+	"sigs.k8s.io/cluster-api/pkg/apis/cluster/v1alpha1"
 	"sigs.k8s.io/cluster-api/pkg/client/clientset_generated/clientset"
-	v1alpha1apis "sigs.k8s.io/cluster-api/pkg/client/clientset_generated/clientset/typed/cluster/v1alpha1"
+	clusterv1alpha1 "sigs.k8s.io/cluster-api/pkg/client/clientset_generated/clientset/typed/cluster/v1alpha1"
+	informers "sigs.k8s.io/cluster-api/pkg/client/informers_generated/externalversions"
 )
 
 const (
-	// ProviderName is the cloud nodegroup name for the cluster-api
-	// nodegroup.
-	ProviderName = "cluster-api"
-
-	refreshInterval = 30 * time.Second
+	// ProviderName is the name of cluster-api cloud provider.
+	ProviderName                  = "cluster-api"
+	nodeGroupMinSizeAnnotationKey = "sigs.k8s.io/cluster-api-autoscaler-node-group-min-size"
+	nodeGroupMaxSizeAnnotationKey = "sigs.k8s.io/cluster-api-autoscaler-node-group-max-size"
 )
 
 var _ cloudprovider.CloudProvider = (*provider)(nil)
 
 type provider struct {
-	// protects the cluster snapshot
-	clusterSnapshotMutex sync.Mutex
-	clusterSnapshot      *clusterSnapshot
+	*clusterController
 
 	providerName    string
 	resourceLimiter *cloudprovider.ResourceLimiter
-	lastRefresh     time.Time
-	clusterapi      v1alpha1apis.ClusterV1alpha1Interface
-	kubeclient      *kubeclient.Clientset
+	clusterapi      clusterv1alpha1.ClusterV1alpha1Interface
+}
+
+func (p *provider) nodeNames(machineSet *v1alpha1.MachineSet) ([]string, error) {
+	machines, err := p.clusterController.machineInformer.Lister().Machines(machineSet.Namespace).List(labels.Everything())
+	if err != nil {
+		return nil, fmt.Errorf("error listing machines: %v", err)
+	}
+
+	var nodeNames []string
+
+	for _, machine := range machines {
+		if machine.Status.NodeRef == nil {
+			glog.V(4).Infof("Status.NodeRef of machine %q is currently nil", machine.Name)
+			continue
+		}
+		if machine.Status.NodeRef.Kind != "Node" {
+			glog.Errorf("Status.NodeRef of machine %q does not reference a node (rather %q)", machine.Name, machine.Status.NodeRef.Kind)
+			continue
+		}
+		if machineOwnerName(machine) == machineSet.Name {
+			nodeNames = append(nodeNames, machine.Status.NodeRef.Name)
+		}
+	}
+
+	glog.V(4).Infof("nodegroup %s has nodes %v", machineSet.Name, nodeNames)
+
+	return nodeNames, nil
+}
+
+func (p *provider) nodeGroups() ([]*nodegroup, error) {
+	var nodegroups []*nodegroup
+
+	machineSets, err := p.clusterController.machineSetInformer.Lister().MachineSets("").List(labels.Everything())
+	if err != nil {
+		return nil, err
+	}
+
+	for _, machineSet := range machineSets {
+		nodegroup, err := p.buildNodeGroup(machineSet.DeepCopy())
+		if err != nil {
+			return nil, err
+		}
+		nodegroups = append(nodegroups, nodegroup)
+	}
+
+	return nodegroups, nil
+}
+
+func (p *provider) buildNodeGroup(machineSet *v1alpha1.MachineSet) (*nodegroup, error) {
+	minSize, maxSize, err := parseMachineSetBounds(machineSet)
+
+	if err != nil {
+		return nil, fmt.Errorf("error validating min/max annotations: %v", err)
+	}
+
+	var replicas int32
+
+	if machineSet.Spec.Replicas != nil {
+		replicas = *machineSet.Spec.Replicas
+	}
+
+	nodeNames, err := p.nodeNames(machineSet)
+	if err != nil {
+		return nil, err
+	}
+
+	return &nodegroup{
+		maxSize:   maxSize,
+		minSize:   minSize,
+		name:      machineSet.Name,
+		namespace: machineSet.Namespace,
+		nodeNames: nodeNames,
+		provider:  p,
+		replicas:  replicas,
+	}, nil
 }
 
 func (p *provider) Name() string {
@@ -64,11 +136,17 @@ func (p *provider) GetResourceLimiter() (*cloudprovider.ResourceLimiter, error) 
 }
 
 func (p *provider) NodeGroups() []cloudprovider.NodeGroup {
-	result := []cloudprovider.NodeGroup{}
+	nodegroups, err := p.nodeGroups()
+	if err != nil {
+		return nil
+	}
 
-	for _, ms := range p.getClusterState().MachineSetMap {
-		if ms.MaxSize()-ms.MinSize() > 0 {
-			result = append(result, ms)
+	var result []cloudprovider.NodeGroup
+
+	for _, ng := range nodegroups {
+		if ng.MaxSize()-ng.MinSize() > 0 {
+			glog.V(4).Infof("discovered machineset %q (min: %v, max: %v, replicas: %v)", ng, ng.minSize, ng.maxSize, ng.replicas)
+			result = append(result, ng)
 		}
 	}
 
@@ -76,23 +154,45 @@ func (p *provider) NodeGroups() []cloudprovider.NodeGroup {
 }
 
 func (p *provider) NodeGroupForNode(node *apiv1.Node) (cloudprovider.NodeGroup, error) {
-	snapshot := p.getClusterState()
-	if msid, exists := snapshot.NodeToMachineSetID[node.Name]; exists {
-		return snapshot.MachineSetMap[msid], nil
+	// TODO(frobware) - currently waiting for:
+	//
+	//  https://github.com/kubernetes-sigs/cluster-api/pull/565
+	//
+	// to merge and then the logic here will switch to indexing
+	// via node.Spec.ProviderID. What we have here uses a node's
+	// "machine" annotation but that works for only a short period
+	// of time as the overall core autoscaler logic uses
+	// node.Spec.ProviderID to determine if a node is correctly
+	// registered. As we use a node's "machine" annotation the
+	// mapping this function provides between a node and its
+	// corresponding nodegroup will eventually degrade to
+	// "unregistered" and once that happens the autoscaler will
+	// stop scaling up and down as it deems the overall state of
+	// the cluster to be unhealthy.
+	machine, err := p.clusterController.findMachine(node)
+	if err != nil {
+		return nil, err
 	}
-	return nil, nil
-}
+	if machine == nil {
+		return nil, nil
+	}
 
-func (p *provider) getClusterState() *clusterSnapshot {
-	p.clusterSnapshotMutex.Lock()
-	defer p.clusterSnapshotMutex.Unlock()
-	return p.clusterSnapshot
-}
+	machineSet, err := p.clusterController.findMachineSet(machine)
+	if err != nil {
+		return nil, err
+	}
 
-func (p *provider) setClusterState(s *clusterSnapshot) {
-	p.clusterSnapshotMutex.Lock()
-	defer p.clusterSnapshotMutex.Unlock()
-	p.clusterSnapshot = s
+	if machineSet == nil {
+		return nil, nil
+	}
+
+	nodegroup, err := p.buildNodeGroup(machineSet)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build nodegroup for node %q: %v", node.Name, err)
+	}
+
+	glog.V(4).Infof("node %q is in nodegroup %q", node.Name, machineSet.Name)
+	return nodegroup, nil
 }
 
 func (*provider) Pricing() (cloudprovider.PricingModel, errors.AutoscalerError) {
@@ -111,21 +211,12 @@ func (*provider) Cleanup() error {
 	return nil
 }
 
-func (c *provider) Refresh() error {
-	if c.lastRefresh.Add(refreshInterval).After(time.Now()) && c.clusterSnapshot != nil {
-		return nil
-	}
-
-	s, err := getClusterSnapshot(c)
-	if err == nil {
-		c.lastRefresh = time.Now()
-		c.setClusterState(s)
-	}
-
-	return err
+func (p *provider) Refresh() error {
+	return nil
 }
 
-func NewProvider(name string, opts config.AutoscalingOptions, do cloudprovider.NodeGroupDiscoveryOptions, rl *cloudprovider.ResourceLimiter) (*provider, error) {
+// BuildCloudProvider builds a new clusterapi-based cloudprovider
+func BuildCloudProvider(name string, opts config.AutoscalingOptions, rl *cloudprovider.ResourceLimiter) (cloudprovider.CloudProvider, error) {
 	var err error
 	var externalConfig *rest.Config
 
@@ -141,21 +232,29 @@ func NewProvider(name string, opts config.AutoscalingOptions, do cloudprovider.N
 		}
 	}
 
-	kubeclient, err := kubeclient.NewForConfig(externalConfig)
+	clientset, err := clientset.NewForConfig(externalConfig)
+	if err != nil {
+		return nil, fmt.Errorf("create clientset failed: %v", err)
+	}
+
+	factory := informers.NewSharedInformerFactory(clientset, time.Second*30)
+	controller, err := newClusterController(factory)
 	if err != nil {
 		return nil, err
 	}
 
-	clusterapi, err := clientset.NewForConfig(externalConfig)
-	if err != nil {
-		return nil, fmt.Errorf("could not create client for talking to the apiserver: %v", err)
+	// Ideally this would be passed in but the builder is not
+	// currently organised to do so.
+	stopCh := make(chan struct{})
+
+	if err := controller.run(stopCh); err != nil {
+		return nil, err
 	}
 
 	return &provider{
-		clusterSnapshot: newEmptySnapshot(),
-		providerName:    name,
-		resourceLimiter: rl,
-		clusterapi:      clusterapi.ClusterV1alpha1(),
-		kubeclient:      kubeclient,
+		providerName:      name,
+		resourceLimiter:   rl,
+		clusterController: controller,
+		clusterapi:        clientset.ClusterV1alpha1(),
 	}, nil
 }

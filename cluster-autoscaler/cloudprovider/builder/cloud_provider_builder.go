@@ -225,7 +225,7 @@ func buildKubemark(opts config.AutoscalingOptions, do cloudprovider.NodeGroupDis
 }
 
 func buildClusterAPI(name string, opts config.AutoscalingOptions, do cloudprovider.NodeGroupDiscoveryOptions, rl *cloudprovider.ResourceLimiter) cloudprovider.CloudProvider {
-	provider, err := clusterapi.NewProvider(name, opts, do, rl)
+	provider, err := clusterapi.BuildCloudProvider(name, opts, rl)
 	if err != nil {
 		glog.Fatalf("Failed to create %q cloud provider: %v", name, err)
 	}
