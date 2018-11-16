@@ -30,9 +30,9 @@ import (
 )
 
 const (
-	machineDeleteAnnotationKey = "sigs.k8s.io/cluster-api-delete-machine"
-	minLabel                   = "sigs.k8s.io/cluster-api-autoscaler-node-group-min-size"
-	maxLabel                   = "sigs.k8s.io/cluster-api-autoscaler-node-group-max-size"
+	machineDeleteAnnotationKey    = "sigs.k8s.io/cluster-api-delete-machine"
+	nodeGroupMinSizeAnnotationKey = "sigs.k8s.io/cluster-api-autoscaler-node-group-min-size"
+	nodeGroupMaxSizeAnnotationKey = "sigs.k8s.io/cluster-api-autoscaler-node-group-max-size"
 )
 
 var _ cloudprovider.NodeGroup = (*nodegroup)(nil)
@@ -91,17 +91,17 @@ func (ng *nodegroup) String() string {
 	return fmt.Sprintf("%s/%s", ng.Namespace(), ng.Name())
 }
 
-func parseLabel(ms *v1alpha1.MachineSet, label string) (int, error) {
-	val, exists := ms.Labels[label]
+func parseAnnotation(ms *v1alpha1.MachineSet, key string) (int, error) {
+	val, exists := ms.Annotations[key]
 	if !exists {
-		glog.Infof("machineset %q has no label named %q", machineSetID(ms), label)
+		glog.Infof("machineset %q has no annotation for %q", machineSetID(ms), key)
 		return 0, nil
 	}
 
 	u, err := strconv.ParseUint(val, 10, 32)
 	if err != nil {
-		// Returns "... cannot parse label <label> as an integral value: strconv.ParseUint: parsing "<val>": invalid syntax"
-		return 0, fmt.Errorf("machineset %q: cannot parse label %q as an integral value: %v", machineSetID(ms), label, err)
+		// Returns "... cannot parse annotation <key> as an integral value: strconv.ParseUint: parsing "<val>": invalid syntax"
+		return 0, fmt.Errorf("machineset %q: cannot parse annotation %q as an integral value: %v", machineSetID(ms), key, err)
 	}
 
 	return int(u), nil
@@ -114,18 +114,21 @@ func newClusterMachineSet(m *provider, ms *v1alpha1.MachineSet, nodes []string) 
 		nodes:      nodes,
 	}
 
-	minSize, err := parseLabel(ms, minLabel)
+	minSize, err := parseAnnotation(ms, nodeGroupMinSizeAnnotationKey)
 	if err != nil {
 		return nil, err
 	}
 
-	maxSize, err := parseLabel(ms, maxLabel)
+	maxSize, err := parseAnnotation(ms, nodeGroupMaxSizeAnnotationKey)
 	if err != nil {
 		return nil, err
 	}
 
 	if maxSize < minSize {
-		return nil, fmt.Errorf("machineset %q: max value (%q:%d) must be >= min value (%q:%d)", machineSetID(ms), maxLabel, maxSize, minLabel, minSize)
+		return nil, fmt.Errorf("machineset %q: max value (%q:%d) must be >= min value (%q:%d)",
+			machineSetID(ms),
+			nodeGroupMaxSizeAnnotationKey, maxSize,
+			nodeGroupMinSizeAnnotationKey, minSize)
 	}
 
 	cms.minSize = minSize
