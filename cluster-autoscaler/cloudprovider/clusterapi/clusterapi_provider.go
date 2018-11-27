@@ -43,7 +43,7 @@ const (
 var _ cloudprovider.CloudProvider = (*provider)(nil)
 
 type provider struct {
-	*clusterController
+	*machineController
 
 	providerName    string
 	resourceLimiter *cloudprovider.ResourceLimiter
@@ -51,7 +51,7 @@ type provider struct {
 }
 
 func (p *provider) nodeNames(machineSet *v1alpha1.MachineSet) ([]string, error) {
-	machines, err := p.clusterController.machineInformer.Lister().Machines(machineSet.Namespace).List(labels.Everything())
+	machines, err := p.machineController.machineInformer.Lister().Machines(machineSet.Namespace).List(labels.Everything())
 	if err != nil {
 		return nil, fmt.Errorf("error listing machines: %v", err)
 	}
@@ -80,7 +80,7 @@ func (p *provider) nodeNames(machineSet *v1alpha1.MachineSet) ([]string, error) 
 func (p *provider) nodeGroups() ([]*nodegroup, error) {
 	var nodegroups []*nodegroup
 
-	machineSets, err := p.clusterController.machineSetInformer.Lister().MachineSets("").List(labels.Everything())
+	machineSets, err := p.machineController.machineSetInformer.Lister().MachineSets("").List(labels.Everything())
 	if err != nil {
 		return nil, err
 	}
@@ -174,7 +174,7 @@ func (p *provider) NodeGroupForNode(node *apiv1.Node) (cloudprovider.NodeGroup, 
 	// "unregistered" and once that happens the autoscaler will
 	// stop scaling up and down as it deems the overall state of
 	// the cluster to be unhealthy.
-	machine, err := p.clusterController.findMachine(node)
+	machine, err := p.machineController.findMachine(node)
 	if err != nil {
 		return nil, err
 	}
@@ -182,7 +182,7 @@ func (p *provider) NodeGroupForNode(node *apiv1.Node) (cloudprovider.NodeGroup, 
 		return nil, nil
 	}
 
-	machineSet, err := p.clusterController.findMachineSet(machine)
+	machineSet, err := p.machineController.findMachineSet(machine)
 	if err != nil {
 		return nil, err
 	}
@@ -243,7 +243,7 @@ func BuildCloudProvider(name string, opts config.AutoscalingOptions, rl *cloudpr
 	}
 
 	factory := informers.NewSharedInformerFactory(clientset, time.Second*30)
-	controller, err := newClusterController(factory)
+	controller, err := newMachineController(factory)
 	if err != nil {
 		return nil, err
 	}
@@ -259,7 +259,7 @@ func BuildCloudProvider(name string, opts config.AutoscalingOptions, rl *cloudpr
 	return &provider{
 		providerName:      name,
 		resourceLimiter:   rl,
-		clusterController: controller,
+		machineController: controller,
 		clusterapi:        clientset.ClusterV1alpha1(),
 	}, nil
 }
