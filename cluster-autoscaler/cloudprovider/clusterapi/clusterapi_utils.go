@@ -64,8 +64,8 @@ func parseMachineSetBounds(machineSet *v1alpha1.MachineSet) (int, int, error) {
 	return minSize, maxSize, nil
 }
 
-func machineOwnerName(m *v1alpha1.Machine) string {
-	for _, ref := range m.OwnerReferences {
+func machineOwnerName(machine *v1alpha1.Machine) string {
+	for _, ref := range machine.OwnerReferences {
 		if ref.Kind == "MachineSet" && ref.Name != "" {
 			return ref.Name
 		}
