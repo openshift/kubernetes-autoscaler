@@ -63,7 +63,7 @@ func (ng *nodegroup) Replicas() int {
 }
 
 func (ng *nodegroup) SetSize(nreplicas int) error {
-	machineSet, err := ng.provider.clusterapi.MachineSets(ng.namespace).Get(ng.name, v1.GetOptions{})
+	machineSet, err := ng.provider.clusterapiClient.MachineSets(ng.namespace).Get(ng.name, v1.GetOptions{})
 	if err != nil {
 		return fmt.Errorf("unable to get machineset %q: %v", ng.name, err)
 	}
@@ -72,7 +72,7 @@ func (ng *nodegroup) SetSize(nreplicas int) error {
 	replicas := int32(nreplicas)
 	machineSet.Spec.Replicas = &replicas
 
-	_, err = ng.provider.clusterapi.MachineSets(ng.namespace).Update(machineSet)
+	_, err = ng.provider.clusterapiClient.MachineSets(ng.namespace).Update(machineSet)
 	if err != nil {
 		return fmt.Errorf("unable to update number of replicas of machineset %q: %v", ng, err)
 	}
@@ -129,7 +129,7 @@ func (ng *nodegroup) DeleteNodes(nodes []*apiv1.Node) error {
 
 		machine.Annotations[machineDeleteAnnotationKey] = time.Now().String()
 
-		if _, err := ng.provider.clusterapi.Machines(machine.Namespace).Update(machine); err != nil {
+		if _, err := ng.provider.clusterapiClient.Machines(machine.Namespace).Update(machine); err != nil {
 			return fmt.Errorf("failed to update machine %s/%s: %v", machine.Namespace, machine.Name, err)
 		}
 	}
