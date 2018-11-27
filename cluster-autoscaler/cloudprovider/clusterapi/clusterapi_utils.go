@@ -24,6 +24,11 @@ import (
 	"sigs.k8s.io/cluster-api/pkg/apis/cluster/v1alpha1"
 )
 
+const (
+	nodeGroupMinSizeAnnotationKey = "sigs.k8s.io/cluster-api-autoscaler-node-group-min-size"
+	nodeGroupMaxSizeAnnotationKey = "sigs.k8s.io/cluster-api-autoscaler-node-group-max-size"
+)
+
 func parseMachineSetAnnotation(machineSet *v1alpha1.MachineSet, key string) (int, error) {
 	val, found := machineSet.Annotations[key]
 	if !found {
