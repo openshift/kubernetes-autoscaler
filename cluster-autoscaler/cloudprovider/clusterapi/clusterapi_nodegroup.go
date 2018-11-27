@@ -24,6 +24,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	schedulercache "k8s.io/kubernetes/pkg/scheduler/cache"
+	clusterv1alpha1 "sigs.k8s.io/cluster-api/pkg/client/clientset_generated/clientset/typed/cluster/v1alpha1"
 )
 
 const (
@@ -33,13 +34,14 @@ const (
 var _ cloudprovider.NodeGroup = (*nodegroup)(nil)
 
 type nodegroup struct {
-	maxSize   int
-	minSize   int
-	name      string
-	namespace string
-	nodeNames []string
-	provider  *provider
-	replicas  int32
+	machineController *machineController
+	clusterapiClient  clusterv1alpha1.ClusterV1alpha1Interface
+	maxSize           int
+	minSize           int
+	name              string
+	namespace         string
+	nodeNames         []string
+	replicas          int32
 }
 
 func (ng *nodegroup) Name() string {
@@ -63,7 +65,7 @@ func (ng *nodegroup) Replicas() int {
 }
 
 func (ng *nodegroup) SetSize(nreplicas int) error {
-	machineSet, err := ng.provider.clusterapiClient.MachineSets(ng.namespace).Get(ng.name, v1.GetOptions{})
+	machineSet, err := ng.clusterapiClient.MachineSets(ng.namespace).Get(ng.name, v1.GetOptions{})
 	if err != nil {
 		return fmt.Errorf("unable to get machineset %q: %v", ng.name, err)
 	}
@@ -72,7 +74,7 @@ func (ng *nodegroup) SetSize(nreplicas int) error {
 	replicas := int32(nreplicas)
 	machineSet.Spec.Replicas = &replicas
 
-	_, err = ng.provider.clusterapiClient.MachineSets(ng.namespace).Update(machineSet)
+	_, err = ng.clusterapiClient.MachineSets(ng.namespace).Update(machineSet)
 	if err != nil {
 		return fmt.Errorf("unable to update number of replicas of machineset %q: %v", ng, err)
 	}
@@ -113,7 +115,7 @@ func (ng *nodegroup) IncreaseSize(delta int) error {
 // Implementation required.
 func (ng *nodegroup) DeleteNodes(nodes []*apiv1.Node) error {
 	for _, node := range nodes {
-		machine, err := ng.provider.machineController.findMachine(node)
+		machine, err := ng.machineController.findMachine(node)
 		if err != nil {
 			return err
 		}
@@ -129,7 +131,7 @@ func (ng *nodegroup) DeleteNodes(nodes []*apiv1.Node) error {
 
 		machine.Annotations[machineDeleteAnnotationKey] = time.Now().String()
 
-		if _, err := ng.provider.clusterapiClient.Machines(machine.Namespace).Update(machine); err != nil {
+		if _, err := ng.clusterapiClient.Machines(machine.Namespace).Update(machine); err != nil {
 			return fmt.Errorf("failed to update machine %s/%s: %v", machine.Namespace, machine.Name, err)
 		}
 	}
