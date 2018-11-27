@@ -142,9 +142,16 @@ func (p *provider) NodeGroups() []cloudprovider.NodeGroup {
 	var result []cloudprovider.NodeGroup
 
 	for _, ng := range nodegroups {
-		if ng.MaxSize()-ng.MinSize() > 0 {
-			glog.V(4).Infof("discovered machineset %q (min: %v, max: %v, replicas: %v)", ng, ng.minSize, ng.maxSize, ng.replicas)
+		info := fmt.Sprintf("min: %v, max: %v, replicas: %v", ng.minSize, ng.maxSize, ng.replicas)
+		size := ng.MaxSize() - ng.MinSize()
+		switch {
+		case size > 0:
 			result = append(result, ng)
+			glog.V(4).Infof("discovered machineset %q (%q)", ng, info)
+		case size < 0:
+			glog.V(4).Infof("skipping machineset %q (%q): invalid min/max size(s)", ng, info)
+		default:
+			glog.V(4).Infof("skipping machineset %q (%q): max-min is zero", ng, info)
 		}
 	}
 
