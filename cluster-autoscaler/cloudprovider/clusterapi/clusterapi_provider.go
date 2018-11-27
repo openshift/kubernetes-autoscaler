@@ -23,6 +23,7 @@ import (
 	"github.com/golang/glog"
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	"k8s.io/autoscaler/cluster-autoscaler/config"
@@ -80,7 +81,7 @@ func (p *provider) nodeNames(machineSet *v1alpha1.MachineSet) ([]string, error) 
 func (p *provider) nodeGroups() ([]*nodegroup, error) {
 	var nodegroups []*nodegroup
 
-	machineSets, err := p.machineController.machineSetInformer.Lister().MachineSets("").List(labels.Everything())
+	machineSets, err := p.machineController.machineSetInformer.Lister().MachineSets(metav1.NamespaceAll).List(labels.Everything())
 	if err != nil {
 		return nil, err
 	}
