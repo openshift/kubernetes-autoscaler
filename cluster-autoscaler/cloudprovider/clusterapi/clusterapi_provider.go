@@ -46,9 +46,9 @@ var _ cloudprovider.CloudProvider = (*provider)(nil)
 type provider struct {
 	*machineController
 
-	providerName    string
-	resourceLimiter *cloudprovider.ResourceLimiter
-	clusterapi      clusterv1alpha1.ClusterV1alpha1Interface
+	providerName     string
+	resourceLimiter  *cloudprovider.ResourceLimiter
+	clusterapiClient clusterv1alpha1.ClusterV1alpha1Interface
 }
 
 func (p *provider) nodeNames(machineSet *v1alpha1.MachineSet) ([]string, error) {
@@ -261,6 +261,6 @@ func BuildCloudProvider(name string, opts config.AutoscalingOptions, rl *cloudpr
 		providerName:      name,
 		resourceLimiter:   rl,
 		machineController: controller,
-		clusterapi:        clientset.ClusterV1alpha1(),
+		clusterapiClient:  clientset.ClusterV1alpha1(),
 	}, nil
 }
