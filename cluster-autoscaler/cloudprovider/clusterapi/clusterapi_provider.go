@@ -37,9 +37,7 @@ import (
 
 const (
 	// ProviderName is the name of cluster-api cloud provider.
-	ProviderName                  = "cluster-api"
-	nodeGroupMinSizeAnnotationKey = "sigs.k8s.io/cluster-api-autoscaler-node-group-min-size"
-	nodeGroupMaxSizeAnnotationKey = "sigs.k8s.io/cluster-api-autoscaler-node-group-max-size"
+	ProviderName = "cluster-api"
 )
 
 var _ cloudprovider.CloudProvider = (*provider)(nil)
