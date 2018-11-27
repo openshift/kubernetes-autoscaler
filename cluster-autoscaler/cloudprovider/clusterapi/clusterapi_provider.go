@@ -116,13 +116,14 @@ func (p *provider) buildNodeGroup(machineSet *v1alpha1.MachineSet) (*nodegroup, 
 	}
 
 	return &nodegroup{
-		maxSize:   maxSize,
-		minSize:   minSize,
-		name:      machineSet.Name,
-		namespace: machineSet.Namespace,
-		nodeNames: nodeNames,
-		provider:  p,
-		replicas:  replicas,
+		clusterapiClient:  p.clusterapiClient,
+		machineController: p.machineController,
+		maxSize:           maxSize,
+		minSize:           minSize,
+		name:              machineSet.Name,
+		namespace:         machineSet.Namespace,
+		nodeNames:         nodeNames,
+		replicas:          replicas,
 	}, nil
 }
 
