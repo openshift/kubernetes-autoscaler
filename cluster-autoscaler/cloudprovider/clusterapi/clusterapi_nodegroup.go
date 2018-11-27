@@ -113,7 +113,7 @@ func (ng *nodegroup) IncreaseSize(delta int) error {
 // Implementation required.
 func (ng *nodegroup) DeleteNodes(nodes []*apiv1.Node) error {
 	for _, node := range nodes {
-		machine, err := ng.provider.clusterController.findMachine(node)
+		machine, err := ng.provider.machineController.findMachine(node)
 		if err != nil {
 			return err
 		}

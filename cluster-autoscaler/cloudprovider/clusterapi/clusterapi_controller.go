@@ -31,9 +31,9 @@ const (
 	nodeNameIndexKey = "clusterapi-nodeNameIndex"
 )
 
-// clusterController watches for Machines and MachineSets as they are
+// machineController watches for Machines and MachineSets as they are
 // added, updated and deleted on the cluster.
-type clusterController struct {
+type machineController struct {
 	informerFactory    informers.SharedInformerFactory
 	machineInformer    clusterv1alpha1.MachineInformer
 	machineSetInformer clusterv1alpha1.MachineSetInformer
@@ -54,7 +54,7 @@ func indexMachineByNodeName(obj interface{}) ([]string, error) {
 	return []string{machine.Status.NodeRef.Name}, nil
 }
 
-func (c *clusterController) findMachine(node *apiv1.Node) (*v1alpha1.Machine, error) {
+func (c *machineController) findMachine(node *apiv1.Node) (*v1alpha1.Machine, error) {
 	machineIndexer := c.machineInformer.Informer().GetIndexer()
 	objs, err := machineIndexer.ByIndex(nodeNameIndexKey, node.Name)
 	if err != nil {
@@ -72,7 +72,7 @@ func (c *clusterController) findMachine(node *apiv1.Node) (*v1alpha1.Machine, er
 	return machine.DeepCopy(), nil
 }
 
-func (c *clusterController) findMachineSet(machine *v1alpha1.Machine) (*v1alpha1.MachineSet, error) {
+func (c *machineController) findMachineSet(machine *v1alpha1.Machine) (*v1alpha1.MachineSet, error) {
 	machineSetName := machineOwnerName(machine)
 	if machineSetName == "" {
 		return nil, nil
@@ -97,7 +97,7 @@ func (c *clusterController) findMachineSet(machine *v1alpha1.Machine) (*v1alpha1
 
 // run starts shared informers and waits for the shared informer cache
 // to synchronize.
-func (c *clusterController) run(stopCh <-chan struct{}) error {
+func (c *machineController) run(stopCh <-chan struct{}) error {
 	c.informerFactory.Start(stopCh)
 
 	glog.V(4).Infof("waiting for machine cache to sync")
@@ -113,7 +113,7 @@ func (c *clusterController) run(stopCh <-chan struct{}) error {
 	return nil
 }
 
-func newClusterController(factory informers.SharedInformerFactory) (*clusterController, error) {
+func newMachineController(factory informers.SharedInformerFactory) (*machineController, error) {
 	machineInformer := factory.Cluster().V1alpha1().Machines()
 	machineSetInformer := factory.Cluster().V1alpha1().MachineSets()
 
@@ -128,7 +128,7 @@ func newClusterController(factory informers.SharedInformerFactory) (*clusterCont
 		return nil, fmt.Errorf("cannot add indexers to machineInformer: %v", err)
 	}
 
-	return &clusterController{
+	return &machineController{
 		informerFactory:    factory,
 		machineInformer:    machineInformer,
 		machineSetInformer: machineSetInformer,
