@@ -21,6 +21,7 @@ import (
 	"strconv"
 
 	"github.com/golang/glog"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/cluster-api/pkg/apis/cluster/v1alpha1"
 )
 
@@ -64,12 +65,19 @@ func parseMachineSetBounds(machineSet *v1alpha1.MachineSet) (int, int, error) {
 	return minSize, maxSize, nil
 }
 
-func machineOwnerName(machine *v1alpha1.Machine) string {
+func machineOwnerRef(machine *v1alpha1.Machine) *metav1.OwnerReference {
 	for _, ref := range machine.OwnerReferences {
 		if ref.Kind == "MachineSet" && ref.Name != "" {
-			return ref.Name
+			return ref.DeepCopy()
 		}
 	}
 
-	return ""
+	return nil
+}
+
+func machineIsOwnedByMachineSet(machine *v1alpha1.Machine, machineSet *v1alpha1.MachineSet) bool {
+	if ref := machineOwnerRef(machine); ref != nil {
+		return ref.UID == machineSet.UID
+	}
+	return false
 }
