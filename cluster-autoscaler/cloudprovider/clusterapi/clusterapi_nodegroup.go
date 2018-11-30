@@ -18,6 +18,7 @@ package clusterapi
 
 import (
 	"fmt"
+	"path"
 	"time"
 
 	apiv1 "k8s.io/api/core/v1"
@@ -40,7 +41,7 @@ type nodegroup struct {
 	minSize           int
 	name              string
 	namespace         string
-	nodeNames         []string
+	nodes             []string
 	replicas          int32
 }
 
@@ -115,7 +116,7 @@ func (ng *nodegroup) IncreaseSize(delta int) error {
 // Implementation required.
 func (ng *nodegroup) DeleteNodes(nodes []*apiv1.Node) error {
 	for _, node := range nodes {
-		machine, err := ng.machineController.findMachine(node)
+		machine, err := ng.machineController.findMachineByNodeProviderID(node)
 		if err != nil {
 			return err
 		}
@@ -175,7 +176,7 @@ func (ng *nodegroup) DecreaseTargetSize(delta int) error {
 
 // Id returns an unique identifier of the node group.
 func (ng *nodegroup) Id() string {
-	return ng.name
+	return path.Join(ng.namespace, ng.name)
 }
 
 // Debug returns a string containing all information regarding this node group.
@@ -185,7 +186,7 @@ func (ng *nodegroup) Debug() string {
 
 // Nodes returns a list of all nodes that belong to this node group.
 func (ng *nodegroup) Nodes() ([]string, error) {
-	return ng.nodeNames, nil
+	return ng.nodes, nil
 }
 
 // TemplateNodeInfo returns a schedulercache.NodeInfo structure of an

@@ -18,7 +18,6 @@ package clusterapi
 
 import (
 	"fmt"
-	"time"
 
 	"github.com/golang/glog"
 	apiv1 "k8s.io/api/core/v1"
@@ -28,6 +27,8 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	"k8s.io/autoscaler/cluster-autoscaler/config"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/errors"
+	kubeinformers "k8s.io/client-go/informers"
+	kubeclient "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"sigs.k8s.io/cluster-api/pkg/apis/cluster/v1alpha1"
@@ -51,13 +52,13 @@ type provider struct {
 	clusterapiClient clusterv1alpha1.ClusterV1alpha1Interface
 }
 
-func (p *provider) nodeNames(machineSet *v1alpha1.MachineSet) ([]string, error) {
-	machines, err := p.machineController.machineInformer.Lister().Machines(machineSet.Namespace).List(labels.Everything())
+func (p *provider) nodes(machineSet *v1alpha1.MachineSet) ([]string, error) {
+	machines, err := p.machineController.MachinesInMachineSet(machineSet)
 	if err != nil {
 		return nil, fmt.Errorf("error listing machines: %v", err)
 	}
 
-	var nodeNames []string
+	var nodes []string
 
 	for _, machine := range machines {
 		if machine.Status.NodeRef == nil {
@@ -68,14 +69,20 @@ func (p *provider) nodeNames(machineSet *v1alpha1.MachineSet) ([]string, error) 
 			glog.Errorf("Status.NodeRef of machine %q does not reference a node (rather %q)", machine.Name, machine.Status.NodeRef.Kind)
 			continue
 		}
-		if machineOwnerName(machine) == machineSet.Name {
-			nodeNames = append(nodeNames, machine.Status.NodeRef.Name)
+
+		node, err := p.machineController.findNodeByNodeName(machine.Status.NodeRef.Name)
+		if err != nil {
+			return nil, fmt.Errorf("unknown node %q", machine.Status.NodeRef.Name)
+		}
+
+		if node != nil {
+			nodes = append(nodes, node.Spec.ProviderID)
 		}
 	}
 
-	glog.V(4).Infof("nodegroup %s has nodes %v", machineSet.Name, nodeNames)
+	glog.V(4).Infof("nodegroup %s has nodes %v", machineSet.Name, nodes)
 
-	return nodeNames, nil
+	return nodes, nil
 }
 
 func (p *provider) nodeGroups() ([]*nodegroup, error) {
@@ -110,7 +117,7 @@ func (p *provider) buildNodeGroup(machineSet *v1alpha1.MachineSet) (*nodegroup, 
 		replicas = *machineSet.Spec.Replicas
 	}
 
-	nodeNames, err := p.nodeNames(machineSet)
+	nodes, err := p.nodes(machineSet)
 	if err != nil {
 		return nil, err
 	}
@@ -122,7 +129,7 @@ func (p *provider) buildNodeGroup(machineSet *v1alpha1.MachineSet) (*nodegroup, 
 		minSize:           minSize,
 		name:              machineSet.Name,
 		namespace:         machineSet.Namespace,
-		nodeNames:         nodeNames,
+		nodes:             nodes,
 		replicas:          replicas,
 	}, nil
 }
@@ -138,6 +145,11 @@ func (p *provider) GetResourceLimiter() (*cloudprovider.ResourceLimiter, error) 
 func (p *provider) NodeGroups() []cloudprovider.NodeGroup {
 	nodegroups, err := p.nodeGroups()
 	if err != nil {
+		return nil
+	}
+
+	if len(nodegroups) == 0 {
+		glog.Warningf("no nodegroups discovered")
 		return nil
 	}
 
@@ -161,22 +173,7 @@ func (p *provider) NodeGroups() []cloudprovider.NodeGroup {
 }
 
 func (p *provider) NodeGroupForNode(node *apiv1.Node) (cloudprovider.NodeGroup, error) {
-	// TODO(frobware) - currently waiting for:
-	//
-	//  https://github.com/kubernetes-sigs/cluster-api/pull/565
-	//
-	// to merge and then the logic here will switch to indexing
-	// via node.Spec.ProviderID. What we have here uses a node's
-	// "machine" annotation but that works for only a short period
-	// of time as the overall core autoscaler logic uses
-	// node.Spec.ProviderID to determine if a node is correctly
-	// registered. As we use a node's "machine" annotation the
-	// mapping this function provides between a node and its
-	// corresponding nodegroup will eventually degrade to
-	// "unregistered" and once that happens the autoscaler will
-	// stop scaling up and down as it deems the overall state of
-	// the cluster to be unhealthy.
-	machine, err := p.machineController.findMachine(node)
+	machine, err := p.machineController.findMachineByNodeProviderID(node)
 	if err != nil {
 		return nil, err
 	}
@@ -184,7 +181,7 @@ func (p *provider) NodeGroupForNode(node *apiv1.Node) (cloudprovider.NodeGroup, 
 		return nil, nil
 	}
 
-	machineSet, err := p.machineController.findMachineSet(machine)
+	machineSet, err := p.machineController.findMachineOwner(machine)
 	if err != nil {
 		return nil, err
 	}
@@ -239,13 +236,19 @@ func BuildCloudProvider(name string, opts config.AutoscalingOptions, rl *cloudpr
 		}
 	}
 
+	kubeclient, err := kubeclient.NewForConfig(externalConfig)
+	if err != nil {
+		return nil, fmt.Errorf("create clientset failed: %v", err)
+	}
+
+	kubeInformerFactory := kubeinformers.NewSharedInformerFactory(kubeclient, 0)
 	clientset, err := clientset.NewForConfig(externalConfig)
 	if err != nil {
 		return nil, fmt.Errorf("create clientset failed: %v", err)
 	}
 
-	factory := informers.NewSharedInformerFactory(clientset, time.Second*30)
-	controller, err := newMachineController(factory)
+	clusterInformerFactory := informers.NewSharedInformerFactory(clientset, 0)
+	controller, err := newMachineController(kubeInformerFactory, clusterInformerFactory)
 	if err != nil {
 		return nil, err
 	}

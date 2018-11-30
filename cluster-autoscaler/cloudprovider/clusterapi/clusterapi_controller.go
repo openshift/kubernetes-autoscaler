@@ -21,65 +21,66 @@ import (
 
 	"github.com/golang/glog"
 	apiv1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/labels"
+	kubeinformers "k8s.io/client-go/informers"
 	"k8s.io/client-go/tools/cache"
 	"sigs.k8s.io/cluster-api/pkg/apis/cluster/v1alpha1"
-	informers "sigs.k8s.io/cluster-api/pkg/client/informers_generated/externalversions"
+	clusterinformers "sigs.k8s.io/cluster-api/pkg/client/informers_generated/externalversions"
 	clusterv1alpha1 "sigs.k8s.io/cluster-api/pkg/client/informers_generated/externalversions/cluster/v1alpha1"
 )
 
 const (
-	nodeNameIndexKey = "clusterapi-nodeNameIndex"
+	nodeProviderIDIndex = "clusterapi-nodeProviderIDIndex"
 )
 
-// machineController watches for Machines and MachineSets as they are
-// added, updated and deleted on the cluster.
+// machineController watches for Nodes, Machines and MachineSets as
+// they are added, updated and deleted on the cluster. Additionally,
+// it adds indices to the node informers to satisfy lookup by
+// node.Spec.ProviderID.
 type machineController struct {
-	informerFactory    informers.SharedInformerFactory
-	machineInformer    clusterv1alpha1.MachineInformer
-	machineSetInformer clusterv1alpha1.MachineSetInformer
+	clusterInformerFactory clusterinformers.SharedInformerFactory
+	kubeInformerFactory    kubeinformers.SharedInformerFactory
+	machineInformer        clusterv1alpha1.MachineInformer
+	machineSetInformer     clusterv1alpha1.MachineSetInformer
+	nodeInformer           cache.SharedIndexInformer
 }
 
-func indexMachineByNodeName(obj interface{}) ([]string, error) {
-	machine, ok := obj.(*v1alpha1.Machine)
-	if !ok {
-		return []string{}, nil
+func indexNodeByNodeProviderID(obj interface{}) ([]string, error) {
+	if node, ok := obj.(*apiv1.Node); ok {
+		return []string{node.Spec.ProviderID}, nil
 	}
-
-	if machine.Status.NodeRef == nil || machine.Status.NodeRef.Kind != "Node" {
-		return []string{}, nil
-	}
-
-	glog.V(4).Infof("machine %s/%s is node %q", machine.Namespace, machine.Name, machine.Status.NodeRef.Name)
-
-	return []string{machine.Status.NodeRef.Name}, nil
+	return []string{}, nil
 }
 
-func (c *machineController) findMachine(node *apiv1.Node) (*v1alpha1.Machine, error) {
-	machineIndexer := c.machineInformer.Informer().GetIndexer()
-	objs, err := machineIndexer.ByIndex(nodeNameIndexKey, node.Name)
+func (c *machineController) findMachine(id string) (*v1alpha1.Machine, error) {
+	item, exists, err := c.machineInformer.Informer().GetStore().GetByKey(id)
 	if err != nil {
 		return nil, err
 	}
-	if len(objs) != 1 {
+
+	if !exists {
 		return nil, nil
 	}
 
-	machine, ok := objs[0].(*v1alpha1.Machine)
+	machine, ok := item.(*v1alpha1.Machine)
 	if !ok {
-		return nil, fmt.Errorf("internal error; unexpected type: %T", machine)
+		return nil, fmt.Errorf("internal error; unexpected type %T", machine)
 	}
 
 	return machine.DeepCopy(), nil
 }
 
-func (c *machineController) findMachineSet(machine *v1alpha1.Machine) (*v1alpha1.MachineSet, error) {
-	machineSetName := machineOwnerName(machine)
-	if machineSetName == "" {
+// findMachineOwner returns the machine set owner for machine, or nil
+// if there is no owner. A DeepCopy() of the object is returned on
+// success.
+func (c *machineController) findMachineOwner(machine *v1alpha1.Machine) (*v1alpha1.MachineSet, error) {
+	machineOwnerRef := machineOwnerRef(machine)
+	if machineOwnerRef == nil {
 		return nil, nil
 	}
 
 	store := c.machineSetInformer.Informer().GetStore()
-	item, exists, err := store.GetByKey(fmt.Sprintf("%s/%s", machine.Namespace, machineSetName))
+	item, exists, err := store.GetByKey(fmt.Sprintf("%s/%s", machine.Namespace, machineOwnerRef.Name))
 	if err != nil {
 		return nil, err
 	}
@@ -92,45 +93,151 @@ func (c *machineController) findMachineSet(machine *v1alpha1.Machine) (*v1alpha1
 		return nil, fmt.Errorf("internal error; unexpected type: %T", machineSet)
 	}
 
+	if !machineIsOwnedByMachineSet(machine, machineSet) {
+		return nil, nil
+	}
+
 	return machineSet.DeepCopy(), nil
 }
 
-// run starts shared informers and waits for the shared informer cache
-// to synchronize.
+// run starts shared informers and waits for the informer cache to
+// synchronize.
 func (c *machineController) run(stopCh <-chan struct{}) error {
-	c.informerFactory.Start(stopCh)
+	c.kubeInformerFactory.Start(stopCh)
+	c.clusterInformerFactory.Start(stopCh)
 
-	glog.V(4).Infof("waiting for machine cache to sync")
-	if !cache.WaitForCacheSync(stopCh, c.machineInformer.Informer().HasSynced) {
-		return fmt.Errorf("cannot sync machine cache")
-	}
-
-	glog.V(4).Infof("waiting for machineset cache to sync")
-	if !cache.WaitForCacheSync(stopCh, c.machineSetInformer.Informer().HasSynced) {
-		return fmt.Errorf("cannot sync machineset cache")
+	glog.V(4).Infof("waiting for caches to sync")
+	if !cache.WaitForCacheSync(stopCh,
+		c.nodeInformer.HasSynced,
+		c.machineInformer.Informer().HasSynced,
+		c.machineSetInformer.Informer().HasSynced) {
+		return fmt.Errorf("syncing caches failed")
 	}
 
 	return nil
 }
 
-func newMachineController(factory informers.SharedInformerFactory) (*machineController, error) {
-	machineInformer := factory.Cluster().V1alpha1().Machines()
-	machineSetInformer := factory.Cluster().V1alpha1().MachineSets()
+// findMachineByNodeProviderID find associated machine using
+// node.Spec.ProviderID as the key. Returns nil if either the Node by
+// node.Spec.ProviderID cannot be found or if the node has no machine
+// annotation. A DeepCopy() of the object is returned on success.
+func (c *machineController) findMachineByNodeProviderID(node *apiv1.Node) (*v1alpha1.Machine, error) {
+	objs, err := c.nodeInformer.GetIndexer().ByIndex(nodeProviderIDIndex, node.Spec.ProviderID)
+	if err != nil {
+		return nil, err
+	}
+
+	switch n := len(objs); {
+	case n == 0:
+		return nil, nil
+	case n > 1:
+		return nil, fmt.Errorf("internal error; expected len==1, got %v", n)
+	}
+
+	node, ok := objs[0].(*apiv1.Node)
+	if !ok {
+		return nil, fmt.Errorf("internal error; unexpected type %T", node)
+	}
+
+	machineName, found := node.Annotations["cluster.k8s.io/machine"]
+	if !found {
+		machineName, found = node.Annotations["machine"]
+		if !found {
+			return nil, nil
+		}
+	}
+
+	return c.findMachine(machineName)
+}
+
+// findNodeByNodeName find the Node object keyed by node.Name. Returns
+// nil if it cannot be found. A DeepCopy() of the object is returned
+// on success.
+func (c *machineController) findNodeByNodeName(name string) (*apiv1.Node, error) {
+	item, exists, err := c.nodeInformer.GetIndexer().GetByKey(name)
+	if err != nil {
+		return nil, err
+	}
+
+	if !exists {
+		return nil, nil
+	}
+
+	node, ok := item.(*apiv1.Node)
+	if !ok {
+		return nil, fmt.Errorf("internal error; unexpected type %T", node)
+	}
+
+	return node.DeepCopy(), nil
+}
+
+// MachinesInMachineSet returns all the machines that belong to
+// machineSet. For each machine in the set a DeepCopy() of the object
+// is returned.
+func (c *machineController) MachinesInMachineSet(machineSet *v1alpha1.MachineSet) ([]*v1alpha1.Machine, error) {
+	listOptions := labels.SelectorFromSet(labels.Set(machineSet.Labels))
+	machines, err := c.machineInformer.Lister().Machines(machineSet.Namespace).List(listOptions)
+	if err != nil {
+		return nil, err
+	}
+
+	var result []*v1alpha1.Machine
+
+	for _, machine := range machines {
+		if machineIsOwnedByMachineSet(machine, machineSet) {
+			result = append(result, machine.DeepCopy())
+		}
+	}
+
+	return result, nil
+}
+
+// MachineSets returns all the machines that are in namespace. For
+// each machine set found a DeepCopy() of the object is returned.
+func (c *machineController) MachineSets(namespace string) ([]*v1alpha1.MachineSet, error) {
+	machineSets, err := c.machineSetInformer.Lister().MachineSets(namespace).List(labels.Everything())
+	if err != nil {
+		return nil, err
+	}
+
+	var result []*v1alpha1.MachineSet
+
+	for _, machineSet := range machineSets {
+		result = append(result, machineSet.DeepCopy())
+	}
+
+	return result, nil
+}
+
+// newMachineController constructs a controller that watches Nodes,
+// Machines and MachineSet as they are added, updated and deleted on
+// the cluster.
+func newMachineController(
+	kubeInformerFactory kubeinformers.SharedInformerFactory,
+	clusterInformerFactory clusterinformers.SharedInformerFactory,
+) (*machineController, error) {
+	machineInformer := clusterInformerFactory.Cluster().V1alpha1().Machines()
+	machineSetInformer := clusterInformerFactory.Cluster().V1alpha1().MachineSets()
 
 	machineInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{})
 	machineSetInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{})
 
+	nodeInformer := kubeInformerFactory.Core().V1().Nodes().Informer()
+	nodeInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{})
+
 	indexerFuncs := cache.Indexers{
-		nodeNameIndexKey: indexMachineByNodeName,
+		nodeProviderIDIndex: indexNodeByNodeProviderID,
 	}
 
-	if err := machineInformer.Informer().GetIndexer().AddIndexers(indexerFuncs); err != nil {
-		return nil, fmt.Errorf("cannot add indexers to machineInformer: %v", err)
+	if err := nodeInformer.GetIndexer().AddIndexers(indexerFuncs); err != nil {
+		return nil, fmt.Errorf("cannot add indexers: %v", err)
 	}
 
 	return &machineController{
-		informerFactory:    factory,
-		machineInformer:    machineInformer,
-		machineSetInformer: machineSetInformer,
+		clusterInformerFactory: clusterInformerFactory,
+		kubeInformerFactory:    kubeInformerFactory,
+		machineInformer:        machineInformer,
+		machineSetInformer:     machineSetInformer,
+		nodeInformer:           nodeInformer,
 	}, nil
 }
