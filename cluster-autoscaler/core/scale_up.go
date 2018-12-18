@@ -425,7 +425,7 @@ func ScaleUp(context *context.AutoscalingContext, processors *ca_processors.Auto
 
 		if context.MaxNodesTotal > 0 && len(nodes)+newNodes > context.MaxNodesTotal {
 			glog.V(1).Infof("Capping size to max cluster total size (%d)", context.MaxNodesTotal)
-			newNodes = context.MaxNodesTotal - len(nodes)
+			newNodes = context.MaxNodesTotal - len(nodes) - len(upcomingNodes)
 			if newNodes < 1 {
 				return nil, errors.NewAutoscalerError(
 					errors.TransientError,
