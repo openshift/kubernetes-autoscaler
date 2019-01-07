@@ -139,15 +139,16 @@ func (c *machineController) findMachineByNodeProviderID(node *apiv1.Node) (*v1al
 		return nil, fmt.Errorf("internal error; unexpected type %T", node)
 	}
 
-	machineName, found := node.Annotations["cluster.k8s.io/machine"]
-	if !found {
-		machineName, found = node.Annotations["machine"]
-		if !found {
-			return nil, nil
-		}
+	// TODO(frobware)
+	//
+	// Reference this annotation key symbolically once the
+	// following PR merges:
+	//     https://github.com/kubernetes-sigs/cluster-api/pull/663
+	if machineName, found := node.Annotations["cluster.k8s.io/machine"]; found {
+		return c.findMachine(machineName)
 	}
 
-	return c.findMachine(machineName)
+	return nil, nil
 }
 
 // findNodeByNodeName find the Node object keyed by node.Name. Returns
