@@ -193,23 +193,6 @@ func (c *machineController) MachinesInMachineSet(machineSet *v1alpha1.MachineSet
 	return result, nil
 }
 
-// MachineSets returns all the machines that are in namespace. For
-// each machine set found a DeepCopy() of the object is returned.
-func (c *machineController) MachineSets(namespace string) ([]*v1alpha1.MachineSet, error) {
-	machineSets, err := c.machineSetInformer.Lister().MachineSets(namespace).List(labels.Everything())
-	if err != nil {
-		return nil, err
-	}
-
-	var result []*v1alpha1.MachineSet
-
-	for _, machineSet := range machineSets {
-		result = append(result, machineSet.DeepCopy())
-	}
-
-	return result, nil
-}
-
 // newMachineController constructs a controller that watches Nodes,
 // Machines and MachineSet as they are added, updated and deleted on
 // the cluster.
