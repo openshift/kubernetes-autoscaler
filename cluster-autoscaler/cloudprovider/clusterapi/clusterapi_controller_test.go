@@ -17,8 +17,10 @@ limitations under the License.
 package clusterapi
 
 import (
+	"fmt"
 	"path"
 	"reflect"
+	"sort"
 	"testing"
 
 	apiv1 "k8s.io/api/core/v1"
@@ -292,5 +294,80 @@ func TestFindNodeByNodeName(t *testing.T) {
 
 	if node != nil {
 		t.Fatalf("didn't expect to find a node")
+	}
+}
+
+func TestMachinesInMachineSet(t *testing.T) {
+	controller := mustCreateTestController(t)
+
+	testMachineSet1 := &v1alpha1.MachineSet{
+		TypeMeta: v1.TypeMeta{
+			Kind: "MachineSet",
+		},
+		ObjectMeta: v1.ObjectMeta{
+			Name:      "testMachineSet1",
+			Namespace: "testNamespace",
+			UID:       "ec21c5fb-a3d5-a45f-887b-6b49aa8fc218",
+		},
+	}
+
+	testMachineSet2 := &v1alpha1.MachineSet{
+		TypeMeta: v1.TypeMeta{
+			Kind: "MachineSet",
+		},
+		ObjectMeta: v1.ObjectMeta{
+			Name:      "testMachineSet2",
+			Namespace: "testNamespace",
+			UID:       "abcdef12-a3d5-a45f-887b-6b49aa8fc218",
+		},
+	}
+
+	controller.machineSetInformer.Informer().GetStore().Add(testMachineSet1)
+	controller.machineSetInformer.Informer().GetStore().Add(testMachineSet2)
+
+	testMachines := make([]*v1alpha1.Machine, 10)
+
+	for i := 0; i < 10; i++ {
+		testMachines[i] = &v1alpha1.Machine{
+			TypeMeta: v1.TypeMeta{
+				Kind: "Machine",
+			},
+			ObjectMeta: v1.ObjectMeta{
+				Name:      fmt.Sprintf("machine-%d", i),
+				Namespace: "testNamespace",
+			},
+		}
+		// Only even numbered machines belong to testMachineSet1
+		if i%2 == 0 {
+			testMachines[i].OwnerReferences = []v1.OwnerReference{{
+				Kind: "MachineSet",
+				UID:  "ec21c5fb-a3d5-a45f-887b-6b49aa8fc218",
+				Name: "testMachineSet1",
+			}}
+		}
+		controller.machineInformer.Informer().GetStore().Add(testMachines[i])
+	}
+
+	foundMachines, err := controller.MachinesInMachineSet(testMachineSet1)
+	if err != nil {
+		t.Fatalf("unexpected error, got %v", err)
+	}
+	if len(foundMachines) != 5 {
+		t.Fatalf("expected 5 machines, got %v", len(foundMachines))
+	}
+
+	// Sort results as order is not guaranteed.
+	sort.Slice(foundMachines, func(i, j int) bool {
+		return foundMachines[i].Name < foundMachines[j].Name
+	})
+
+	for i := 0; i < len(foundMachines); i++ {
+		if !reflect.DeepEqual(*testMachines[2*i], *foundMachines[i]) {
+			t.Errorf("expected %s, got %s", testMachines[2*i].Name, foundMachines[i].Name)
+		}
+		// Verify that a successful result is a copy
+		if testMachines[2*i] == foundMachines[i] {
+			t.Errorf("expected a copy")
+		}
 	}
 }
