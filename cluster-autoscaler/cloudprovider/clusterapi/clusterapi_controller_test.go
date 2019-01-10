@@ -193,6 +193,66 @@ func TestFindMachineOwner(t *testing.T) {
 	}
 }
 
+func TestFindMachineByNodeProviderID(t *testing.T) {
+	controller := mustCreateTestController(t)
+
+	testNode := &apiv1.Node{
+		TypeMeta: v1.TypeMeta{
+			Kind: "Node",
+		},
+		ObjectMeta: v1.ObjectMeta{
+			Name: "ip-10-0-18-236.us-east-2.compute.internal",
+		},
+	}
+
+	testMachine := &v1alpha1.Machine{
+		TypeMeta: v1.TypeMeta{
+			Kind: "Machine",
+		},
+		ObjectMeta: v1.ObjectMeta{
+			Name: "worker-us-east-2c-p4zwl",
+		},
+	}
+
+	controller.nodeInformer.GetStore().Add(testNode)
+	controller.machineInformer.Informer().GetStore().Add(testMachine)
+
+	// Verify machine cannot be found as testNode has no
+	// ProviderID and will not be indexed by the controller.
+	foundMachine, err := controller.findMachineByNodeProviderID(testNode)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if foundMachine != nil {
+		t.Fatalf("expected nil, got %v", foundMachine)
+	}
+
+	// Update node with machine linkage.
+	testNode.Spec.ProviderID = "aws:///us-east-2b/i-03759ec2e4e053f99"
+	testNode.Annotations = map[string]string{
+		"cluster.k8s.io/machine": path.Join(testMachine.Namespace, testMachine.Name),
+	}
+
+	controller.nodeInformer.GetStore().Update(testNode)
+
+	// Verify the machine can now be found from the information in the node
+	foundMachine, err = controller.findMachineByNodeProviderID(testNode)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if foundMachine == nil {
+		t.Fatal("expected to find machine")
+	}
+
+	if !reflect.DeepEqual(*foundMachine, *testMachine) {
+		t.Fatalf("expected %+v, got %+v", *testMachine, *foundMachine)
+	}
+
+	if foundMachine == testMachine {
+		t.Fatalf("expected a copy")
+	}
+}
+
 func TestFindNodeByNodeName(t *testing.T) {
 	controller := mustCreateTestController(t)
 
