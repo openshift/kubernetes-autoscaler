@@ -5529,12 +5529,22 @@
 			"Rev": "36eecfab0fd0702b3b0a3edf9bf8bd41996477b0"
 		},
 		{
+			"ImportPath": "sigs.k8s.io/cluster-api/pkg/client/clientset_generated/clientset/fake",
+			"Comment": "0.0.0-alpha.3-17-g36eecfab0",
+			"Rev": "36eecfab0fd0702b3b0a3edf9bf8bd41996477b0"
+		},
+		{
 			"ImportPath": "sigs.k8s.io/cluster-api/pkg/client/clientset_generated/clientset/scheme",
 			"Comment": "0.0.0-alpha.3-17-g36eecfab0",
 			"Rev": "36eecfab0fd0702b3b0a3edf9bf8bd41996477b0"
 		},
 		{
 			"ImportPath": "sigs.k8s.io/cluster-api/pkg/client/clientset_generated/clientset/typed/cluster/v1alpha1",
+			"Comment": "0.0.0-alpha.3-17-g36eecfab0",
+			"Rev": "36eecfab0fd0702b3b0a3edf9bf8bd41996477b0"
+		},
+		{
+			"ImportPath": "sigs.k8s.io/cluster-api/pkg/client/clientset_generated/clientset/typed/cluster/v1alpha1/fake",
 			"Comment": "0.0.0-alpha.3-17-g36eecfab0",
 			"Rev": "36eecfab0fd0702b3b0a3edf9bf8bd41996477b0"
 		},
