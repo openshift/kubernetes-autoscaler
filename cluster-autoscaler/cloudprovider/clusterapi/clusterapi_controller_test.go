@@ -21,6 +21,7 @@ import (
 	"reflect"
 	"testing"
 
+	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	kubeinformers "k8s.io/client-go/informers"
@@ -110,5 +111,47 @@ func TestFindMachineByID(t *testing.T) {
 
 	if foundMachine != nil {
 		t.Fatalf("expected findMachine() to return nil")
+	}
+}
+
+func TestFindNodeByNodeName(t *testing.T) {
+	controller := mustCreateTestController(t)
+
+	testNode := &apiv1.Node{
+		ObjectMeta: v1.ObjectMeta{
+			Name: "ip-10-0-18-236.us-east-2.compute.internal",
+		},
+	}
+
+	controller.nodeInformer.GetStore().Add(testNode)
+
+	// Verify inserted node can be found
+	node, err := controller.findNodeByNodeName("ip-10-0-18-236.us-east-2.compute.internal")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if node == nil {
+		t.Fatal("expected a node")
+	}
+
+	// Verify node is identical to that added to the store
+	if !reflect.DeepEqual(*node, *testNode) {
+		t.Fatalf("expected %+v, got %+v", testNode, node)
+	}
+
+	// Verify that a successful findNodeByNodeName returns a DeepCopy().
+	if node == testNode {
+		t.Fatalf("expected a DeepCopy to be returned from findMachine()")
+	}
+
+	// Verify non-existent node doesn't error but is not found
+	node, err = controller.findNodeByNodeName("does-not-exist")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if node != nil {
+		t.Fatalf("didn't expect to find a node")
 	}
 }
