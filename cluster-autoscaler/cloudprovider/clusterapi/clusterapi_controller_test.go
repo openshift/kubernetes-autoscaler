@@ -114,6 +114,85 @@ func TestFindMachineByID(t *testing.T) {
 	}
 }
 
+func TestFindMachineOwner(t *testing.T) {
+	controller := mustCreateTestController(t)
+
+	testMachineWithNoOwner := &v1alpha1.Machine{
+		TypeMeta: v1.TypeMeta{
+			Kind: "Machine",
+		},
+		ObjectMeta: v1.ObjectMeta{
+			Name:      "testMachineWithNoOwner",
+			Namespace: "testNamespace",
+		},
+	}
+
+	testMachineWithOwner := &v1alpha1.Machine{
+		TypeMeta: v1.TypeMeta{
+			Kind: "Machine",
+		},
+		ObjectMeta: v1.ObjectMeta{
+			Name:      "testMachineWithOwner",
+			Namespace: "testNamespace",
+			OwnerReferences: []v1.OwnerReference{{
+				Kind: "MachineSet",
+				UID:  "ec21c5fb-a3d5-a45f-887b-6b49aa8fc218",
+				Name: "testMachineSet",
+			}},
+		},
+	}
+
+	controller.machineInformer.Informer().GetStore().Add(testMachineWithOwner)
+	controller.machineInformer.Informer().GetStore().Add(testMachineWithNoOwner)
+
+	// Verify machine has no owner.
+	foundMachineSet, err := controller.findMachineOwner(testMachineWithNoOwner)
+	if err != nil {
+		t.Fatalf("unexpected error, got %v", err)
+	}
+	if foundMachineSet != nil {
+		t.Fatalf("expected no owner, got %v", foundMachineSet)
+	}
+
+	// Verify machine still has no owner as we don't have a
+	// corresponding foundMachineSet in the store, even though the
+	// OwnerReference is valid.
+	foundMachineSet, err = controller.findMachineOwner(testMachineWithOwner)
+	if err != nil {
+		t.Fatalf("unexpected error, got %v", err)
+	}
+	if foundMachineSet != nil {
+		t.Fatalf("expected no owner, got %v", foundMachineSet)
+	}
+
+	testMachineSet := &v1alpha1.MachineSet{
+		TypeMeta: v1.TypeMeta{
+			Kind: "MachineSet",
+		},
+		ObjectMeta: v1.ObjectMeta{
+			Name:      "testMachineSet",
+			Namespace: "testNamespace",
+			UID:       "ec21c5fb-a3d5-a45f-887b-6b49aa8fc218",
+		},
+	}
+
+	controller.machineSetInformer.Informer().GetStore().Add(testMachineSet)
+
+	// Verify machine now has an owner
+	foundMachineSet, err = controller.findMachineOwner(testMachineWithOwner)
+	if err != nil {
+		t.Fatalf("unexpected error, got %v", err)
+	}
+	if foundMachineSet == nil {
+		t.Fatal("expected an owner")
+	}
+
+	// Verify that a successful result returns a DeepCopy().
+	if foundMachineSet == testMachineSet {
+		t.Fatalf("expected a copy")
+	}
+}
+
 func TestFindNodeByNodeName(t *testing.T) {
 	controller := mustCreateTestController(t)
 
