@@ -7,3 +7,4 @@ FROM registry.svc.ci.openshift.org/ocp/4.0:base
 COPY --from=builder /go/src/k8s.io/autoscaler/cluster-autoscaler/cluster-autoscaler /usr/bin/
 CMD /usr/bin/cluster-autoscaler
 LABEL summary="Cluster Autoscaler for OpenShift and Kubernetes"
+LABEL io.openshift.release.operator true
