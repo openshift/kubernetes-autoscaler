@@ -21,10 +21,14 @@ import (
 
 	"github.com/golang/glog"
 	apiv1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	kubeinformers "k8s.io/client-go/informers"
+	kubeclient "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
 	"sigs.k8s.io/cluster-api/pkg/apis/cluster/v1alpha1"
+	clusterclient "sigs.k8s.io/cluster-api/pkg/client/clientset_generated/clientset"
 	clusterinformers "sigs.k8s.io/cluster-api/pkg/client/informers_generated/externalversions"
 	clusterv1alpha1 "sigs.k8s.io/cluster-api/pkg/client/informers_generated/externalversions/cluster/v1alpha1"
 )
@@ -33,17 +37,21 @@ const (
 	nodeProviderIDIndex = "clusterapi-nodeProviderIDIndex"
 )
 
-// machineController watches for Nodes, Machines and MachineSets as
-// they are added, updated and deleted on the cluster. Additionally,
-// it adds indices to the node informers to satisfy lookup by
-// node.Spec.ProviderID.
+// machineController watches for Nodes, Machines, MachineSets and
+// MachineDeployments as they are added, updated and deleted on the
+// cluster. Additionally, it adds indices to the node informers to
+// satisfy lookup by node.Spec.ProviderID.
 type machineController struct {
-	clusterInformerFactory clusterinformers.SharedInformerFactory
-	kubeInformerFactory    kubeinformers.SharedInformerFactory
-	machineInformer        clusterv1alpha1.MachineInformer
-	machineSetInformer     clusterv1alpha1.MachineSetInformer
-	nodeInformer           cache.SharedIndexInformer
+	clusterClientset          clusterclient.Interface
+	clusterInformerFactory    clusterinformers.SharedInformerFactory
+	kubeInformerFactory       kubeinformers.SharedInformerFactory
+	machineDeploymentInformer clusterv1alpha1.MachineDeploymentInformer
+	machineInformer           clusterv1alpha1.MachineInformer
+	machineSetInformer        clusterv1alpha1.MachineSetInformer
+	nodeInformer              cache.SharedIndexInformer
 }
+
+type machineSetFilterFunc func(machineSet *v1alpha1.MachineSet) error
 
 func indexNodeByNodeProviderID(obj interface{}) ([]string, error) {
 	if node, ok := obj.(*apiv1.Node); ok {
@@ -68,6 +76,24 @@ func (c *machineController) findMachine(id string) (*v1alpha1.Machine, error) {
 	}
 
 	return machine.DeepCopy(), nil
+}
+
+func (c *machineController) findMachineDeployment(id string) (*v1alpha1.MachineDeployment, error) {
+	item, exists, err := c.machineDeploymentInformer.Informer().GetStore().GetByKey(id)
+	if err != nil {
+		return nil, err
+	}
+
+	if !exists {
+		return nil, nil
+	}
+
+	machineDeployment, ok := item.(*v1alpha1.MachineDeployment)
+	if !ok {
+		return nil, fmt.Errorf("internal error; unexpected type %T", machineDeployment)
+	}
+
+	return machineDeployment.DeepCopy(), nil
 }
 
 // findMachineOwner returns the machine set owner for machine, or nil
@@ -110,7 +136,8 @@ func (c *machineController) run(stopCh <-chan struct{}) error {
 	if !cache.WaitForCacheSync(stopCh,
 		c.nodeInformer.HasSynced,
 		c.machineInformer.Informer().HasSynced,
-		c.machineSetInformer.Informer().HasSynced) {
+		c.machineSetInformer.Informer().HasSynced,
+		c.machineDeploymentInformer.Informer().HasSynced) {
 		return fmt.Errorf("syncing caches failed")
 	}
 
@@ -172,10 +199,10 @@ func (c *machineController) findNodeByNodeName(name string) (*apiv1.Node, error)
 	return node.DeepCopy(), nil
 }
 
-// MachinesInMachineSet returns all the machines that belong to
+// machinesInMachineSet returns all the machines that belong to
 // machineSet. For each machine in the set a DeepCopy() of the object
 // is returned.
-func (c *machineController) MachinesInMachineSet(machineSet *v1alpha1.MachineSet) ([]*v1alpha1.Machine, error) {
+func (c *machineController) machinesInMachineSet(machineSet *v1alpha1.MachineSet) ([]*v1alpha1.Machine, error) {
 	listOptions := labels.SelectorFromSet(labels.Set(machineSet.Labels))
 	machines, err := c.machineInformer.Lister().Machines(machineSet.Namespace).List(listOptions)
 	if err != nil {
@@ -197,12 +224,17 @@ func (c *machineController) MachinesInMachineSet(machineSet *v1alpha1.MachineSet
 // Machines and MachineSet as they are added, updated and deleted on
 // the cluster.
 func newMachineController(
-	kubeInformerFactory kubeinformers.SharedInformerFactory,
-	clusterInformerFactory clusterinformers.SharedInformerFactory,
+	kubeclient kubeclient.Interface,
+	clusterclient clusterclient.Interface,
 ) (*machineController, error) {
+	kubeInformerFactory := kubeinformers.NewSharedInformerFactory(kubeclient, 0)
+	clusterInformerFactory := clusterinformers.NewSharedInformerFactory(clusterclient, 0)
+
 	machineInformer := clusterInformerFactory.Cluster().V1alpha1().Machines()
 	machineSetInformer := clusterInformerFactory.Cluster().V1alpha1().MachineSets()
+	machineDeploymentInformer := clusterInformerFactory.Cluster().V1alpha1().MachineDeployments()
 
+	machineDeploymentInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{})
 	machineInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{})
 	machineSetInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{})
 
@@ -218,10 +250,163 @@ func newMachineController(
 	}
 
 	return &machineController{
-		clusterInformerFactory: clusterInformerFactory,
-		kubeInformerFactory:    kubeInformerFactory,
-		machineInformer:        machineInformer,
-		machineSetInformer:     machineSetInformer,
-		nodeInformer:           nodeInformer,
+		clusterClientset:          clusterclient,
+		clusterInformerFactory:    clusterInformerFactory,
+		kubeInformerFactory:       kubeInformerFactory,
+		machineDeploymentInformer: machineDeploymentInformer,
+		machineInformer:           machineInformer,
+		machineSetInformer:        machineSetInformer,
+		nodeInformer:              nodeInformer,
 	}, nil
+}
+
+func (c *machineController) machineSetNodeNames(machineSet *v1alpha1.MachineSet) ([]string, error) {
+	machines, err := c.machinesInMachineSet(machineSet)
+	if err != nil {
+		return nil, fmt.Errorf("error listing machines: %v", err)
+	}
+
+	var nodes []string
+
+	for _, machine := range machines {
+		if machine.Status.NodeRef == nil {
+			glog.V(4).Infof("Status.NodeRef of machine %q is currently nil", machine.Name)
+			continue
+		}
+		if machine.Status.NodeRef.Kind != "Node" {
+			glog.Errorf("Status.NodeRef of machine %q does not reference a node (rather %q)", machine.Name, machine.Status.NodeRef.Kind)
+			continue
+		}
+
+		node, err := c.findNodeByNodeName(machine.Status.NodeRef.Name)
+		if err != nil {
+			return nil, fmt.Errorf("unknown node %q", machine.Status.NodeRef.Name)
+		}
+
+		if node != nil {
+			nodes = append(nodes, node.Spec.ProviderID)
+		}
+	}
+
+	glog.V(4).Infof("nodegroup %s has nodes %v", machineSet.Name, nodes)
+
+	return nodes, nil
+}
+
+func (c *machineController) filterAllMachineSets(f machineSetFilterFunc) error {
+	return c.filterMachineSets(metav1.NamespaceAll, f)
+}
+
+func (c *machineController) filterMachineSets(namespace string, f machineSetFilterFunc) error {
+	machineSets, err := c.machineSetInformer.Lister().MachineSets(namespace).List(labels.Everything())
+	if err != nil {
+		return nil
+	}
+	for _, machineSet := range machineSets {
+		if err := f(machineSet); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c *machineController) machineSetNodeGroups() ([]cloudprovider.NodeGroup, error) {
+	var nodegroups []cloudprovider.NodeGroup
+
+	if err := c.filterAllMachineSets(func(machineSet *v1alpha1.MachineSet) error {
+		if machineSetHasMachineDeploymentOwnerRef(machineSet) {
+			return nil
+		}
+		ng, err := newNodegroupFromMachineSet(c, machineSet.DeepCopy())
+		if err != nil {
+			return err
+		}
+		if ng.MaxSize()-ng.MinSize() > 0 {
+			nodegroups = append(nodegroups, ng)
+		}
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+
+	return nodegroups, nil
+}
+
+func (c *machineController) machineDeploymentNodeGroups() ([]cloudprovider.NodeGroup, error) {
+	machineDeployments, err := c.machineDeploymentInformer.Lister().MachineDeployments(apiv1.NamespaceAll).List(labels.Everything())
+	if err != nil {
+		return nil, err
+	}
+
+	var nodegroups []cloudprovider.NodeGroup
+
+	for _, md := range machineDeployments {
+		ng, err := newNodegroupFromMachineDeployment(c, md.DeepCopy())
+		if err != nil {
+			return nil, err
+		}
+		// add nodegroup iff it has the capacity to scale
+		if ng.MaxSize()-ng.MinSize() > 0 {
+			nodegroups = append(nodegroups, ng)
+		}
+	}
+
+	return nodegroups, nil
+}
+
+func (c *machineController) nodeGroups() ([]cloudprovider.NodeGroup, error) {
+	machineSets, err := c.machineSetNodeGroups()
+	if err != nil {
+		return nil, err
+	}
+
+	machineDeployments, err := c.machineDeploymentNodeGroups()
+	if err != nil {
+		return nil, err
+	}
+
+	return append(machineSets, machineDeployments...), nil
+}
+
+func (c *machineController) nodeGroupForNode(node *apiv1.Node) (cloudprovider.NodeGroup, error) {
+	machine, err := c.findMachineByNodeProviderID(node)
+	if err != nil {
+		return nil, err
+	}
+	if machine == nil {
+		return nil, nil
+	}
+
+	machineSet, err := c.findMachineOwner(machine)
+	if err != nil {
+		return nil, err
+	}
+
+	if machineSet == nil {
+		return nil, nil
+	}
+
+	if ref := machineSetMachineDeploymentRef(machineSet); ref != nil {
+		key := fmt.Sprintf("%s/%s", machineSet.Namespace, ref.Name)
+		machineDeployment, err := c.findMachineDeployment(key)
+		if err != nil {
+			return nil, fmt.Errorf("unknown MachineDeployment %q: %v", key, err)
+		}
+		if machineDeployment == nil {
+			return nil, fmt.Errorf("unknown MachineDeployment %q", key)
+		}
+		nodegroup, err := newNodegroupFromMachineDeployment(c, machineDeployment)
+		if err != nil {
+			return nil, fmt.Errorf("failed to build nodegroup for node %q: %v", node.Name, err)
+		}
+		return nodegroup, nil
+	}
+
+	nodegroup, err := newNodegroupFromMachineSet(c, machineSet)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build nodegroup for node %q: %v", node.Name, err)
+	}
+
+	glog.V(4).Infof("node %q is in nodegroup %q", node.Name, machineSet.Name)
+	return nodegroup, nil
 }

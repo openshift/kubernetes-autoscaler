@@ -182,21 +182,7 @@ func testNewMachineDeploymentHelper(t *testing.T, testnum int, tc nodeGroupConst
 		},
 	}
 
-	machineSet := &v1alpha1.MachineSet{
-		TypeMeta: v1.TypeMeta{
-			Kind: "MachineSet",
-		},
-		ObjectMeta: v1.ObjectMeta{
-			Name:        tc.name,
-			Namespace:   tc.namespace,
-			Annotations: tc.annotations,
-		},
-		Spec: v1alpha1.MachineSetSpec{
-			Replicas: &tc.replicas,
-		},
-	}
-
-	ng, err := newNodegroupFromMachineDeployment(controller, machineDeployment, machineSet)
+	ng, err := newNodegroupFromMachineDeployment(controller, machineDeployment)
 
 	if tc.errors && err == nil {
 		t.Fatal("expected an error")
@@ -382,7 +368,7 @@ func testNodeGroupIncreaseMachineDeployment(t *testing.T, testnum int, tc testNo
 	})
 	defer stop()
 
-	ng, err := newNodegroupFromMachineDeployment(controller, machineDeployment, machineSet)
+	ng, err := newNodegroupFromMachineDeployment(controller, machineDeployment)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -515,7 +501,7 @@ func testNodeGroupDecreaseMachineDeployment(t *testing.T, testnum int, tc testNo
 	})
 	defer stop()
 
-	ng, err := newNodegroupFromMachineDeployment(controller, machineDeployment, machineSet)
+	ng, err := newNodegroupFromMachineDeployment(controller, machineDeployment)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
