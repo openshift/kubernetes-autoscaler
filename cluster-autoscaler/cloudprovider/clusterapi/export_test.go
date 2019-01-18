@@ -19,12 +19,14 @@ package clusterapi
 // Export for testing.
 
 var (
-	ErrInvalidMaxAnnotation       = errInvalidMaxAnnotation
-	ErrInvalidMinAnnotation       = errInvalidMinAnnotation
-	ErrMissingMaxAnnotation       = errMissingMaxAnnotation
-	ErrMissingMinAnnotation       = errMissingMinAnnotation
-	MachineIsOwnedByMachineSet    = machineIsOwnedByMachineSet
-	NodeGroupMaxSizeAnnotationKey = nodeGroupMaxSizeAnnotationKey
-	NodeGroupMinSizeAnnotationKey = nodeGroupMinSizeAnnotationKey
-	ParseMachineSetBounds         = parseMachineSetBounds
+	ErrInvalidMaxAnnotation                = errInvalidMaxAnnotation
+	ErrInvalidMinAnnotation                = errInvalidMinAnnotation
+	ErrMissingMaxAnnotation                = errMissingMaxAnnotation
+	ErrMissingMinAnnotation                = errMissingMinAnnotation
+	MachineIsOwnedByMachineSet             = machineIsOwnedByMachineSet
+	MachineSetHasMachineDeploymentOwnerRef = machineSetHasMachineDeploymentOwnerRef
+	MachineSetIsOwnedByMachineDeployment   = machineSetIsOwnedByMachineDeployment
+	NodeGroupMaxSizeAnnotationKey          = nodeGroupMaxSizeAnnotationKey
+	NodeGroupMinSizeAnnotationKey          = nodeGroupMinSizeAnnotationKey
+	ParseScalingBounds                     = parseScalingBounds
 )

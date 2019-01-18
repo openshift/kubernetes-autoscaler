@@ -25,7 +25,7 @@ import (
 	"sigs.k8s.io/cluster-api/pkg/apis/cluster/v1alpha1"
 )
 
-func TestParseMachineSetBounds(t *testing.T) {
+func TestParseScalingBounds(t *testing.T) {
 	for i, tc := range []struct {
 		description string
 		annotations map[string]string
@@ -108,32 +108,121 @@ func TestParseMachineSetBounds(t *testing.T) {
 		min: 0,
 		max: 1,
 	}} {
+		t.Logf("test #%d: %s", i, tc.description)
+
 		machineSet := v1alpha1.MachineSet{
 			ObjectMeta: v1.ObjectMeta{
 				Annotations: tc.annotations,
 			},
 		}
 
-		min, max, err := clusterapi.ParseMachineSetBounds(&machineSet)
-
+		min, max, err := clusterapi.ParseScalingBounds(machineSet.Annotations)
 		if tc.error != nil && err == nil {
-			t.Fatalf("test #%d: expected an error", i)
+			t.Fatal("expected an error", i)
 		}
 
 		if tc.error != nil && tc.error != err {
 			if !strings.HasPrefix(err.Error(), tc.error.Error()) {
-				t.Errorf("test #%d: expected message to have prefix %q, got %q",
-					i, tc.error.Error(), err)
+				t.Errorf("expected message to have prefix %q, got %q", tc.error.Error(), err)
 			}
 		}
 
 		if tc.error == nil {
 			if tc.min != min {
-				t.Errorf("test #%d: expected min %d, got %d", i, tc.min, min)
+				t.Errorf("expected min %d, got %d", tc.min, min)
 			}
 			if tc.max != max {
-				t.Errorf("test #%d: expected max %d, got %d", i, tc.max, max)
+				t.Errorf("expected max %d, got %d", tc.max, max)
 			}
+		}
+	}
+}
+
+func TestMachineSetIsOwnedByMachineDeployment(t *testing.T) {
+	for i, tc := range []struct {
+		description       string
+		machineSet        v1alpha1.MachineSet
+		machineDeployment v1alpha1.MachineDeployment
+		owned             bool
+	}{{
+		description:       "not owned as no owner references",
+		machineSet:        v1alpha1.MachineSet{},
+		machineDeployment: v1alpha1.MachineDeployment{},
+		owned:             false,
+	}, {
+		description: "not owned as not the same Kind",
+		machineSet: v1alpha1.MachineSet{
+			ObjectMeta: v1.ObjectMeta{
+				OwnerReferences: []v1.OwnerReference{{
+					Kind: "Other",
+				}},
+			},
+		},
+		machineDeployment: v1alpha1.MachineDeployment{},
+		owned:             false,
+	}, {
+		description: "not owned because no OwnerReference.Name",
+		machineSet: v1alpha1.MachineSet{
+			ObjectMeta: v1.ObjectMeta{
+				OwnerReferences: []v1.OwnerReference{{
+					Kind: "MachineSet",
+					UID:  "ec21c5fb-a3d5-a45f-887b-6b49aa8fc218",
+				}},
+			},
+		},
+		machineDeployment: v1alpha1.MachineDeployment{
+			ObjectMeta: v1.ObjectMeta{
+				UID: "ec21c5fb-a3d5-a45f-887b-6b49aa8fc218",
+			},
+		},
+		owned: false,
+	}, {
+		description: "not owned as UID values don't match",
+		machineSet: v1alpha1.MachineSet{
+			ObjectMeta: v1.ObjectMeta{
+				OwnerReferences: []v1.OwnerReference{{
+					Kind: "MachineSet",
+					Name: "foo",
+					UID:  "ec23ebb0-bc60-443f-d139-046ec5046283",
+				}},
+			},
+		},
+		machineDeployment: v1alpha1.MachineDeployment{
+			TypeMeta: v1.TypeMeta{
+				Kind: "MachineDeployment",
+			},
+			ObjectMeta: v1.ObjectMeta{
+				UID: "ec21c5fb-a3d5-a45f-887b-6b49aa8fc218",
+			},
+		},
+		owned: false,
+	}, {
+		description: "owned as UID values match and same Kind and Name not empty",
+		machineSet: v1alpha1.MachineSet{
+			ObjectMeta: v1.ObjectMeta{
+				OwnerReferences: []v1.OwnerReference{{
+					Kind: "MachineDeployment",
+					Name: "foo",
+					UID:  "ec21c5fb-a3d5-a45f-887b-6b49aa8fc218",
+				}},
+			},
+		},
+		machineDeployment: v1alpha1.MachineDeployment{
+			TypeMeta: v1.TypeMeta{
+				Kind: "MachineDeployment",
+			},
+			ObjectMeta: v1.ObjectMeta{
+				Name: "foo",
+				UID:  "ec21c5fb-a3d5-a45f-887b-6b49aa8fc218",
+			},
+		},
+		owned: true,
+	}} {
+		t.Logf("test #%d: %s", i, tc.description)
+		owned := clusterapi.MachineSetIsOwnedByMachineDeployment(&tc.machineSet, &tc.machineDeployment)
+
+		if tc.owned != owned {
+			t.Errorf("expected %t, got %t", tc.owned, owned)
 		}
 	}
 }
@@ -218,10 +307,62 @@ func TestMachineIsOwnedByMachineSet(t *testing.T) {
 		},
 		owned: true,
 	}} {
+		t.Logf("test #%d: %s", i, tc.description)
 		owned := clusterapi.MachineIsOwnedByMachineSet(&tc.machine, &tc.machineSet)
 
 		if tc.owned != owned {
-			t.Errorf("test #%d: expected %t, got %t", i, tc.owned, owned)
+			t.Errorf("expected %t, got %t", tc.owned, owned)
+		}
+	}
+}
+
+func TestMachineSetMachineDeploymentOwnerRef(t *testing.T) {
+	for i, tc := range []struct {
+		description       string
+		machineSet        v1alpha1.MachineSet
+		machineDeployment v1alpha1.MachineDeployment
+		owned             bool
+	}{{
+		description:       "machineset not owned as no owner references",
+		machineSet:        v1alpha1.MachineSet{},
+		machineDeployment: v1alpha1.MachineDeployment{},
+		owned:             false,
+	}, {
+		description: "machineset not owned as ownerref not a MachineDeployment",
+		machineSet: v1alpha1.MachineSet{
+			ObjectMeta: v1.ObjectMeta{
+				OwnerReferences: []v1.OwnerReference{{
+					Kind: "Other",
+				}},
+			},
+		},
+		machineDeployment: v1alpha1.MachineDeployment{},
+		owned:             false,
+	}, {
+		description: "machineset owned as Kind matches and Name not empty",
+		machineSet: v1alpha1.MachineSet{
+			ObjectMeta: v1.ObjectMeta{
+				OwnerReferences: []v1.OwnerReference{{
+					Kind: "MachineDeployment",
+					Name: "foo",
+				}},
+			},
+		},
+		machineDeployment: v1alpha1.MachineDeployment{
+			TypeMeta: v1.TypeMeta{
+				Kind: "MachineDeployment",
+			},
+			ObjectMeta: v1.ObjectMeta{
+				Name: "foo",
+			},
+		},
+		owned: true,
+	}} {
+		t.Logf("test #%d: %s", i, tc.description)
+
+		owned := clusterapi.MachineSetHasMachineDeploymentOwnerRef(&tc.machineSet)
+		if tc.owned != owned {
+			t.Errorf("expected %t, got %t", tc.owned, owned)
 		}
 	}
 }
