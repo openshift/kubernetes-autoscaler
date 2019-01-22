@@ -14,14 +14,13 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package clusterapi_test
+package clusterapi
 
 import (
 	"strings"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/clusterapi"
 	"sigs.k8s.io/cluster-api/pkg/apis/cluster/v1alpha1"
 )
 
@@ -35,75 +34,75 @@ func TestParseScalingBounds(t *testing.T) {
 	}{{
 		description: "missing min annotation defaults to 0 and no error",
 		annotations: map[string]string{
-			clusterapi.NodeGroupMaxSizeAnnotationKey: "0",
+			nodeGroupMaxSizeAnnotationKey: "0",
 		},
 	}, {
 		description: "missing max annotation defaults to 0 and no error",
 		annotations: map[string]string{
-			clusterapi.NodeGroupMinSizeAnnotationKey: "0",
+			nodeGroupMinSizeAnnotationKey: "0",
 		},
 	}, {
 		description: "invalid min errors",
 		annotations: map[string]string{
-			clusterapi.NodeGroupMinSizeAnnotationKey: "-1",
-			clusterapi.NodeGroupMaxSizeAnnotationKey: "0",
+			nodeGroupMinSizeAnnotationKey: "-1",
+			nodeGroupMaxSizeAnnotationKey: "0",
 		},
-		error: clusterapi.ErrInvalidMinAnnotation,
+		error: errInvalidMinAnnotation,
 	}, {
 		description: "invalid min errors",
 		annotations: map[string]string{
-			clusterapi.NodeGroupMinSizeAnnotationKey: "not-an-int",
-			clusterapi.NodeGroupMaxSizeAnnotationKey: "0",
+			nodeGroupMinSizeAnnotationKey: "not-an-int",
+			nodeGroupMaxSizeAnnotationKey: "0",
 		},
-		error: clusterapi.ErrInvalidMinAnnotation,
+		error: errInvalidMinAnnotation,
 	}, {
 		description: "invalid max errors",
 		annotations: map[string]string{
-			clusterapi.NodeGroupMinSizeAnnotationKey: "0",
-			clusterapi.NodeGroupMaxSizeAnnotationKey: "-1",
+			nodeGroupMinSizeAnnotationKey: "0",
+			nodeGroupMaxSizeAnnotationKey: "-1",
 		},
-		error: clusterapi.ErrInvalidMaxAnnotation,
+		error: errInvalidMaxAnnotation,
 	}, {
 		description: "invalid max errors",
 		annotations: map[string]string{
-			clusterapi.NodeGroupMinSizeAnnotationKey: "0",
-			clusterapi.NodeGroupMaxSizeAnnotationKey: "not-an-int",
+			nodeGroupMinSizeAnnotationKey: "0",
+			nodeGroupMaxSizeAnnotationKey: "not-an-int",
 		},
-		error: clusterapi.ErrInvalidMaxAnnotation,
+		error: errInvalidMaxAnnotation,
 	}, {
 		description: "negative min errors",
 		annotations: map[string]string{
-			clusterapi.NodeGroupMinSizeAnnotationKey: "-1",
-			clusterapi.NodeGroupMaxSizeAnnotationKey: "0",
+			nodeGroupMinSizeAnnotationKey: "-1",
+			nodeGroupMaxSizeAnnotationKey: "0",
 		},
-		error: clusterapi.ErrInvalidMinAnnotation,
+		error: errInvalidMinAnnotation,
 	}, {
 		description: "negative max errors",
 		annotations: map[string]string{
-			clusterapi.NodeGroupMinSizeAnnotationKey: "0",
-			clusterapi.NodeGroupMaxSizeAnnotationKey: "-1",
+			nodeGroupMinSizeAnnotationKey: "0",
+			nodeGroupMaxSizeAnnotationKey: "-1",
 		},
-		error: clusterapi.ErrInvalidMaxAnnotation,
+		error: errInvalidMaxAnnotation,
 	}, {
 		description: "max < min errors",
 		annotations: map[string]string{
-			clusterapi.NodeGroupMinSizeAnnotationKey: "1",
-			clusterapi.NodeGroupMaxSizeAnnotationKey: "0",
+			nodeGroupMinSizeAnnotationKey: "1",
+			nodeGroupMaxSizeAnnotationKey: "0",
 		},
-		error: clusterapi.ErrInvalidMaxAnnotation,
+		error: errInvalidMaxAnnotation,
 	}, {
 		description: "result is: min 0, max 0",
 		annotations: map[string]string{
-			clusterapi.NodeGroupMinSizeAnnotationKey: "0",
-			clusterapi.NodeGroupMaxSizeAnnotationKey: "0",
+			nodeGroupMinSizeAnnotationKey: "0",
+			nodeGroupMaxSizeAnnotationKey: "0",
 		},
 		min: 0,
 		max: 0,
 	}, {
 		description: "result is min 0, max 1",
 		annotations: map[string]string{
-			clusterapi.NodeGroupMinSizeAnnotationKey: "0",
-			clusterapi.NodeGroupMaxSizeAnnotationKey: "1",
+			nodeGroupMinSizeAnnotationKey: "0",
+			nodeGroupMaxSizeAnnotationKey: "1",
 		},
 		min: 0,
 		max: 1,
@@ -116,7 +115,7 @@ func TestParseScalingBounds(t *testing.T) {
 			},
 		}
 
-		min, max, err := clusterapi.ParseScalingBounds(machineSet.Annotations)
+		min, max, err := parseScalingBounds(machineSet.Annotations)
 		if tc.error != nil && err == nil {
 			t.Fatal("expected an error", i)
 		}
@@ -219,7 +218,7 @@ func TestMachineSetIsOwnedByMachineDeployment(t *testing.T) {
 		owned: true,
 	}} {
 		t.Logf("test #%d: %s", i, tc.description)
-		owned := clusterapi.MachineSetIsOwnedByMachineDeployment(&tc.machineSet, &tc.machineDeployment)
+		owned := machineSetIsOwnedByMachineDeployment(&tc.machineSet, &tc.machineDeployment)
 
 		if tc.owned != owned {
 			t.Errorf("expected %t, got %t", tc.owned, owned)
@@ -308,7 +307,7 @@ func TestMachineIsOwnedByMachineSet(t *testing.T) {
 		owned: true,
 	}} {
 		t.Logf("test #%d: %s", i, tc.description)
-		owned := clusterapi.MachineIsOwnedByMachineSet(&tc.machine, &tc.machineSet)
+		owned := machineIsOwnedByMachineSet(&tc.machine, &tc.machineSet)
 
 		if tc.owned != owned {
 			t.Errorf("expected %t, got %t", tc.owned, owned)
@@ -360,7 +359,7 @@ func TestMachineSetMachineDeploymentOwnerRef(t *testing.T) {
 	}} {
 		t.Logf("test #%d: %s", i, tc.description)
 
-		owned := clusterapi.MachineSetHasMachineDeploymentOwnerRef(&tc.machineSet)
+		owned := machineSetHasMachineDeploymentOwnerRef(&tc.machineSet)
 		if tc.owned != owned {
 			t.Errorf("expected %t, got %t", tc.owned, owned)
 		}
