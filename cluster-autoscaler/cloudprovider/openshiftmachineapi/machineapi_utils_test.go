@@ -14,15 +14,15 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package clusterapi_test
+package openshiftmachineapi_test
 
 import (
 	"strings"
 	"testing"
 
+	"github.com/openshift/cluster-api/pkg/apis/machine/v1beta1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/clusterapi"
-	"sigs.k8s.io/cluster-api/pkg/apis/cluster/v1alpha1"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/openshiftmachineapi"
 )
 
 func TestParseMachineSetBounds(t *testing.T) {
@@ -35,86 +35,86 @@ func TestParseMachineSetBounds(t *testing.T) {
 	}{{
 		description: "missing min annotation defaults to 0 and no error",
 		annotations: map[string]string{
-			clusterapi.NodeGroupMaxSizeAnnotationKey: "0",
+			openshiftmachineapi.NodeGroupMaxSizeAnnotationKey: "0",
 		},
 	}, {
 		description: "missing max annotation defaults to 0 and no error",
 		annotations: map[string]string{
-			clusterapi.NodeGroupMinSizeAnnotationKey: "0",
+			openshiftmachineapi.NodeGroupMinSizeAnnotationKey: "0",
 		},
 	}, {
 		description: "invalid min errors",
 		annotations: map[string]string{
-			clusterapi.NodeGroupMinSizeAnnotationKey: "-1",
-			clusterapi.NodeGroupMaxSizeAnnotationKey: "0",
+			openshiftmachineapi.NodeGroupMinSizeAnnotationKey: "-1",
+			openshiftmachineapi.NodeGroupMaxSizeAnnotationKey: "0",
 		},
-		error: clusterapi.ErrInvalidMinAnnotation,
+		error: openshiftmachineapi.ErrInvalidMinAnnotation,
 	}, {
 		description: "invalid min errors",
 		annotations: map[string]string{
-			clusterapi.NodeGroupMinSizeAnnotationKey: "not-an-int",
-			clusterapi.NodeGroupMaxSizeAnnotationKey: "0",
+			openshiftmachineapi.NodeGroupMinSizeAnnotationKey: "not-an-int",
+			openshiftmachineapi.NodeGroupMaxSizeAnnotationKey: "0",
 		},
-		error: clusterapi.ErrInvalidMinAnnotation,
+		error: openshiftmachineapi.ErrInvalidMinAnnotation,
 	}, {
 		description: "invalid max errors",
 		annotations: map[string]string{
-			clusterapi.NodeGroupMinSizeAnnotationKey: "0",
-			clusterapi.NodeGroupMaxSizeAnnotationKey: "-1",
+			openshiftmachineapi.NodeGroupMinSizeAnnotationKey: "0",
+			openshiftmachineapi.NodeGroupMaxSizeAnnotationKey: "-1",
 		},
-		error: clusterapi.ErrInvalidMaxAnnotation,
+		error: openshiftmachineapi.ErrInvalidMaxAnnotation,
 	}, {
 		description: "invalid max errors",
 		annotations: map[string]string{
-			clusterapi.NodeGroupMinSizeAnnotationKey: "0",
-			clusterapi.NodeGroupMaxSizeAnnotationKey: "not-an-int",
+			openshiftmachineapi.NodeGroupMinSizeAnnotationKey: "0",
+			openshiftmachineapi.NodeGroupMaxSizeAnnotationKey: "not-an-int",
 		},
-		error: clusterapi.ErrInvalidMaxAnnotation,
+		error: openshiftmachineapi.ErrInvalidMaxAnnotation,
 	}, {
 		description: "negative min errors",
 		annotations: map[string]string{
-			clusterapi.NodeGroupMinSizeAnnotationKey: "-1",
-			clusterapi.NodeGroupMaxSizeAnnotationKey: "0",
+			openshiftmachineapi.NodeGroupMinSizeAnnotationKey: "-1",
+			openshiftmachineapi.NodeGroupMaxSizeAnnotationKey: "0",
 		},
-		error: clusterapi.ErrInvalidMinAnnotation,
+		error: openshiftmachineapi.ErrInvalidMinAnnotation,
 	}, {
 		description: "negative max errors",
 		annotations: map[string]string{
-			clusterapi.NodeGroupMinSizeAnnotationKey: "0",
-			clusterapi.NodeGroupMaxSizeAnnotationKey: "-1",
+			openshiftmachineapi.NodeGroupMinSizeAnnotationKey: "0",
+			openshiftmachineapi.NodeGroupMaxSizeAnnotationKey: "-1",
 		},
-		error: clusterapi.ErrInvalidMaxAnnotation,
+		error: openshiftmachineapi.ErrInvalidMaxAnnotation,
 	}, {
 		description: "max < min errors",
 		annotations: map[string]string{
-			clusterapi.NodeGroupMinSizeAnnotationKey: "1",
-			clusterapi.NodeGroupMaxSizeAnnotationKey: "0",
+			openshiftmachineapi.NodeGroupMinSizeAnnotationKey: "1",
+			openshiftmachineapi.NodeGroupMaxSizeAnnotationKey: "0",
 		},
-		error: clusterapi.ErrInvalidMaxAnnotation,
+		error: openshiftmachineapi.ErrInvalidMaxAnnotation,
 	}, {
 		description: "result is: min 0, max 0",
 		annotations: map[string]string{
-			clusterapi.NodeGroupMinSizeAnnotationKey: "0",
-			clusterapi.NodeGroupMaxSizeAnnotationKey: "0",
+			openshiftmachineapi.NodeGroupMinSizeAnnotationKey: "0",
+			openshiftmachineapi.NodeGroupMaxSizeAnnotationKey: "0",
 		},
 		min: 0,
 		max: 0,
 	}, {
 		description: "result is min 0, max 1",
 		annotations: map[string]string{
-			clusterapi.NodeGroupMinSizeAnnotationKey: "0",
-			clusterapi.NodeGroupMaxSizeAnnotationKey: "1",
+			openshiftmachineapi.NodeGroupMinSizeAnnotationKey: "0",
+			openshiftmachineapi.NodeGroupMaxSizeAnnotationKey: "1",
 		},
 		min: 0,
 		max: 1,
 	}} {
-		machineSet := v1alpha1.MachineSet{
+		machineSet := v1beta1.MachineSet{
 			ObjectMeta: v1.ObjectMeta{
 				Annotations: tc.annotations,
 			},
 		}
 
-		min, max, err := clusterapi.ParseMachineSetBounds(&machineSet)
+		min, max, err := openshiftmachineapi.ParseMachineSetBounds(&machineSet)
 
 		if tc.error != nil && err == nil {
 			t.Fatalf("test #%d: expected an error", i)
@@ -141,28 +141,28 @@ func TestParseMachineSetBounds(t *testing.T) {
 func TestMachineIsOwnedByMachineSet(t *testing.T) {
 	for i, tc := range []struct {
 		description string
-		machine     v1alpha1.Machine
-		machineSet  v1alpha1.MachineSet
+		machine     v1beta1.Machine
+		machineSet  v1beta1.MachineSet
 		owned       bool
 	}{{
 		description: "not owned as no owner references",
-		machine:     v1alpha1.Machine{},
-		machineSet:  v1alpha1.MachineSet{},
+		machine:     v1beta1.Machine{},
+		machineSet:  v1beta1.MachineSet{},
 		owned:       false,
 	}, {
 		description: "not owned as not the same Kind",
-		machine: v1alpha1.Machine{
+		machine: v1beta1.Machine{
 			ObjectMeta: v1.ObjectMeta{
 				OwnerReferences: []v1.OwnerReference{{
 					Kind: "Other",
 				}},
 			},
 		},
-		machineSet: v1alpha1.MachineSet{},
+		machineSet: v1beta1.MachineSet{},
 		owned:      false,
 	}, {
 		description: "not owned because no OwnerReference.Name",
-		machine: v1alpha1.Machine{
+		machine: v1beta1.Machine{
 			ObjectMeta: v1.ObjectMeta{
 				OwnerReferences: []v1.OwnerReference{{
 					Kind: "MachineSet",
@@ -170,7 +170,7 @@ func TestMachineIsOwnedByMachineSet(t *testing.T) {
 				}},
 			},
 		},
-		machineSet: v1alpha1.MachineSet{
+		machineSet: v1beta1.MachineSet{
 			ObjectMeta: v1.ObjectMeta{
 				UID: "ec21c5fb-a3d5-a45f-887b-6b49aa8fc218",
 			},
@@ -178,7 +178,7 @@ func TestMachineIsOwnedByMachineSet(t *testing.T) {
 		owned: false,
 	}, {
 		description: "not owned as UID values don't match",
-		machine: v1alpha1.Machine{
+		machine: v1beta1.Machine{
 			ObjectMeta: v1.ObjectMeta{
 				OwnerReferences: []v1.OwnerReference{{
 					Kind: "MachineSet",
@@ -187,7 +187,7 @@ func TestMachineIsOwnedByMachineSet(t *testing.T) {
 				}},
 			},
 		},
-		machineSet: v1alpha1.MachineSet{
+		machineSet: v1beta1.MachineSet{
 			TypeMeta: v1.TypeMeta{
 				Kind: "MachineSet",
 			},
@@ -198,7 +198,7 @@ func TestMachineIsOwnedByMachineSet(t *testing.T) {
 		owned: false,
 	}, {
 		description: "owned as UID values match and same Kind and Name not empty",
-		machine: v1alpha1.Machine{
+		machine: v1beta1.Machine{
 			ObjectMeta: v1.ObjectMeta{
 				OwnerReferences: []v1.OwnerReference{{
 					Kind: "MachineSet",
@@ -207,7 +207,7 @@ func TestMachineIsOwnedByMachineSet(t *testing.T) {
 				}},
 			},
 		},
-		machineSet: v1alpha1.MachineSet{
+		machineSet: v1beta1.MachineSet{
 			TypeMeta: v1.TypeMeta{
 				Kind: "MachineSet",
 			},
@@ -218,7 +218,7 @@ func TestMachineIsOwnedByMachineSet(t *testing.T) {
 		},
 		owned: true,
 	}} {
-		owned := clusterapi.MachineIsOwnedByMachineSet(&tc.machine, &tc.machineSet)
+		owned := openshiftmachineapi.MachineIsOwnedByMachineSet(&tc.machine, &tc.machineSet)
 
 		if tc.owned != owned {
 			t.Errorf("test #%d: expected %t, got %t", i, tc.owned, owned)
