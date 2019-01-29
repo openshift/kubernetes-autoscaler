@@ -14,20 +14,20 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package clusterapi
+package openshiftmachineapi
 
 import (
 	"strconv"
 
 	"github.com/golang/glog"
+	"github.com/openshift/cluster-api/pkg/apis/machine/v1beta1"
 	"github.com/pkg/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"sigs.k8s.io/cluster-api/pkg/apis/cluster/v1alpha1"
 )
 
 const (
-	nodeGroupMinSizeAnnotationKey = "sigs.k8s.io/cluster-api-autoscaler-node-group-min-size"
-	nodeGroupMaxSizeAnnotationKey = "sigs.k8s.io/cluster-api-autoscaler-node-group-max-size"
+	nodeGroupMinSizeAnnotationKey = "machine.openshift.io/cluster-api-autoscaler-node-group-min-size"
+	nodeGroupMaxSizeAnnotationKey = "machine.openshift.io/cluster-api-autoscaler-node-group-max-size"
 )
 
 var (
@@ -55,7 +55,7 @@ var (
 // nodeGroupMinSizeAnnotationKey. Returns errMissingMinAnnotation if
 // the annotation doesn't exist or errInvalidMinAnnotation if the
 // value is not of type int.
-func machineSetMinSize(machineSet *v1alpha1.MachineSet) (int, error) {
+func machineSetMinSize(machineSet *v1beta1.MachineSet) (int, error) {
 	val, found := machineSet.Annotations[nodeGroupMinSizeAnnotationKey]
 	if !found {
 		glog.V(4).Infof("machineset %s/%s has no annotation %q", machineSet.Namespace, machineSet.Name, nodeGroupMinSizeAnnotationKey)
@@ -73,7 +73,7 @@ func machineSetMinSize(machineSet *v1alpha1.MachineSet) (int, error) {
 // nodeGroupMaxSizeAnnotationKey. Returns errMissingMaxAnnotation if
 // the annotation doesn't exist or errInvalidMaxAnnotation if the
 // value is not of type int.
-func machineSetMaxSize(machineSet *v1alpha1.MachineSet) (int, error) {
+func machineSetMaxSize(machineSet *v1beta1.MachineSet) (int, error) {
 	val, found := machineSet.Annotations[nodeGroupMaxSizeAnnotationKey]
 	if !found {
 		glog.V(4).Infof("machineset %s/%s has no annotation %q", machineSet.Namespace, machineSet.Name, nodeGroupMaxSizeAnnotationKey)
@@ -86,7 +86,7 @@ func machineSetMaxSize(machineSet *v1alpha1.MachineSet) (int, error) {
 	return i, nil
 }
 
-func parseMachineSetBounds(machineSet *v1alpha1.MachineSet) (int, int, error) {
+func parseMachineSetBounds(machineSet *v1beta1.MachineSet) (int, int, error) {
 	minSize, err := machineSetMinSize(machineSet)
 	if err != nil && err != errMissingMinAnnotation {
 		return 0, 0, err
@@ -112,7 +112,7 @@ func parseMachineSetBounds(machineSet *v1alpha1.MachineSet) (int, int, error) {
 	return minSize, maxSize, nil
 }
 
-func machineOwnerRef(machine *v1alpha1.Machine) *metav1.OwnerReference {
+func machineOwnerRef(machine *v1beta1.Machine) *metav1.OwnerReference {
 	for _, ref := range machine.OwnerReferences {
 		if ref.Kind == "MachineSet" && ref.Name != "" {
 			return ref.DeepCopy()
@@ -122,7 +122,7 @@ func machineOwnerRef(machine *v1alpha1.Machine) *metav1.OwnerReference {
 	return nil
 }
 
-func machineIsOwnedByMachineSet(machine *v1alpha1.Machine, machineSet *v1alpha1.MachineSet) bool {
+func machineIsOwnedByMachineSet(machine *v1beta1.Machine, machineSet *v1beta1.MachineSet) bool {
 	if ref := machineOwnerRef(machine); ref != nil {
 		return ref.UID == machineSet.UID
 	}
