@@ -14,29 +14,29 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package clusterapi
+package openshiftmachineapi
 
 import (
 	"fmt"
 	"path"
 	"time"
 
+	machinev1beta1 "github.com/openshift/cluster-api/pkg/client/clientset_generated/clientset/typed/machine/v1beta1"
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	schedulercache "k8s.io/kubernetes/pkg/scheduler/cache"
-	clusterv1alpha1 "sigs.k8s.io/cluster-api/pkg/client/clientset_generated/clientset/typed/cluster/v1alpha1"
 )
 
 const (
-	machineDeleteAnnotationKey = "sigs.k8s.io/cluster-api-delete-machine"
+	machineDeleteAnnotationKey = "machine.openshift.io/cluster-api-delete-machine"
 )
 
 var _ cloudprovider.NodeGroup = (*nodegroup)(nil)
 
 type nodegroup struct {
 	machineController *machineController
-	clusterapiClient  clusterv1alpha1.ClusterV1alpha1Interface
+	machineapiClient  machinev1beta1.MachineV1beta1Interface
 	maxSize           int
 	minSize           int
 	name              string
@@ -66,7 +66,7 @@ func (ng *nodegroup) Replicas() int {
 }
 
 func (ng *nodegroup) SetSize(nreplicas int) error {
-	machineSet, err := ng.clusterapiClient.MachineSets(ng.namespace).Get(ng.name, v1.GetOptions{})
+	machineSet, err := ng.machineapiClient.MachineSets(ng.namespace).Get(ng.name, v1.GetOptions{})
 	if err != nil {
 		return fmt.Errorf("unable to get machineset %q: %v", ng.name, err)
 	}
@@ -75,7 +75,7 @@ func (ng *nodegroup) SetSize(nreplicas int) error {
 	replicas := int32(nreplicas)
 	machineSet.Spec.Replicas = &replicas
 
-	_, err = ng.clusterapiClient.MachineSets(ng.namespace).Update(machineSet)
+	_, err = ng.machineapiClient.MachineSets(ng.namespace).Update(machineSet)
 	if err != nil {
 		return fmt.Errorf("unable to update number of replicas of machineset %q: %v", ng, err)
 	}
@@ -132,7 +132,7 @@ func (ng *nodegroup) DeleteNodes(nodes []*apiv1.Node) error {
 
 		machine.Annotations[machineDeleteAnnotationKey] = time.Now().String()
 
-		if _, err := ng.clusterapiClient.Machines(machine.Namespace).Update(machine); err != nil {
+		if _, err := ng.machineapiClient.Machines(machine.Namespace).Update(machine); err != nil {
 			return fmt.Errorf("failed to update machine %s/%s: %v", machine.Namespace, machine.Name, err)
 		}
 	}

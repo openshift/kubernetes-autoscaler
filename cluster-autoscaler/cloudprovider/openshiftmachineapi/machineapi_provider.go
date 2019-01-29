@@ -14,12 +14,16 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package clusterapi
+package openshiftmachineapi
 
 import (
 	"fmt"
 
 	"github.com/golang/glog"
+	"github.com/openshift/cluster-api/pkg/apis/machine/v1beta1"
+	"github.com/openshift/cluster-api/pkg/client/clientset_generated/clientset"
+	machinev1beta1 "github.com/openshift/cluster-api/pkg/client/clientset_generated/clientset/typed/machine/v1beta1"
+	informers "github.com/openshift/cluster-api/pkg/client/informers_generated/externalversions"
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -31,15 +35,11 @@ import (
 	kubeclient "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
-	"sigs.k8s.io/cluster-api/pkg/apis/cluster/v1alpha1"
-	"sigs.k8s.io/cluster-api/pkg/client/clientset_generated/clientset"
-	clusterv1alpha1 "sigs.k8s.io/cluster-api/pkg/client/clientset_generated/clientset/typed/cluster/v1alpha1"
-	informers "sigs.k8s.io/cluster-api/pkg/client/informers_generated/externalversions"
 )
 
 const (
 	// ProviderName is the name of cluster-api cloud provider.
-	ProviderName = "cluster-api"
+	ProviderName = "openshift-machine-api"
 )
 
 var _ cloudprovider.CloudProvider = (*provider)(nil)
@@ -49,10 +49,10 @@ type provider struct {
 
 	providerName     string
 	resourceLimiter  *cloudprovider.ResourceLimiter
-	clusterapiClient clusterv1alpha1.ClusterV1alpha1Interface
+	machineapiClient machinev1beta1.MachineV1beta1Interface
 }
 
-func (p *provider) nodes(machineSet *v1alpha1.MachineSet) ([]string, error) {
+func (p *provider) nodes(machineSet *v1beta1.MachineSet) ([]string, error) {
 	machines, err := p.machineController.MachinesInMachineSet(machineSet)
 	if err != nil {
 		return nil, fmt.Errorf("error listing machines: %v", err)
@@ -104,7 +104,7 @@ func (p *provider) nodeGroups() ([]*nodegroup, error) {
 	return nodegroups, nil
 }
 
-func (p *provider) buildNodeGroup(machineSet *v1alpha1.MachineSet) (*nodegroup, error) {
+func (p *provider) buildNodeGroup(machineSet *v1beta1.MachineSet) (*nodegroup, error) {
 	minSize, maxSize, err := parseMachineSetBounds(machineSet)
 
 	if err != nil {
@@ -123,7 +123,7 @@ func (p *provider) buildNodeGroup(machineSet *v1alpha1.MachineSet) (*nodegroup, 
 	}
 
 	return &nodegroup{
-		clusterapiClient:  p.clusterapiClient,
+		machineapiClient:  p.machineapiClient,
 		machineController: p.machineController,
 		maxSize:           maxSize,
 		minSize:           minSize,
@@ -219,7 +219,7 @@ func (p *provider) Refresh() error {
 	return nil
 }
 
-// BuildCloudProvider builds a new clusterapi-based cloudprovider
+// BuildCloudProvider builds a new openshiftmachineapi-based cloudprovider
 func BuildCloudProvider(name string, opts config.AutoscalingOptions, rl *cloudprovider.ResourceLimiter) (cloudprovider.CloudProvider, error) {
 	var err error
 	var externalConfig *rest.Config
@@ -265,6 +265,6 @@ func BuildCloudProvider(name string, opts config.AutoscalingOptions, rl *cloudpr
 		providerName:      name,
 		resourceLimiter:   rl,
 		machineController: controller,
-		clusterapiClient:  clientset.ClusterV1alpha1(),
+		machineapiClient:  clientset.MachineV1beta1(),
 	}, nil
 }
