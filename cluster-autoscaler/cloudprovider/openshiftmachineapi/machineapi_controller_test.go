@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package clusterapi
+package openshiftmachineapi
 
 import (
 	"fmt"
@@ -23,15 +23,15 @@ import (
 	"sort"
 	"testing"
 
+	"github.com/openshift/cluster-api/pkg/apis/machine/v1beta1"
+	fakeclusterapi "github.com/openshift/cluster-api/pkg/client/clientset_generated/clientset/fake"
+	informers "github.com/openshift/cluster-api/pkg/client/informers_generated/externalversions"
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	kubeinformers "k8s.io/client-go/informers"
 	fakekube "k8s.io/client-go/kubernetes/fake"
 	"k8s.io/kubernetes/pkg/controller"
-	"sigs.k8s.io/cluster-api/pkg/apis/cluster/v1alpha1"
-	fakeclusterapi "sigs.k8s.io/cluster-api/pkg/client/clientset_generated/clientset/fake"
-	informers "sigs.k8s.io/cluster-api/pkg/client/informers_generated/externalversions"
 )
 
 func mustCreateTestController(t *testing.T) *machineController {
@@ -58,7 +58,7 @@ func mustCreateTestController(t *testing.T) *machineController {
 func TestFindMachineByID(t *testing.T) {
 	controller := mustCreateTestController(t)
 
-	testMachine := &v1alpha1.Machine{
+	testMachine := &v1beta1.Machine{
 		ObjectMeta: v1.ObjectMeta{
 			Name:      "test",
 			Namespace: "test-namespace",
@@ -119,7 +119,7 @@ func TestFindMachineByID(t *testing.T) {
 func TestFindMachineOwner(t *testing.T) {
 	controller := mustCreateTestController(t)
 
-	testMachineWithNoOwner := &v1alpha1.Machine{
+	testMachineWithNoOwner := &v1beta1.Machine{
 		TypeMeta: v1.TypeMeta{
 			Kind: "Machine",
 		},
@@ -129,7 +129,7 @@ func TestFindMachineOwner(t *testing.T) {
 		},
 	}
 
-	testMachineWithOwner := &v1alpha1.Machine{
+	testMachineWithOwner := &v1beta1.Machine{
 		TypeMeta: v1.TypeMeta{
 			Kind: "Machine",
 		},
@@ -167,7 +167,7 @@ func TestFindMachineOwner(t *testing.T) {
 		t.Fatalf("expected no owner, got %v", foundMachineSet)
 	}
 
-	testMachineSet := &v1alpha1.MachineSet{
+	testMachineSet := &v1beta1.MachineSet{
 		TypeMeta: v1.TypeMeta{
 			Kind: "MachineSet",
 		},
@@ -207,7 +207,7 @@ func TestFindMachineByNodeProviderID(t *testing.T) {
 		},
 	}
 
-	testMachine := &v1alpha1.Machine{
+	testMachine := &v1beta1.Machine{
 		TypeMeta: v1.TypeMeta{
 			Kind: "Machine",
 		},
@@ -232,7 +232,7 @@ func TestFindMachineByNodeProviderID(t *testing.T) {
 	// Update node with machine linkage.
 	testNode.Spec.ProviderID = "aws:///us-east-2b/i-03759ec2e4e053f99"
 	testNode.Annotations = map[string]string{
-		"cluster.k8s.io/machine": path.Join(testMachine.Namespace, testMachine.Name),
+		"machine.openshift.io/machine": path.Join(testMachine.Namespace, testMachine.Name),
 	}
 
 	controller.nodeInformer.GetStore().Update(testNode)
@@ -300,7 +300,7 @@ func TestFindNodeByNodeName(t *testing.T) {
 func TestMachinesInMachineSet(t *testing.T) {
 	controller := mustCreateTestController(t)
 
-	testMachineSet1 := &v1alpha1.MachineSet{
+	testMachineSet1 := &v1beta1.MachineSet{
 		TypeMeta: v1.TypeMeta{
 			Kind: "MachineSet",
 		},
@@ -311,7 +311,7 @@ func TestMachinesInMachineSet(t *testing.T) {
 		},
 	}
 
-	testMachineSet2 := &v1alpha1.MachineSet{
+	testMachineSet2 := &v1beta1.MachineSet{
 		TypeMeta: v1.TypeMeta{
 			Kind: "MachineSet",
 		},
@@ -325,10 +325,10 @@ func TestMachinesInMachineSet(t *testing.T) {
 	controller.machineSetInformer.Informer().GetStore().Add(testMachineSet1)
 	controller.machineSetInformer.Informer().GetStore().Add(testMachineSet2)
 
-	testMachines := make([]*v1alpha1.Machine, 10)
+	testMachines := make([]*v1beta1.Machine, 10)
 
 	for i := 0; i < 10; i++ {
-		testMachines[i] = &v1alpha1.Machine{
+		testMachines[i] = &v1beta1.Machine{
 			TypeMeta: v1.TypeMeta{
 				Kind: "Machine",
 			},

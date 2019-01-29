@@ -14,23 +14,23 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package clusterapi
+package openshiftmachineapi
 
 import (
 	"fmt"
 
 	"github.com/golang/glog"
+	"github.com/openshift/cluster-api/pkg/apis/machine/v1beta1"
+	clusterinformers "github.com/openshift/cluster-api/pkg/client/informers_generated/externalversions"
+	machinev1beta1 "github.com/openshift/cluster-api/pkg/client/informers_generated/externalversions/machine/v1beta1"
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	kubeinformers "k8s.io/client-go/informers"
 	"k8s.io/client-go/tools/cache"
-	"sigs.k8s.io/cluster-api/pkg/apis/cluster/v1alpha1"
-	clusterinformers "sigs.k8s.io/cluster-api/pkg/client/informers_generated/externalversions"
-	clusterv1alpha1 "sigs.k8s.io/cluster-api/pkg/client/informers_generated/externalversions/cluster/v1alpha1"
 )
 
 const (
-	nodeProviderIDIndex = "clusterapi-nodeProviderIDIndex"
+	nodeProviderIDIndex = "openshiftmachineapi-nodeProviderIDIndex"
 )
 
 // machineController watches for Nodes, Machines and MachineSets as
@@ -40,8 +40,8 @@ const (
 type machineController struct {
 	clusterInformerFactory clusterinformers.SharedInformerFactory
 	kubeInformerFactory    kubeinformers.SharedInformerFactory
-	machineInformer        clusterv1alpha1.MachineInformer
-	machineSetInformer     clusterv1alpha1.MachineSetInformer
+	machineInformer        machinev1beta1.MachineInformer
+	machineSetInformer     machinev1beta1.MachineSetInformer
 	nodeInformer           cache.SharedIndexInformer
 }
 
@@ -52,7 +52,7 @@ func indexNodeByNodeProviderID(obj interface{}) ([]string, error) {
 	return []string{}, nil
 }
 
-func (c *machineController) findMachine(id string) (*v1alpha1.Machine, error) {
+func (c *machineController) findMachine(id string) (*v1beta1.Machine, error) {
 	item, exists, err := c.machineInformer.Informer().GetStore().GetByKey(id)
 	if err != nil {
 		return nil, err
@@ -62,7 +62,7 @@ func (c *machineController) findMachine(id string) (*v1alpha1.Machine, error) {
 		return nil, nil
 	}
 
-	machine, ok := item.(*v1alpha1.Machine)
+	machine, ok := item.(*v1beta1.Machine)
 	if !ok {
 		return nil, fmt.Errorf("internal error; unexpected type %T", machine)
 	}
@@ -73,7 +73,7 @@ func (c *machineController) findMachine(id string) (*v1alpha1.Machine, error) {
 // findMachineOwner returns the machine set owner for machine, or nil
 // if there is no owner. A DeepCopy() of the object is returned on
 // success.
-func (c *machineController) findMachineOwner(machine *v1alpha1.Machine) (*v1alpha1.MachineSet, error) {
+func (c *machineController) findMachineOwner(machine *v1beta1.Machine) (*v1beta1.MachineSet, error) {
 	machineOwnerRef := machineOwnerRef(machine)
 	if machineOwnerRef == nil {
 		return nil, nil
@@ -88,7 +88,7 @@ func (c *machineController) findMachineOwner(machine *v1alpha1.Machine) (*v1alph
 		return nil, nil
 	}
 
-	machineSet, ok := item.(*v1alpha1.MachineSet)
+	machineSet, ok := item.(*v1beta1.MachineSet)
 	if !ok {
 		return nil, fmt.Errorf("internal error; unexpected type: %T", machineSet)
 	}
@@ -121,7 +121,7 @@ func (c *machineController) run(stopCh <-chan struct{}) error {
 // node.Spec.ProviderID as the key. Returns nil if either the Node by
 // node.Spec.ProviderID cannot be found or if the node has no machine
 // annotation. A DeepCopy() of the object is returned on success.
-func (c *machineController) findMachineByNodeProviderID(node *apiv1.Node) (*v1alpha1.Machine, error) {
+func (c *machineController) findMachineByNodeProviderID(node *apiv1.Node) (*v1beta1.Machine, error) {
 	objs, err := c.nodeInformer.GetIndexer().ByIndex(nodeProviderIDIndex, node.Spec.ProviderID)
 	if err != nil {
 		return nil, err
@@ -144,7 +144,7 @@ func (c *machineController) findMachineByNodeProviderID(node *apiv1.Node) (*v1al
 	// Reference this annotation key symbolically once the
 	// following PR merges:
 	//     https://github.com/kubernetes-sigs/cluster-api/pull/663
-	if machineName, found := node.Annotations["cluster.k8s.io/machine"]; found {
+	if machineName, found := node.Annotations["machine.openshift.io/machine"]; found {
 		return c.findMachine(machineName)
 	}
 
@@ -175,14 +175,14 @@ func (c *machineController) findNodeByNodeName(name string) (*apiv1.Node, error)
 // MachinesInMachineSet returns all the machines that belong to
 // machineSet. For each machine in the set a DeepCopy() of the object
 // is returned.
-func (c *machineController) MachinesInMachineSet(machineSet *v1alpha1.MachineSet) ([]*v1alpha1.Machine, error) {
+func (c *machineController) MachinesInMachineSet(machineSet *v1beta1.MachineSet) ([]*v1beta1.Machine, error) {
 	listOptions := labels.SelectorFromSet(labels.Set(machineSet.Labels))
 	machines, err := c.machineInformer.Lister().Machines(machineSet.Namespace).List(listOptions)
 	if err != nil {
 		return nil, err
 	}
 
-	var result []*v1alpha1.Machine
+	var result []*v1beta1.Machine
 
 	for _, machine := range machines {
 		if machineIsOwnedByMachineSet(machine, machineSet) {
@@ -200,8 +200,8 @@ func newMachineController(
 	kubeInformerFactory kubeinformers.SharedInformerFactory,
 	clusterInformerFactory clusterinformers.SharedInformerFactory,
 ) (*machineController, error) {
-	machineInformer := clusterInformerFactory.Cluster().V1alpha1().Machines()
-	machineSetInformer := clusterInformerFactory.Cluster().V1alpha1().MachineSets()
+	machineInformer := clusterInformerFactory.Machine().V1beta1().Machines()
+	machineSetInformer := clusterInformerFactory.Machine().V1beta1().MachineSets()
 
 	machineInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{})
 	machineSetInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{})
