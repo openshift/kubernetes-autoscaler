@@ -4,9 +4,9 @@ import (
 	"flag"
 
 	"github.com/golang/glog"
+	mapiv1alpha1 "github.com/openshift/cluster-api/pkg/apis/machine/v1beta1"
 	caov1alpha1 "github.com/openshift/cluster-autoscaler-operator/pkg/apis"
 	"k8s.io/client-go/kubernetes/scheme"
-	capiv1alpha1 "sigs.k8s.io/cluster-api/pkg/apis/cluster/v1alpha1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 )
@@ -16,7 +16,7 @@ const (
 )
 
 func init() {
-	if err := capiv1alpha1.AddToScheme(scheme.Scheme); err != nil {
+	if err := mapiv1alpha1.AddToScheme(scheme.Scheme); err != nil {
 		glog.Fatal(err)
 	}
 
