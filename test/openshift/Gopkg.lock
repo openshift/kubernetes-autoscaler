@@ -75,14 +75,6 @@
   revision = "24818f796faf91cd76ec7bddd72458fbced7a6c1"
 
 [[projects]]
-  digest = "1:8f8811f9be822914c3a25c6a071e93beb4c805d7b026cbf298bc577bc1cc945b"
-  name = "github.com/google/uuid"
-  packages = ["."]
-  pruneopts = "UT"
-  revision = "064e2069ce9c359c118179501254f67d7d37ba24"
-  version = "0.2"
-
-[[projects]]
   digest = "1:65c4414eeb350c47b8de71110150d0ea8a281835b1f386eacaa3ad7325929c21"
   name = "github.com/googleapis/gnostic"
   packages = [
@@ -137,12 +129,14 @@
   version = "1.0.1"
 
 [[projects]]
-  branch = "master"
-  digest = "1:345ba788f9c41eacb0f49422f594411d3d511da7eca84af7fb534639173524ad"
-  name = "github.com/openshift/api"
-  packages = ["config/v1"]
+  digest = "1:83a6679332ac1f21f764e80a70103df49d4686b04b902f1110f83aaa26c8ec1a"
+  name = "github.com/openshift/cluster-api"
+  packages = [
+    "pkg/apis/machine/common",
+    "pkg/apis/machine/v1beta1",
+  ]
   pruneopts = "UT"
-  revision = "c3ef7090a436a4ce1334e8a0401083b072dc7ab8"
+  revision = "91fca585a85b163ddfd119fd09c128c9feadddca"
 
 [[projects]]
   digest = "1:88a77d15e6ccd75e18697c7b7c1a4956f601e3481ea26ddc67d78d25518a535e"
@@ -154,19 +148,6 @@
   pruneopts = "UT"
   revision = "55d8a9017618d3ea22105068095813993b830df8"
   version = "v0.0.0"
-
-[[projects]]
-  digest = "1:ebe11f8f00842653f78ea3621fecf809768ebc118c676d50195aa184a9595ad2"
-  name = "github.com/openshift/cluster-version-operator"
-  packages = [
-    "lib/resourcemerge",
-    "pkg/apis",
-    "pkg/apis/clusterversion.openshift.io/v1",
-    "pkg/apis/operatorstatus.openshift.io/v1",
-  ]
-  pruneopts = "UT"
-  revision = "713a1b59c6949f3e17685b38328bfece88548111"
-  version = "v3.11.0"
 
 [[projects]]
   branch = "master"
@@ -183,6 +164,14 @@
   pruneopts = "UT"
   revision = "5f041e8faa004a95c88a202771f4cc3e991971e6"
   version = "v2.0.1"
+
+[[projects]]
+  digest = "1:cf31692c14422fa27c83a05292eb5cbe0fb2775972e8f1f8446a71549bd8980b"
+  name = "github.com/pkg/errors"
+  packages = ["."]
+  pruneopts = "UT"
+  revision = "ba968bfe8b2f7e042a574c888954fccecfa385b4"
+  version = "v0.8.1"
 
 [[projects]]
   digest = "1:c1b1102241e7f645bc8e0c22ae352e8f0dc6484b6cb4d132fa9f24174e0119e2"
@@ -340,20 +329,9 @@
   revision = "2d6f90ab1293a1fb871cf149423ebb72aa7423aa"
 
 [[projects]]
-  digest = "1:b79f62bd5d9766441c4c62ff4b23dea0fdc8b40054cdbc06d64c3cfb4aee020f"
-  name = "k8s.io/apiextensions-apiserver"
-  packages = [
-    "pkg/apis/apiextensions",
-    "pkg/apis/apiextensions/v1beta1",
-  ]
-  pruneopts = "UT"
-  revision = "408db4a50408e2149acbd657bceb2480c13cb0a4"
-
-[[projects]]
-  digest = "1:d6d760ae97ce6b24e3a9f1f3bf07e5407d09d4c615baa7a1076a9c5720e482d7"
+  digest = "1:4ce18c894acaed81a656de181c7e5e8d8f595c591b242711892ef9e72ecfa862"
   name = "k8s.io/apimachinery"
   packages = [
-    "pkg/api/equality",
     "pkg/api/errors",
     "pkg/api/meta",
     "pkg/api/resource",
@@ -434,17 +412,6 @@
   version = "v0.1.0"
 
 [[projects]]
-  digest = "1:826b77dcd22da5eacaab67a3f192348980e771410138c5519e6bf31088128949"
-  name = "sigs.k8s.io/cluster-api"
-  packages = [
-    "pkg/apis/cluster/common",
-    "pkg/apis/cluster/v1alpha1",
-  ]
-  pruneopts = "UT"
-  revision = "3547f8dd93078c0b0f0b221ee1c2a57f96673081"
-  version = "0.0.0-alpha.4"
-
-[[projects]]
   digest = "1:70c6a336ed3caf7c3747ac5648e908357a0cea5b63121dcdb3c361337699afe4"
   name = "sigs.k8s.io/controller-runtime"
   packages = [
@@ -462,20 +429,17 @@
   analyzer-version = 1
   input-imports = [
     "github.com/golang/glog",
-    "github.com/openshift/api/config/v1",
+    "github.com/openshift/cluster-api/pkg/apis/machine/v1beta1",
     "github.com/openshift/cluster-autoscaler-operator/pkg/apis",
     "github.com/openshift/cluster-autoscaler-operator/pkg/apis/autoscaling/v1alpha1",
-    "github.com/openshift/cluster-version-operator/lib/resourcemerge",
     "k8s.io/api/apps/v1",
     "k8s.io/api/batch/v1",
     "k8s.io/api/core/v1",
     "k8s.io/apimachinery/pkg/api/resource",
     "k8s.io/apimachinery/pkg/apis/meta/v1",
     "k8s.io/apimachinery/pkg/types",
-    "k8s.io/apimachinery/pkg/util/sets",
     "k8s.io/apimachinery/pkg/util/wait",
     "k8s.io/client-go/kubernetes/scheme",
-    "sigs.k8s.io/cluster-api/pkg/apis/cluster/v1alpha1",
     "sigs.k8s.io/controller-runtime/pkg/client",
     "sigs.k8s.io/controller-runtime/pkg/client/config",
   ]
