@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	"github.com/golang/glog"
+	mapiv1beta1 "github.com/openshift/cluster-api/pkg/apis/machine/v1beta1"
 	caov1alpha1 "github.com/openshift/cluster-autoscaler-operator/pkg/apis/autoscaling/v1alpha1"
 	kappsapi "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
@@ -16,7 +17,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
-	capiv1alpha1 "sigs.k8s.io/cluster-api/pkg/apis/cluster/v1alpha1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -61,7 +61,7 @@ func (tc *testConfig) ExpectAutoscalerScalesOut() error {
 		Namespace: namespace,
 	}
 	glog.Info("Get one machineSet")
-	machineSetList := capiv1alpha1.MachineSetList{}
+	machineSetList := mapiv1beta1.MachineSetList{}
 	err := wait.PollImmediate(1*time.Second, waitMedium, func() (bool, error) {
 		if err := tc.client.List(context.TODO(), &listOptions, &machineSetList); err != nil {
 			glog.Errorf("error querying api for nodeList object: %v, retrying...", err)
@@ -213,7 +213,7 @@ func (tc *testConfig) ExpectAutoscalerScalesOut() error {
 			Namespace: namespace,
 			Name:      targetMachineSet.Name,
 		}
-		ms := &capiv1alpha1.MachineSet{}
+		ms := &mapiv1beta1.MachineSet{}
 		if err := tc.client.Get(context.TODO(), msKey, ms); err != nil {
 			glog.Errorf("error querying api for clusterAutoscaler object: %v, retrying...", err)
 			return false, nil
@@ -281,7 +281,7 @@ func (tc *testConfig) ExpectAutoscalerScalesOut() error {
 			Namespace: namespace,
 			Name:      targetMachineSet.Name,
 		}
-		ms := &capiv1alpha1.MachineSet{}
+		ms := &mapiv1beta1.MachineSet{}
 		if err := tc.client.Get(context.TODO(), msKey, ms); err != nil {
 			glog.Errorf("error querying api for machineSet object: %v, retrying...", err)
 			return false, nil
