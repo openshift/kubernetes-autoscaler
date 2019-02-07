@@ -108,7 +108,7 @@ func (tc *testConfig) ExpectAutoscalerScalesOut() error {
 			ScaleTargetRef: caov1alpha1.CrossVersionObjectReference{
 				Name:       targetMachineSet.Name,
 				Kind:       "MachineSet",
-				APIVersion: "cluster.k8s.io/v1alpha1",
+				APIVersion: "openshift.machine.io/v1beta1",
 			},
 		},
 	}
