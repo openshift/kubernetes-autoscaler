@@ -46,6 +46,7 @@ var AvailableCloudProviders = []string{
 	gke.ProviderNameGKE,
 	kubemark.ProviderName,
 	clusterapi.ProviderName,
+	"openshift-machine-api",
 }
 
 // DefaultCloudProvider is GCE.
@@ -79,6 +80,8 @@ func NewCloudProvider(opts config.AutoscalingOptions) cloudprovider.CloudProvide
 	case kubemark.ProviderName:
 		return buildKubemark(opts, do, rl)
 	case clusterapi.ProviderName:
+		return buildClusterAPI(clusterapi.ProviderName, opts, do, rl)
+	case "openshift-machine-api":
 		return buildClusterAPI(clusterapi.ProviderName, opts, do, rl)
 	case "":
 		// Ideally this would be an error, but several unit tests of the
