@@ -53,9 +53,11 @@ func (tc *testConfig) ExpectOperatorAvailable() error {
 // Create a workLoad to force autoscaling
 // Validate the targeted machineSet scales out the field for the expected number of replicas
 // Validate the number of nodes in the cluster is growing
-// Delete the workLoad
-// Delete the autoscaler object
-// Ensure initial number of replicas and nodes
+// Delete the workLoad and so provoke scale down
+// Validate the targeted machineSet scales down its replica count
+// Validate the number of nodes scales down to the initial number before scale out
+// Delete the machineAutoscaler object
+// Delete the clusterAutoscaler object
 func (tc *testConfig) ExpectAutoscalerScalesOut() error {
 	listOptions := client.ListOptions{
 		Namespace: namespace,
@@ -128,6 +130,28 @@ func (tc *testConfig) ExpectAutoscalerScalesOut() error {
 	}); err != nil {
 		return err
 	}
+
+	// We want to clean up these objects on any subsequent error.
+
+	defer func() {
+		wait.PollImmediate(1*time.Second, waitShort, func() (bool, error) {
+			if err := tc.client.Delete(context.TODO(), &machineAutoscaler); err != nil {
+				glog.Errorf("error querying api for machineAutoscaler object: %v, retrying...", err)
+				return false, nil
+			}
+			return true, nil
+		})
+		glog.Info("Deleted machineAutoscaler object")
+
+		wait.PollImmediate(1*time.Second, waitShort, func() (bool, error) {
+			if err := tc.client.Delete(context.TODO(), &clusterAutoscaler); err != nil {
+				glog.Errorf("error querying api for clusterAutoscaler object: %v, retrying...", err)
+				return false, nil
+			}
+			return true, nil
+		})
+		glog.Info("Deleted clusterAutoscaler object")
+	}()
 
 	glog.Info("Get nodeList")
 	nodeList := corev1.NodeList{}
@@ -246,29 +270,10 @@ func (tc *testConfig) ExpectAutoscalerScalesOut() error {
 		return err
 	}
 
-	// We delete the clusterAutoscaler and ensure the initial number of replicas to get the cluster to the initial number of nodes
-	// TODO: validate the autoscaler to scale down
-	glog.Info("Delete clusterAutoscaler object")
-	if err := wait.PollImmediate(1*time.Second, waitShort, func() (bool, error) {
-		if err := tc.client.Delete(context.TODO(), &clusterAutoscaler); err != nil {
-			glog.Errorf("error querying api for clusterAutoscaler object: %v, retrying...", err)
-			return false, nil
-		}
-		return true, nil
-	}); err != nil {
-		return err
-	}
-
-	glog.Info("Delete machineAutoscaler object")
-	if err := wait.PollImmediate(1*time.Second, waitShort, func() (bool, error) {
-		if err := tc.client.Delete(context.TODO(), &machineAutoscaler); err != nil {
-			glog.Errorf("error querying api for machineAutoscaler object: %v, retrying...", err)
-			return false, nil
-		}
-		return true, nil
-	}); err != nil {
-		return err
-	}
+	// As we have just deleted the workload the autoscaler will
+	// start to scale down the unneeded nodes. We wait for that
+	// condition; if successful we assert that (a smoke test of)
+	// scale down is functional.
 
 	glog.Infof("Ensure initial number of replicas: %d", initialNumberOfReplicas)
 	if err := wait.PollImmediate(1*time.Second, waitShort, func() (bool, error) {
