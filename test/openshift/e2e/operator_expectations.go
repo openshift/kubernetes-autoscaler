@@ -104,7 +104,7 @@ func (tc *testConfig) ExpectAutoscalerScalesOut() error {
 			APIVersion: "autoscaling.openshift.io/v1alpha1",
 		},
 		Spec: caov1alpha1.MachineAutoscalerSpec{
-			MaxReplicas: 12,
+			MaxReplicas: 2,
 			MinReplicas: 1,
 			ScaleTargetRef: caov1alpha1.CrossVersionObjectReference{
 				Name:       targetMachineSet.Name,
