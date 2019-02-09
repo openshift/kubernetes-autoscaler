@@ -25,38 +25,45 @@ import (
 
 	"github.com/openshift/cluster-api/pkg/apis/machine/v1beta1"
 	fakeclusterapi "github.com/openshift/cluster-api/pkg/client/clientset_generated/clientset/fake"
-	informers "github.com/openshift/cluster-api/pkg/client/informers_generated/externalversions"
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
-	kubeinformers "k8s.io/client-go/informers"
+	"k8s.io/apimachinery/pkg/runtime"
 	fakekube "k8s.io/client-go/kubernetes/fake"
-	"k8s.io/kubernetes/pkg/controller"
 )
 
-func mustCreateTestController(t *testing.T) *machineController {
+type testControllerConfig struct {
+	nodeObjects    []runtime.Object
+	machineObjects []runtime.Object
+}
+
+type testControllerShutdownFunc func()
+
+func mustCreateTestController(t *testing.T, config testControllerConfig) (*machineController, testControllerShutdownFunc) {
 	t.Helper()
 
-	kubeclientSet := fakekube.NewSimpleClientset()
-	clusterclientSet := fakeclusterapi.NewSimpleClientset()
+	kubeclientSet := fakekube.NewSimpleClientset(config.nodeObjects...)
+	clusterclientSet := fakeclusterapi.NewSimpleClientset(config.machineObjects...)
 
-	kubeInformerFactory := kubeinformers.NewSharedInformerFactory(kubeclientSet, controller.NoResyncPeriodFunc())
-	clusterInformerFactory := informers.NewSharedInformerFactory(clusterclientSet, controller.NoResyncPeriodFunc())
-
-	controller, err := newMachineController(kubeInformerFactory, clusterInformerFactory)
+	controller, err := newMachineController(kubeclientSet, clusterclientSet)
 	if err != nil {
 		t.Fatalf("failed to create test controller")
 	}
 
-	if err := controller.run(make(chan struct{})); err != nil {
+	stopCh := make(chan struct{})
+
+	if err := controller.run(stopCh); err != nil {
 		t.Fatalf("failed to run controller: %v", err)
 	}
 
-	return controller
+	return controller, func() {
+		close(stopCh)
+	}
 }
 
-func TestFindMachineByID(t *testing.T) {
-	controller := mustCreateTestController(t)
+func TestControllerFindMachineByID(t *testing.T) {
+	controller, stop := mustCreateTestController(t, testControllerConfig{})
+	defer stop()
 
 	testMachine := &v1beta1.Machine{
 		ObjectMeta: v1.ObjectMeta{
@@ -116,16 +123,14 @@ func TestFindMachineByID(t *testing.T) {
 	}
 }
 
-func TestFindMachineOwner(t *testing.T) {
-	controller := mustCreateTestController(t)
-
+func TestControllerFindMachineOwner(t *testing.T) {
 	testMachineWithNoOwner := &v1beta1.Machine{
 		TypeMeta: v1.TypeMeta{
 			Kind: "Machine",
 		},
 		ObjectMeta: v1.ObjectMeta{
 			Name:      "testMachineWithNoOwner",
-			Namespace: "testNamespace",
+			Namespace: "test-namespace",
 		},
 	}
 
@@ -135,7 +140,7 @@ func TestFindMachineOwner(t *testing.T) {
 		},
 		ObjectMeta: v1.ObjectMeta{
 			Name:      "testMachineWithOwner",
-			Namespace: "testNamespace",
+			Namespace: "test-namespace",
 			OwnerReferences: []v1.OwnerReference{{
 				Kind: "MachineSet",
 				UID:  "ec21c5fb-a3d5-a45f-887b-6b49aa8fc218",
@@ -144,8 +149,13 @@ func TestFindMachineOwner(t *testing.T) {
 		},
 	}
 
-	controller.machineInformer.Informer().GetStore().Add(testMachineWithOwner)
-	controller.machineInformer.Informer().GetStore().Add(testMachineWithNoOwner)
+	controller, stop := mustCreateTestController(t, testControllerConfig{
+		machineObjects: []runtime.Object{
+			testMachineWithOwner,
+			testMachineWithNoOwner,
+		},
+	})
+	defer stop()
 
 	// Verify machine has no owner.
 	foundMachineSet, err := controller.findMachineOwner(testMachineWithNoOwner)
@@ -173,7 +183,7 @@ func TestFindMachineOwner(t *testing.T) {
 		},
 		ObjectMeta: v1.ObjectMeta{
 			Name:      "testMachineSet",
-			Namespace: "testNamespace",
+			Namespace: "test-namespace",
 			UID:       "ec21c5fb-a3d5-a45f-887b-6b49aa8fc218",
 		},
 	}
@@ -195,9 +205,7 @@ func TestFindMachineOwner(t *testing.T) {
 	}
 }
 
-func TestFindMachineByNodeProviderID(t *testing.T) {
-	controller := mustCreateTestController(t)
-
+func TestControllerFindMachineByNodeProviderID(t *testing.T) {
 	testNode := &apiv1.Node{
 		TypeMeta: v1.TypeMeta{
 			Kind: "Node",
@@ -216,8 +224,15 @@ func TestFindMachineByNodeProviderID(t *testing.T) {
 		},
 	}
 
-	controller.nodeInformer.GetStore().Add(testNode)
-	controller.machineInformer.Informer().GetStore().Add(testMachine)
+	controller, stop := mustCreateTestController(t, testControllerConfig{
+		nodeObjects: []runtime.Object{
+			testNode,
+		},
+		machineObjects: []runtime.Object{
+			testMachine,
+		},
+	})
+	defer stop()
 
 	// Verify machine cannot be found as testNode has no
 	// ProviderID and will not be indexed by the controller.
@@ -255,16 +270,19 @@ func TestFindMachineByNodeProviderID(t *testing.T) {
 	}
 }
 
-func TestFindNodeByNodeName(t *testing.T) {
-	controller := mustCreateTestController(t)
-
+func TestControllerFindNodeByNodeName(t *testing.T) {
 	testNode := &apiv1.Node{
 		ObjectMeta: v1.ObjectMeta{
 			Name: "ip-10-0-18-236.us-east-2.compute.internal",
 		},
 	}
 
-	controller.nodeInformer.GetStore().Add(testNode)
+	controller, stop := mustCreateTestController(t, testControllerConfig{
+		nodeObjects: []runtime.Object{
+			testNode,
+		},
+	})
+	defer stop()
 
 	// Verify inserted node can be found
 	node, err := controller.findNodeByNodeName("ip-10-0-18-236.us-east-2.compute.internal")
@@ -297,16 +315,14 @@ func TestFindNodeByNodeName(t *testing.T) {
 	}
 }
 
-func TestMachinesInMachineSet(t *testing.T) {
-	controller := mustCreateTestController(t)
-
+func TestControllerMachinesInMachineSet(t *testing.T) {
 	testMachineSet1 := &v1beta1.MachineSet{
 		TypeMeta: v1.TypeMeta{
 			Kind: "MachineSet",
 		},
 		ObjectMeta: v1.ObjectMeta{
 			Name:      "testMachineSet1",
-			Namespace: "testNamespace",
+			Namespace: "test-namespace",
 			UID:       "ec21c5fb-a3d5-a45f-887b-6b49aa8fc218",
 		},
 	}
@@ -317,13 +333,15 @@ func TestMachinesInMachineSet(t *testing.T) {
 		},
 		ObjectMeta: v1.ObjectMeta{
 			Name:      "testMachineSet2",
-			Namespace: "testNamespace",
+			Namespace: "test-namespace",
 			UID:       "abcdef12-a3d5-a45f-887b-6b49aa8fc218",
 		},
 	}
 
-	controller.machineSetInformer.Informer().GetStore().Add(testMachineSet1)
-	controller.machineSetInformer.Informer().GetStore().Add(testMachineSet2)
+	objects := []runtime.Object{
+		testMachineSet1,
+		testMachineSet2,
+	}
 
 	testMachines := make([]*v1beta1.Machine, 10)
 
@@ -334,7 +352,7 @@ func TestMachinesInMachineSet(t *testing.T) {
 			},
 			ObjectMeta: v1.ObjectMeta{
 				Name:      fmt.Sprintf("machine-%d", i),
-				Namespace: "testNamespace",
+				Namespace: "test-namespace",
 			},
 		}
 		// Only even numbered machines belong to testMachineSet1
@@ -345,10 +363,15 @@ func TestMachinesInMachineSet(t *testing.T) {
 				Name: "testMachineSet1",
 			}}
 		}
-		controller.machineInformer.Informer().GetStore().Add(testMachines[i])
+		objects = append(objects, testMachines[i])
 	}
 
-	foundMachines, err := controller.MachinesInMachineSet(testMachineSet1)
+	controller, stop := mustCreateTestController(t, testControllerConfig{
+		machineObjects: objects,
+	})
+	defer stop()
+
+	foundMachines, err := controller.machinesInMachineSet(testMachineSet1)
 	if err != nil {
 		t.Fatalf("unexpected error, got %v", err)
 	}
@@ -368,6 +391,536 @@ func TestMachinesInMachineSet(t *testing.T) {
 		// Verify that a successful result is a copy
 		if testMachines[2*i] == foundMachines[i] {
 			t.Errorf("expected a copy")
+		}
+	}
+}
+
+func TestControllerNodeGroupsSizes(t *testing.T) {
+	for i, tc := range []struct {
+		description string
+		annotations map[string]string
+		count       int
+	}{{
+		description: "errors because minSize is invalid",
+		annotations: map[string]string{
+			nodeGroupMinSizeAnnotationKey: "-1",
+			nodeGroupMaxSizeAnnotationKey: "0",
+		},
+	}, {
+		description: "errors because maxSize is invalid",
+		annotations: map[string]string{
+			nodeGroupMinSizeAnnotationKey: "0",
+			nodeGroupMaxSizeAnnotationKey: "-1",
+		},
+	}, {
+		description: "errors because minSize > maxSize",
+		annotations: map[string]string{
+			nodeGroupMinSizeAnnotationKey: "1",
+			nodeGroupMaxSizeAnnotationKey: "0",
+		},
+	}, {
+		description: "errors because maxSize < minSize",
+		annotations: map[string]string{
+			nodeGroupMinSizeAnnotationKey: "1",
+			nodeGroupMaxSizeAnnotationKey: "0",
+		},
+	}, {
+		annotations: map[string]string{
+			nodeGroupMaxSizeAnnotationKey: "10",
+		},
+		count: 1,
+	}, {
+		annotations: map[string]string{
+			nodeGroupMinSizeAnnotationKey: "1",
+			nodeGroupMaxSizeAnnotationKey: "10",
+		},
+		count: 1,
+	}} {
+		machineSet := &v1beta1.MachineSet{
+			TypeMeta: v1.TypeMeta{
+				Kind: "MachineSet",
+			},
+			ObjectMeta: v1.ObjectMeta{
+				Name:        fmt.Sprintf("machineset-%d", i),
+				Namespace:   "test-namespace",
+				Annotations: tc.annotations,
+			},
+		}
+
+		controller, stop := mustCreateTestController(t, testControllerConfig{
+			machineObjects: []runtime.Object{
+				machineSet,
+			},
+		})
+		defer stop()
+
+		nodegroups, err := controller.nodeGroups()
+		if tc.count == 0 && err == nil {
+			t.Fatalf("expected an error")
+		}
+
+		if l := len(nodegroups); l != tc.count {
+			t.Errorf("expected %v, got %v", tc.count, l)
+		}
+	}
+}
+
+func TestControllerNodeGroupForNodeWithMissingNode(t *testing.T) {
+	machine := &v1beta1.Machine{
+		TypeMeta: v1.TypeMeta{
+			Kind: "Machine",
+		},
+		ObjectMeta: v1.ObjectMeta{
+			Name:      "machine",
+			Namespace: "test-namespace",
+			OwnerReferences: []v1.OwnerReference{{
+				Kind: "MachineSet",
+				UID:  "ec21c5fb-a3d5-a45f-887b-6b49aa8fc218",
+				Name: "testMachineSet",
+			}},
+		},
+	}
+
+	machineSet := &v1beta1.MachineSet{
+		TypeMeta: v1.TypeMeta{
+			Kind: "MachineSet",
+		},
+		ObjectMeta: v1.ObjectMeta{
+			Name:      "machineset",
+			Namespace: "test-namespace",
+			UID:       "ec21c5fb-a3d5-a45f-887b-6b49aa8fc218",
+		},
+	}
+
+	controller, stop := mustCreateTestController(t, testControllerConfig{
+		machineObjects: []runtime.Object{
+			machine,
+			machineSet,
+		},
+	})
+	defer stop()
+
+	ng, err := controller.nodeGroupForNode(&apiv1.Node{
+		TypeMeta: v1.TypeMeta{
+			Kind: "Node",
+		},
+		ObjectMeta: v1.ObjectMeta{
+			Name: "node",
+		},
+	})
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if ng != nil {
+		t.Fatalf("unexpected nodegroup: %v", ng)
+	}
+}
+
+func TestControllerNodeGroupForNodeWithMissingMachineOwner(t *testing.T) {
+	node := &apiv1.Node{
+		TypeMeta: v1.TypeMeta{
+			Kind: "Node",
+		},
+		ObjectMeta: v1.ObjectMeta{
+			Name: "node",
+			Annotations: map[string]string{
+				machineAnnotationKey: "test-namespace/machine",
+			},
+		},
+		Spec: apiv1.NodeSpec{
+			ProviderID: "provider-id",
+		},
+	}
+
+	machine := &v1beta1.Machine{
+		TypeMeta: v1.TypeMeta{
+			Kind: "Machine",
+		},
+		ObjectMeta: v1.ObjectMeta{
+			Name:      "machine",
+			Namespace: "test-namespace",
+		},
+	}
+
+	machineSet := &v1beta1.MachineSet{
+		TypeMeta: v1.TypeMeta{
+			Kind: "MachineSet",
+		},
+		ObjectMeta: v1.ObjectMeta{
+			Name:      "machineset",
+			Namespace: "test-namespace",
+			UID:       "ec21c5fb-a3d5-a45f-887b-6b49aa8fc218",
+		},
+	}
+
+	controller, stop := mustCreateTestController(t, testControllerConfig{
+		nodeObjects: []runtime.Object{
+			node,
+		},
+		machineObjects: []runtime.Object{
+			machine,
+			machineSet,
+		},
+	})
+	defer stop()
+
+	ng, err := controller.nodeGroupForNode(&apiv1.Node{
+		TypeMeta: v1.TypeMeta{
+			Kind: "Node",
+		},
+		ObjectMeta: v1.ObjectMeta{
+			Name: "node",
+		},
+		Spec: apiv1.NodeSpec{
+			ProviderID: "provider-id",
+		},
+	})
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if ng != nil {
+		t.Fatalf("unexpected nodegroup: %v", ng)
+	}
+}
+
+func TestControllerNodeGroupForNodeSuccessFromMachineSet(t *testing.T) {
+	node := &apiv1.Node{
+		TypeMeta: v1.TypeMeta{
+			Kind: "Node",
+		},
+		ObjectMeta: v1.ObjectMeta{
+			Name: "node",
+			Annotations: map[string]string{
+				machineAnnotationKey: "test-namespace/machine",
+			},
+		},
+		Spec: apiv1.NodeSpec{
+			ProviderID: "provider-id",
+		},
+	}
+
+	machineSet := &v1beta1.MachineSet{
+		TypeMeta: v1.TypeMeta{
+			Kind: "MachineSet",
+		},
+		ObjectMeta: v1.ObjectMeta{
+			Name:      "machineset",
+			Namespace: "test-namespace",
+			UID:       "ec21c5fb-a3d5-a45f-887b-6b49aa8fc218",
+		},
+	}
+
+	machine := &v1beta1.Machine{
+		TypeMeta: v1.TypeMeta{
+			Kind: "Machine",
+		},
+		ObjectMeta: v1.ObjectMeta{
+			Name:      "machine",
+			Namespace: "test-namespace",
+			OwnerReferences: []v1.OwnerReference{{
+				Name: machineSet.Name,
+				Kind: machineSet.Kind,
+				UID:  machineSet.UID,
+			}},
+		},
+	}
+
+	controller, stop := mustCreateTestController(t, testControllerConfig{
+		nodeObjects: []runtime.Object{
+			node,
+		},
+		machineObjects: []runtime.Object{
+			machine,
+			machineSet,
+		},
+	})
+	defer stop()
+
+	ng, err := controller.nodeGroupForNode(&apiv1.Node{
+		TypeMeta: v1.TypeMeta{
+			Kind: "Node",
+		},
+		ObjectMeta: v1.ObjectMeta{
+			Name: "node",
+		},
+		Spec: apiv1.NodeSpec{
+			ProviderID: "provider-id",
+		},
+	})
+
+	if err != nil {
+		t.Fatal("expected no error")
+	}
+
+	if ng == nil {
+		t.Fatal("expected a nodegroup")
+	}
+
+	expected := path.Join(machineSet.Namespace, machineSet.Name)
+	if actual := ng.Id(); actual != expected {
+		t.Errorf("expected %q, got %q", expected, actual)
+	}
+}
+
+func TestControllerNodeGroupForNodeSuccessFromMachineDeployment(t *testing.T) {
+	node := &apiv1.Node{
+		TypeMeta: v1.TypeMeta{
+			Kind: "Node",
+		},
+		ObjectMeta: v1.ObjectMeta{
+			Name: "node",
+			Annotations: map[string]string{
+				machineAnnotationKey: "test-namespace/machine",
+			},
+		},
+		Spec: apiv1.NodeSpec{
+			ProviderID: "provider-id",
+		},
+	}
+
+	machineDeployment := &v1beta1.MachineDeployment{
+		TypeMeta: v1.TypeMeta{
+			Kind: "MachineDeployment",
+		},
+		ObjectMeta: v1.ObjectMeta{
+			Name:      "machinedeployment",
+			Namespace: "test-namespace",
+		},
+	}
+
+	machineSet := &v1beta1.MachineSet{
+		TypeMeta: v1.TypeMeta{
+			Kind: "MachineSet",
+		},
+		ObjectMeta: v1.ObjectMeta{
+			Name:      "machineset",
+			Namespace: "test-namespace",
+			OwnerReferences: []v1.OwnerReference{{
+				Kind: "MachineDeployment",
+				Name: machineDeployment.Name,
+			}},
+		},
+	}
+
+	machine := &v1beta1.Machine{
+		TypeMeta: v1.TypeMeta{
+			Kind: "Machine",
+		},
+		ObjectMeta: v1.ObjectMeta{
+			Name:      "machine",
+			Namespace: "test-namespace",
+			OwnerReferences: []v1.OwnerReference{{
+				Name: machineSet.Name,
+				Kind: machineSet.Kind,
+				UID:  machineSet.UID,
+			}},
+		},
+	}
+
+	controller, stop := mustCreateTestController(t, testControllerConfig{
+		nodeObjects: []runtime.Object{
+			node,
+		},
+		machineObjects: []runtime.Object{
+			machine,
+			machineSet,
+			machineDeployment,
+		},
+	})
+	defer stop()
+
+	ng, err := controller.nodeGroupForNode(&apiv1.Node{
+		TypeMeta: v1.TypeMeta{
+			Kind: "Node",
+		},
+		ObjectMeta: v1.ObjectMeta{
+			Name: "node",
+		},
+		Spec: apiv1.NodeSpec{
+			ProviderID: "provider-id",
+		},
+	})
+
+	if err != nil {
+		t.Fatal("expected no error")
+	}
+
+	if ng == nil {
+		t.Fatal("expected a nodegroup")
+	}
+
+	expected := path.Join(machineDeployment.Namespace, machineDeployment.Name)
+	if actual := ng.Id(); actual != expected {
+		t.Errorf("expected %q, got %q", expected, actual)
+	}
+}
+
+func TestControllerNodeGroupsWithMachineDeployments(t *testing.T) {
+	machineDeploymentTemplate := &v1beta1.MachineDeployment{
+		TypeMeta: v1.TypeMeta{
+			Kind: "MachineDeployment",
+		},
+		ObjectMeta: v1.ObjectMeta{
+			Name:      "machinedeployment",
+			Namespace: "test-namespace",
+		},
+	}
+
+	for i, tc := range []struct {
+		description string
+		annotations map[string]string
+		errors      bool
+		nodegroups  int
+	}{{
+		description: "errors with bad annotations",
+		annotations: map[string]string{
+			nodeGroupMinSizeAnnotationKey: "-1",
+			nodeGroupMaxSizeAnnotationKey: "10",
+		},
+		nodegroups: 0,
+		errors:     true,
+	}, {
+		description: "success but nodegroup count is 0 as deployment has no bounds",
+		nodegroups:  0,
+		errors:      false,
+	}, {
+		description: "success with valid bounds",
+		annotations: map[string]string{
+			nodeGroupMinSizeAnnotationKey: "1",
+			nodeGroupMaxSizeAnnotationKey: "10",
+		},
+		nodegroups: 1,
+		errors:     false,
+	}} {
+		t.Logf("test #%d: %s", i, tc.description)
+
+		machineDeployment := machineDeploymentTemplate.DeepCopy()
+		machineDeployment.Annotations = tc.annotations
+
+		controller, stop := mustCreateTestController(t, testControllerConfig{
+			machineObjects: []runtime.Object{
+				machineDeployment,
+			},
+		})
+		defer stop()
+
+		nodegroups, err := controller.machineDeploymentNodeGroups()
+		if tc.errors && err == nil {
+			t.Errorf("expected an error")
+		}
+
+		if !tc.errors && err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+
+		if tc.errors && nodegroups != nil {
+			t.Fatalf("test case logic error")
+		}
+
+		if actual := len(nodegroups); actual != tc.nodegroups {
+			t.Errorf("expected %d, got %d", tc.nodegroups, actual)
+		}
+	}
+}
+
+func TestControllerNodeGroupsWithMachineSets(t *testing.T) {
+	machineSetOwnedByMachineDeployment := &v1beta1.MachineSet{
+		TypeMeta: v1.TypeMeta{
+			Kind: "MachineSet",
+		},
+		ObjectMeta: v1.ObjectMeta{
+			Name:      "machineset-owned-by-deployment",
+			Namespace: "test-namespace",
+			OwnerReferences: []v1.OwnerReference{{
+				Kind: "MachineDeployment",
+				Name: "machinedeployment",
+			}},
+		},
+	}
+
+	machineDeployment := &v1beta1.MachineDeployment{
+		TypeMeta: v1.TypeMeta{
+			Kind: "MachineDeployment",
+		},
+		ObjectMeta: v1.ObjectMeta{
+			Name:      "machinedeployment",
+			Namespace: "test-namespace",
+			Annotations: map[string]string{
+				nodeGroupMinSizeAnnotationKey: "1",
+				nodeGroupMaxSizeAnnotationKey: "10",
+			},
+		},
+	}
+
+	machineSetTemplate := &v1beta1.MachineSet{
+		TypeMeta: v1.TypeMeta{
+			Kind: "MachineSet",
+		},
+		ObjectMeta: v1.ObjectMeta{
+			Name:      "machineset",
+			Namespace: "test-namespace",
+		},
+	}
+
+	for i, tc := range []struct {
+		description string
+		annotations map[string]string
+		errors      bool
+		nodegroups  int
+	}{{
+		description: "errors with bad annotations",
+		annotations: map[string]string{
+			nodeGroupMinSizeAnnotationKey: "-1",
+			nodeGroupMaxSizeAnnotationKey: "10",
+		},
+		nodegroups: 0,
+		errors:     true,
+	}, {
+		description: "success but nodegroup count is 0 as machineset no bounds",
+		nodegroups:  0,
+		errors:      false,
+	}, {
+		description: "success with valid machineset bounds",
+		annotations: map[string]string{
+			nodeGroupMinSizeAnnotationKey: "1",
+			nodeGroupMaxSizeAnnotationKey: "10",
+		},
+		nodegroups: 1,
+		errors:     false,
+	}} {
+		t.Logf("test #%d: %s", i, tc.description)
+
+		machineSet := machineSetTemplate.DeepCopy()
+		machineSet.Annotations = tc.annotations
+
+		controller, stop := mustCreateTestController(t, testControllerConfig{
+			machineObjects: []runtime.Object{
+				machineDeployment,
+				machineSetOwnedByMachineDeployment.DeepCopy(),
+				machineSet,
+			},
+		})
+		defer stop()
+
+		nodegroups, err := controller.machineSetNodeGroups()
+		if tc.errors && err == nil {
+			t.Errorf("expected an error")
+		}
+
+		if !tc.errors && err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+
+		if tc.errors && nodegroups != nil {
+			t.Fatalf("test case logic error")
+		}
+
+		if actual := len(nodegroups); actual != tc.nodegroups {
+			t.Errorf("expected %d, got %d", tc.nodegroups, actual)
 		}
 	}
 }
