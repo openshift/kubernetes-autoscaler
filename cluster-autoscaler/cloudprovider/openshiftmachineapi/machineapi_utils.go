@@ -19,7 +19,6 @@ package openshiftmachineapi
 import (
 	"strconv"
 
-	"github.com/golang/glog"
 	"github.com/openshift/cluster-api/pkg/apis/machine/v1beta1"
 	"github.com/pkg/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -50,15 +49,13 @@ var (
 	errInvalidMaxAnnotation = errors.New("invalid max annotation")
 )
 
-// machineSetMinSize returns the minimum size of machineSet. The
-// minimum value is encoded in its annotations keyed by
-// nodeGroupMinSizeAnnotationKey. Returns errMissingMinAnnotation if
-// the annotation doesn't exist or errInvalidMinAnnotation if the
+// minSize returns the minimum value encoded in the annotations keyed
+// by nodeGroupMinSizeAnnotationKey. Returns errMissingMinAnnotation
+// if the annotation doesn't exist or errInvalidMinAnnotation if the
 // value is not of type int.
-func machineSetMinSize(machineSet *v1beta1.MachineSet) (int, error) {
-	val, found := machineSet.Annotations[nodeGroupMinSizeAnnotationKey]
+func minSize(annotations map[string]string) (int, error) {
+	val, found := annotations[nodeGroupMinSizeAnnotationKey]
 	if !found {
-		glog.V(4).Infof("machineset %s/%s has no annotation %q", machineSet.Namespace, machineSet.Name, nodeGroupMinSizeAnnotationKey)
 		return 0, errMissingMinAnnotation
 	}
 	i, err := strconv.Atoi(val)
@@ -68,15 +65,13 @@ func machineSetMinSize(machineSet *v1beta1.MachineSet) (int, error) {
 	return i, nil
 }
 
-// machineSetMaxSize returns the maximum size of machineSet. The
-// maximum value is encoded in its annotations keyed by
-// nodeGroupMaxSizeAnnotationKey. Returns errMissingMaxAnnotation if
-// the annotation doesn't exist or errInvalidMaxAnnotation if the
+// maxSize returns the maximum value encoded in the annotations keyed
+// by nodeGroupMaxSizeAnnotationKey. Returns errMissingMaxAnnotation
+// if the annotation doesn't exist or errInvalidMaxAnnotation if the
 // value is not of type int.
-func machineSetMaxSize(machineSet *v1beta1.MachineSet) (int, error) {
-	val, found := machineSet.Annotations[nodeGroupMaxSizeAnnotationKey]
+func maxSize(annotations map[string]string) (int, error) {
+	val, found := annotations[nodeGroupMaxSizeAnnotationKey]
 	if !found {
-		glog.V(4).Infof("machineset %s/%s has no annotation %q", machineSet.Namespace, machineSet.Name, nodeGroupMaxSizeAnnotationKey)
 		return 0, errMissingMaxAnnotation
 	}
 	i, err := strconv.Atoi(val)
@@ -86,8 +81,8 @@ func machineSetMaxSize(machineSet *v1beta1.MachineSet) (int, error) {
 	return i, nil
 }
 
-func parseMachineSetBounds(machineSet *v1beta1.MachineSet) (int, int, error) {
-	minSize, err := machineSetMinSize(machineSet)
+func parseScalingBounds(annotations map[string]string) (int, int, error) {
+	minSize, err := minSize(annotations)
 	if err != nil && err != errMissingMinAnnotation {
 		return 0, 0, err
 	}
@@ -96,7 +91,7 @@ func parseMachineSetBounds(machineSet *v1beta1.MachineSet) (int, int, error) {
 		return 0, 0, errInvalidMinAnnotation
 	}
 
-	maxSize, err := machineSetMaxSize(machineSet)
+	maxSize, err := maxSize(annotations)
 	if err != nil && err != errMissingMaxAnnotation {
 		return 0, 0, err
 	}
@@ -125,6 +120,27 @@ func machineOwnerRef(machine *v1beta1.Machine) *metav1.OwnerReference {
 func machineIsOwnedByMachineSet(machine *v1beta1.Machine, machineSet *v1beta1.MachineSet) bool {
 	if ref := machineOwnerRef(machine); ref != nil {
 		return ref.UID == machineSet.UID
+	}
+	return false
+}
+
+func machineSetMachineDeploymentRef(machineSet *v1beta1.MachineSet) *metav1.OwnerReference {
+	for _, ref := range machineSet.OwnerReferences {
+		if ref.Kind == "MachineDeployment" {
+			return ref.DeepCopy()
+		}
+	}
+
+	return nil
+}
+
+func machineSetHasMachineDeploymentOwnerRef(machineSet *v1beta1.MachineSet) bool {
+	return machineSetMachineDeploymentRef(machineSet) != nil
+}
+
+func machineSetIsOwnedByMachineDeployment(machineSet *v1beta1.MachineSet, machineDeployment *v1beta1.MachineDeployment) bool {
+	if ref := machineSetMachineDeploymentRef(machineSet); ref != nil {
+		return ref.UID == machineDeployment.UID
 	}
 	return false
 }
