@@ -18,13 +18,13 @@ package openshiftmachineapi
 
 import (
 	"fmt"
-	"path"
 	"time"
 
+	"github.com/openshift/cluster-api/pkg/apis/machine/v1beta1"
 	machinev1beta1 "github.com/openshift/cluster-api/pkg/client/clientset_generated/clientset/typed/machine/v1beta1"
 	apiv1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
+	kubeclient "k8s.io/client-go/kubernetes"
 	schedulercache "k8s.io/kubernetes/pkg/scheduler/cache"
 )
 
@@ -32,58 +32,29 @@ const (
 	machineDeleteAnnotationKey = "machine.openshift.io/cluster-api-delete-machine"
 )
 
-var _ cloudprovider.NodeGroup = (*nodegroup)(nil)
-
 type nodegroup struct {
-	machineController *machineController
 	machineapiClient  machinev1beta1.MachineV1beta1Interface
-	maxSize           int
-	minSize           int
-	name              string
-	namespace         string
-	nodes             []string
-	replicas          int32
+	kubeclient        kubeclient.Interface
+	machineController *machineController
+	scalableResource  scalableResource
 }
 
+var _ cloudprovider.NodeGroup = (*nodegroup)(nil)
+
 func (ng *nodegroup) Name() string {
-	return ng.name
+	return ng.scalableResource.Name()
 }
 
 func (ng *nodegroup) Namespace() string {
-	return ng.namespace
+	return ng.scalableResource.Namespace()
 }
 
 func (ng *nodegroup) MinSize() int {
-	return ng.minSize
+	return ng.scalableResource.MinSize()
 }
 
 func (ng *nodegroup) MaxSize() int {
-	return ng.maxSize
-}
-
-func (ng *nodegroup) Replicas() int {
-	return int(ng.replicas)
-}
-
-func (ng *nodegroup) SetSize(nreplicas int) error {
-	machineSet, err := ng.machineapiClient.MachineSets(ng.namespace).Get(ng.name, v1.GetOptions{})
-	if err != nil {
-		return fmt.Errorf("unable to get machineset %q: %v", ng.name, err)
-	}
-
-	machineSet = machineSet.DeepCopy()
-	replicas := int32(nreplicas)
-	machineSet.Spec.Replicas = &replicas
-
-	_, err = ng.machineapiClient.MachineSets(ng.namespace).Update(machineSet)
-	if err != nil {
-		return fmt.Errorf("unable to update number of replicas of machineset %q: %v", ng, err)
-	}
-	return nil
-}
-
-func (ng *nodegroup) String() string {
-	return fmt.Sprintf("%s/%s", ng.namespace, ng.name)
+	return ng.scalableResource.MaxSize()
 }
 
 // TargetSize returns the current target size of the node group. It is
@@ -92,7 +63,7 @@ func (ng *nodegroup) String() string {
 // (new nodes finish startup and registration or removed nodes are
 // deleted completely). Implementation required.
 func (ng *nodegroup) TargetSize() (int, error) {
-	return ng.Replicas(), nil
+	return int(ng.scalableResource.Replicas()), nil
 }
 
 // IncreaseSize increases the size of the node group. To delete a node
@@ -103,11 +74,11 @@ func (ng *nodegroup) IncreaseSize(delta int) error {
 	if delta <= 0 {
 		return fmt.Errorf("size increase must be positive")
 	}
-	size := ng.Replicas()
+	size := int(ng.scalableResource.Replicas())
 	if size+delta > ng.MaxSize() {
 		return fmt.Errorf("size increase too large - desired:%d max:%d", size+delta, ng.MaxSize())
 	}
-	return ng.SetSize(size + delta)
+	return ng.scalableResource.SetSize(int32(size + delta))
 }
 
 // DeleteNodes deletes nodes from this node group. Error is returned
@@ -121,7 +92,7 @@ func (ng *nodegroup) DeleteNodes(nodes []*apiv1.Node) error {
 			return err
 		}
 		if machine == nil {
-			return fmt.Errorf("unknown machine")
+			return fmt.Errorf("unknown machine for node %q", node.Spec.ProviderID)
 		}
 
 		machine = machine.DeepCopy()
@@ -137,12 +108,11 @@ func (ng *nodegroup) DeleteNodes(nodes []*apiv1.Node) error {
 		}
 	}
 
-	replicas := ng.Replicas()
-	if replicas-len(nodes) <= 0 {
-		return fmt.Errorf("unable to delete %d machines in %s, machine replicas are <= 0 ", len(nodes), ng.name)
+	if int(ng.scalableResource.Replicas())-len(nodes) <= 0 {
+		return fmt.Errorf("unable to delete %d machines in %q, machine replicas are <= 0 ", len(nodes), ng.Id())
 	}
 
-	return ng.SetSize(replicas - len(nodes))
+	return ng.scalableResource.SetSize(ng.scalableResource.Replicas() - int32(len(nodes)))
 }
 
 // DecreaseTargetSize decreases the target size of the node group.
@@ -171,22 +141,22 @@ func (ng *nodegroup) DecreaseTargetSize(delta int) error {
 			size, delta, len(nodes))
 	}
 
-	return ng.SetSize(size + delta)
+	return ng.scalableResource.SetSize(int32(size + delta))
 }
 
 // Id returns an unique identifier of the node group.
 func (ng *nodegroup) Id() string {
-	return path.Join(ng.namespace, ng.name)
+	return ng.scalableResource.ID()
 }
 
 // Debug returns a string containing all information regarding this node group.
 func (ng *nodegroup) Debug() string {
-	return fmt.Sprintf("%s (min: %d, max: %d, replicas: %d)", ng.Id(), ng.MinSize(), ng.MaxSize(), ng.Replicas())
+	return fmt.Sprintf("%s (min: %d, max: %d, replicas: %d)", ng.Id(), ng.MinSize(), ng.MaxSize(), ng.scalableResource.Replicas())
 }
 
 // Nodes returns a list of all nodes that belong to this node group.
 func (ng *nodegroup) Nodes() ([]string, error) {
-	return ng.nodes, nil
+	return ng.scalableResource.Nodes()
 }
 
 // TemplateNodeInfo returns a schedulercache.NodeInfo structure of an
@@ -226,4 +196,28 @@ func (ng *nodegroup) Delete() error {
 // scaled to 0.
 func (ng *nodegroup) Autoprovisioned() bool {
 	return false
+}
+
+func newNodegroupFromMachineSet(controller *machineController, machineSet *v1beta1.MachineSet) (*nodegroup, error) {
+	scalableResource, err := newMachineSetScalableResource(controller, machineSet)
+	if err != nil {
+		return nil, err
+	}
+	return &nodegroup{
+		machineapiClient:  controller.clusterClientset.MachineV1beta1(),
+		machineController: controller,
+		scalableResource:  scalableResource,
+	}, nil
+}
+
+func newNodegroupFromMachineDeployment(controller *machineController, machineDeployment *v1beta1.MachineDeployment) (*nodegroup, error) {
+	scalableResource, err := newMachineDeploymentScalableResource(controller, machineDeployment)
+	if err != nil {
+		return nil, err
+	}
+	return &nodegroup{
+		machineapiClient:  controller.clusterClientset.MachineV1beta1(),
+		machineController: controller,
+		scalableResource:  scalableResource,
+	}, nil
 }
