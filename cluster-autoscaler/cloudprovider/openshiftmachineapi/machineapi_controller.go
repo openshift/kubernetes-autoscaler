@@ -49,6 +49,7 @@ type machineController struct {
 	machineInformer           machinev1beta1.MachineInformer
 	machineSetInformer        machinev1beta1.MachineSetInformer
 	nodeInformer              cache.SharedIndexInformer
+	enableMachineDeployments  bool
 }
 
 type machineSetFilterFunc func(machineSet *v1beta1.MachineSet) error
@@ -226,6 +227,7 @@ func (c *machineController) machinesInMachineSet(machineSet *v1beta1.MachineSet)
 func newMachineController(
 	kubeclient kubeclient.Interface,
 	clusterclient clusterclient.Interface,
+	enableMachineDeployments bool,
 ) (*machineController, error) {
 	kubeInformerFactory := kubeinformers.NewSharedInformerFactory(kubeclient, 0)
 	clusterInformerFactory := clusterinformers.NewSharedInformerFactory(clusterclient, 0)
@@ -257,6 +259,7 @@ func newMachineController(
 		machineInformer:           machineInformer,
 		machineSetInformer:        machineSetInformer,
 		nodeInformer:              nodeInformer,
+		enableMachineDeployments:  enableMachineDeployments,
 	}, nil
 }
 
@@ -333,6 +336,10 @@ func (c *machineController) machineSetNodeGroups() ([]cloudprovider.NodeGroup, e
 }
 
 func (c *machineController) machineDeploymentNodeGroups() ([]cloudprovider.NodeGroup, error) {
+	if !c.enableMachineDeployments {
+		return nil, nil
+	}
+
 	machineDeployments, err := c.machineDeploymentInformer.Lister().MachineDeployments(apiv1.NamespaceAll).List(labels.Everything())
 	if err != nil {
 		return nil, err
@@ -364,7 +371,6 @@ func (c *machineController) nodeGroups() ([]cloudprovider.NodeGroup, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	return append(machineSets, machineDeployments...), nil
 }
 
@@ -386,20 +392,22 @@ func (c *machineController) nodeGroupForNode(node *apiv1.Node) (cloudprovider.No
 		return nil, nil
 	}
 
-	if ref := machineSetMachineDeploymentRef(machineSet); ref != nil {
-		key := fmt.Sprintf("%s/%s", machineSet.Namespace, ref.Name)
-		machineDeployment, err := c.findMachineDeployment(key)
-		if err != nil {
-			return nil, fmt.Errorf("unknown MachineDeployment %q: %v", key, err)
+	if c.enableMachineDeployments {
+		if ref := machineSetMachineDeploymentRef(machineSet); ref != nil {
+			key := fmt.Sprintf("%s/%s", machineSet.Namespace, ref.Name)
+			machineDeployment, err := c.findMachineDeployment(key)
+			if err != nil {
+				return nil, fmt.Errorf("unknown MachineDeployment %q: %v", key, err)
+			}
+			if machineDeployment == nil {
+				return nil, fmt.Errorf("unknown MachineDeployment %q", key)
+			}
+			nodegroup, err := newNodegroupFromMachineDeployment(c, machineDeployment)
+			if err != nil {
+				return nil, fmt.Errorf("failed to build nodegroup for node %q: %v", node.Name, err)
+			}
+			return nodegroup, nil
 		}
-		if machineDeployment == nil {
-			return nil, fmt.Errorf("unknown MachineDeployment %q", key)
-		}
-		nodegroup, err := newNodegroupFromMachineDeployment(c, machineDeployment)
-		if err != nil {
-			return nil, fmt.Errorf("failed to build nodegroup for node %q: %v", node.Name, err)
-		}
-		return nodegroup, nil
 	}
 
 	nodegroup, err := newNodegroupFromMachineSet(c, machineSet)
