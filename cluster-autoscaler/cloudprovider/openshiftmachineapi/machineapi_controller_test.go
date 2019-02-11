@@ -45,7 +45,7 @@ func mustCreateTestController(t *testing.T, config testControllerConfig) (*machi
 	kubeclientSet := fakekube.NewSimpleClientset(config.nodeObjects...)
 	clusterclientSet := fakeclusterapi.NewSimpleClientset(config.machineObjects...)
 
-	controller, err := newMachineController(kubeclientSet, clusterclientSet)
+	controller, err := newMachineController(kubeclientSet, clusterclientSet, true)
 	if err != nil {
 		t.Fatalf("failed to create test controller")
 	}
