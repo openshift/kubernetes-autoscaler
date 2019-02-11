@@ -18,6 +18,7 @@ package openshiftmachineapi
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/golang/glog"
 	clusterclientset "github.com/openshift/cluster-api/pkg/client/clientset_generated/clientset"
@@ -134,7 +135,9 @@ func BuildCloudProvider(name string, opts config.AutoscalingOptions, rl *cloudpr
 		return nil, fmt.Errorf("create cluster clientset failed: %v", err)
 	}
 
-	controller, err := newMachineController(kubeclient, clusterclient)
+	enableMachineDeployments := os.Getenv("OPENSHIFT_MACHINE_API_CLOUDPROVIDER_ENABLE_MACHINE_DEPLOYMENTS") != ""
+	controller, err := newMachineController(kubeclient, clusterclient, enableMachineDeployments)
+
 	if err != nil {
 		return nil, err
 	}
