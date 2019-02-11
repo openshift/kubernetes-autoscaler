@@ -26,6 +26,50 @@ const (
 	waitLong   = 10 * time.Minute
 )
 
+func newWorkLoad() *batchv1.Job {
+	backoffLimit := int32(4)
+	completions := int32(50)
+	parallelism := int32(50)
+	activeDeadlineSeconds := int64(100)
+	return &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "workload",
+			Namespace: namespace,
+		},
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "Job",
+			APIVersion: "batch/v1",
+		},
+		Spec: batchv1.JobSpec{
+			Template: corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name:  "workload",
+							Image: "busybox",
+							Command: []string{
+								"sleep",
+								"300",
+							},
+							Resources: corev1.ResourceRequirements{
+								Requests: corev1.ResourceList{
+									"memory": resource.MustParse("500Mi"),
+									"cpu":    resource.MustParse("500m"),
+								},
+							},
+						},
+					},
+					RestartPolicy: corev1.RestartPolicy("Never"),
+				},
+			},
+			ActiveDeadlineSeconds: &activeDeadlineSeconds,
+			BackoffLimit:          &backoffLimit,
+			Completions:           &completions,
+			Parallelism:           &parallelism,
+		},
+	}
+}
+
 func (tc *testConfig) ExpectOperatorAvailable() error {
 	name := "machine-api-operator"
 	key := types.NamespacedName{
@@ -131,9 +175,21 @@ func (tc *testConfig) ExpectAutoscalerScalesOut() error {
 		return err
 	}
 
+	workLoad := newWorkLoad()
+
 	// We want to clean up these objects on any subsequent error.
 
 	defer func() {
+		if workLoad != nil {
+			wait.PollImmediate(1*time.Second, waitShort, func() (bool, error) {
+				if err := tc.client.Delete(context.TODO(), workLoad); err != nil {
+					return false, nil
+				}
+				return true, nil
+			})
+			glog.Info("Deleted workload object")
+		}
+
 		wait.PollImmediate(1*time.Second, waitShort, func() (bool, error) {
 			if err := tc.client.Delete(context.TODO(), &machineAutoscaler); err != nil {
 				glog.Errorf("error querying api for machineAutoscaler object: %v, retrying...", err)
@@ -169,57 +225,9 @@ func (tc *testConfig) ExpectAutoscalerScalesOut() error {
 	glog.Infof("Cluster initial number of nodes is %d", clusterInitialTotalNodes)
 
 	glog.Info("Create workload")
-	mem, err := resource.ParseQuantity("500Mi")
-	if err != nil {
-		glog.Fatalf("failed to ParseQuantity %v", err)
-	}
-	cpu, err := resource.ParseQuantity("500m")
-	if err != nil {
-		glog.Fatalf("failed to ParseQuantity %v", err)
-	}
-	backoffLimit := int32(4)
-	completions := int32(50)
-	parallelism := int32(50)
-	activeDeadlineSeconds := int64(100)
-	workLoad := batchv1.Job{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "workload",
-			Namespace: namespace,
-		},
-		TypeMeta: metav1.TypeMeta{
-			Kind:       "Job",
-			APIVersion: "batch/v1",
-		},
-		Spec: batchv1.JobSpec{
-			Template: corev1.PodTemplateSpec{
-				Spec: corev1.PodSpec{
-					Containers: []corev1.Container{
-						{
-							Name:  "workload",
-							Image: "busybox",
-							Command: []string{
-								"sleep",
-								"300",
-							},
-							Resources: corev1.ResourceRequirements{
-								Requests: corev1.ResourceList{
-									"memory": mem,
-									"cpu":    cpu,
-								},
-							},
-						},
-					},
-					RestartPolicy: corev1.RestartPolicy("Never"),
-				},
-			},
-			ActiveDeadlineSeconds: &activeDeadlineSeconds,
-			BackoffLimit:          &backoffLimit,
-			Completions:           &completions,
-			Parallelism:           &parallelism,
-		},
-	}
+
 	if err := wait.PollImmediate(1*time.Second, waitMedium, func() (bool, error) {
-		if err := tc.client.Create(context.TODO(), &workLoad); err != nil {
+		if err := tc.client.Create(context.TODO(), workLoad); err != nil {
 			glog.Errorf("error querying api for workLoad object: %v, retrying...", err)
 			return false, nil
 		}
@@ -261,10 +269,11 @@ func (tc *testConfig) ExpectAutoscalerScalesOut() error {
 
 	glog.Info("Delete workload")
 	if err := wait.PollImmediate(1*time.Second, waitMedium, func() (bool, error) {
-		if err := tc.client.Delete(context.TODO(), &workLoad); err != nil {
+		if err := tc.client.Delete(context.TODO(), workLoad); err != nil {
 			glog.Errorf("error querying api for workLoad object: %v, retrying...", err)
 			return false, nil
 		}
+		workLoad = nil
 		return true, nil
 	}); err != nil {
 		return err
