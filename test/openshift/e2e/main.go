@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 
 	"github.com/golang/glog"
@@ -9,6 +10,7 @@ import (
 	"k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
+	"sigs.k8s.io/controller-runtime/pkg/runtime/signals"
 )
 
 const (
@@ -42,13 +44,12 @@ func newClient() (client.Client, error) {
 
 func main() {
 	flag.Parse()
-	if err := runSuite(); err != nil {
+	if err := runSuite(signals.SetupSignalHandler()); err != nil {
 		glog.Fatal(err)
 	}
 }
 
-func runSuite() error {
-
+func runSuite(stopCh <-chan struct{}) error {
 	client, err := newClient()
 	if err != nil {
 		return err
@@ -56,15 +57,26 @@ func runSuite() error {
 	testConfig := &testConfig{
 		client: client,
 	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	go func() {
+		select {
+		case <-stopCh:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+
 	glog.Info("RUN: ExpectOperatorAvailable")
-	if err := testConfig.ExpectOperatorAvailable(); err != nil {
+	if err := testConfig.ExpectOperatorAvailable(ctx); err != nil {
 		glog.Errorf("FAIL: ExpectOperatorAvailable: %v", err)
 		return err
 	}
 	glog.Info("PASS: ExpectOperatorAvailable")
 
 	glog.Info("RUN: ExpectAutoscalerScalesOut")
-	if err := testConfig.ExpectAutoscalerScalesOut(); err != nil {
+	if err := testConfig.ExpectAutoscalerScalesOut(ctx); err != nil {
 		glog.Errorf("FAIL: ExpectAutoscalerScalesOut: %v", err)
 		return err
 	}
