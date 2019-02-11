@@ -412,7 +412,7 @@
   version = "v0.1.0"
 
 [[projects]]
-  digest = "1:70c6a336ed3caf7c3747ac5648e908357a0cea5b63121dcdb3c361337699afe4"
+  digest = "1:041d01523e2b563a2e08386a7e9a169f0c4c29c158b7ba63fe4f2b12f89f231c"
   name = "sigs.k8s.io/controller-runtime"
   packages = [
     "pkg/client",
@@ -420,6 +420,7 @@
     "pkg/client/config",
     "pkg/runtime/log",
     "pkg/runtime/scheme",
+    "pkg/runtime/signals",
   ]
   pruneopts = "UT"
   revision = "a67a5036fa19242e7ca874420224bc26753b811f"
@@ -442,6 +443,7 @@
     "k8s.io/client-go/kubernetes/scheme",
     "sigs.k8s.io/controller-runtime/pkg/client",
     "sigs.k8s.io/controller-runtime/pkg/client/config",
+    "sigs.k8s.io/controller-runtime/pkg/runtime/signals",
   ]
   solver-name = "gps-cdcl"
   solver-version = 1
