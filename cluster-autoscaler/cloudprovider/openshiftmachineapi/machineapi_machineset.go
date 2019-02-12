@@ -60,8 +60,8 @@ func (r machineSetScalableResource) Nodes() ([]string, error) {
 	return r.controller.machineSetNodeNames(r.machineSet)
 }
 
-func (r machineSetScalableResource) Replicas() int32 {
-	return pointer.Int32PtrDerefOr(r.machineSet.Spec.Replicas, 0)
+func (r machineSetScalableResource) Replicas() (int, error) {
+	return int(pointer.Int32PtrDerefOr(r.machineSet.Spec.Replicas, 0)), nil
 }
 
 func (r machineSetScalableResource) SetSize(nreplicas int32) error {

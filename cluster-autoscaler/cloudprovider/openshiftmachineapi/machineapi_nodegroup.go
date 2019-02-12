@@ -63,7 +63,7 @@ func (ng *nodegroup) MaxSize() int {
 // (new nodes finish startup and registration or removed nodes are
 // deleted completely). Implementation required.
 func (ng *nodegroup) TargetSize() (int, error) {
-	return int(ng.scalableResource.Replicas()), nil
+	return ng.scalableResource.Replicas()
 }
 
 // IncreaseSize increases the size of the node group. To delete a node
@@ -74,7 +74,10 @@ func (ng *nodegroup) IncreaseSize(delta int) error {
 	if delta <= 0 {
 		return fmt.Errorf("size increase must be positive")
 	}
-	size := int(ng.scalableResource.Replicas())
+	size, err := ng.scalableResource.Replicas()
+	if err != nil {
+		return err
+	}
 	if size+delta > ng.MaxSize() {
 		return fmt.Errorf("size increase too large - desired:%d max:%d", size+delta, ng.MaxSize())
 	}
@@ -117,11 +120,15 @@ func (ng *nodegroup) DeleteNodes(nodes []*apiv1.Node) error {
 		}
 	}
 
-	if int(ng.scalableResource.Replicas())-len(nodes) <= 0 {
+	replicas, err := ng.scalableResource.Replicas()
+	if err != nil {
+		return err
+	}
+	if replicas-len(nodes) <= 0 {
 		return fmt.Errorf("unable to delete %d machines in %q, machine replicas are <= 0 ", len(nodes), ng.Id())
 	}
 
-	return ng.scalableResource.SetSize(ng.scalableResource.Replicas() - int32(len(nodes)))
+	return ng.scalableResource.SetSize(int32(replicas) - int32(len(nodes)))
 }
 
 // DecreaseTargetSize decreases the target size of the node group.
@@ -160,7 +167,12 @@ func (ng *nodegroup) Id() string {
 
 // Debug returns a string containing all information regarding this node group.
 func (ng *nodegroup) Debug() string {
-	return fmt.Sprintf("%s (min: %d, max: %d, replicas: %d)", ng.Id(), ng.MinSize(), ng.MaxSize(), ng.scalableResource.Replicas())
+	replicas, err := ng.scalableResource.Replicas()
+	if err != nil {
+		return fmt.Sprintf("%s (min: %d, max: %d, replicas: %v)", ng.Id(), ng.MinSize(), ng.MaxSize(), err)
+	} else {
+		return fmt.Sprintf("%s (min: %d, max: %d, replicas: %d)", ng.Id(), ng.MinSize(), ng.MaxSize(), replicas)
+	}
 }
 
 // Nodes returns a list of all nodes that belong to this node group.
