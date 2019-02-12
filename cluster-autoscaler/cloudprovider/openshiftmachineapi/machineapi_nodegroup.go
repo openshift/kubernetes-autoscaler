@@ -87,6 +87,15 @@ func (ng *nodegroup) IncreaseSize(delta int) error {
 // Implementation required.
 func (ng *nodegroup) DeleteNodes(nodes []*apiv1.Node) error {
 	for _, node := range nodes {
+		actualNodeGroup, err := ng.machineController.nodeGroupForNode(node)
+		if err != nil {
+			return nil
+		}
+
+		if actualNodeGroup.Id() != ng.Id() {
+			return fmt.Errorf("node %q doesn't belong to node group %q", node.Spec.ProviderID, ng.Id())
+		}
+
 		machine, err := ng.machineController.findMachineByNodeProviderID(node)
 		if err != nil {
 			return err

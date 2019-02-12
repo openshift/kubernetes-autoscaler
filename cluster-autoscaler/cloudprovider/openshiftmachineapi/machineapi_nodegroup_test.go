@@ -20,12 +20,14 @@ import (
 	"fmt"
 	"path"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/openshift/cluster-api/pkg/apis/machine/v1beta1"
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	"k8s.io/utils/pointer"
 )
@@ -697,5 +699,125 @@ func TestNodeGroupMachineSetDeleteNodes(t *testing.T) {
 	}
 	if actual := pointer.Int32PtrDerefOr(machineSet.Spec.Replicas, 0); actual != 5 {
 		t.Fatalf("expected 5 nodes, got %v", actual)
+	}
+}
+
+func TestNodeGroupMachineSetDeleteNodesWithMismatchedNodes(t *testing.T) {
+	makeMachineSet := func(i int, replicaCount int) *v1beta1.MachineSet {
+		name := fmt.Sprintf("machineset-%d", i)
+		return &v1beta1.MachineSet{
+			TypeMeta: v1.TypeMeta{
+				Kind: "MachineSet",
+			},
+			ObjectMeta: v1.ObjectMeta{
+				Name:      name,
+				Namespace: "test-namespace",
+				UID:       types.UID(name),
+			},
+			Spec: v1beta1.MachineSetSpec{
+				Replicas: int32ptr(int32(replicaCount)),
+			},
+		}
+	}
+
+	// Creates a machine and node; links the machine and node.
+	// Additionally links the machine with machineSet.
+	makeLinkedMachine := func(i int, machineSet *v1beta1.MachineSet) (*apiv1.Node, *v1beta1.Machine) {
+		node := &apiv1.Node{
+			TypeMeta: v1.TypeMeta{
+				Kind: "Node",
+			},
+			ObjectMeta: v1.ObjectMeta{
+				Name: fmt.Sprintf("node-%d", i),
+				Annotations: map[string]string{
+					machineAnnotationKey: fmt.Sprintf("test-namespace/machine-%d", i),
+				},
+			},
+			Spec: apiv1.NodeSpec{
+				ProviderID: fmt.Sprintf("nodeid-%d", i),
+			},
+		}
+
+		machine := &v1beta1.Machine{
+			TypeMeta: v1.TypeMeta{
+				Kind: "Machine",
+			},
+			ObjectMeta: v1.ObjectMeta{
+				Name:      fmt.Sprintf("machine-%d", i),
+				Namespace: "test-namespace",
+				OwnerReferences: []v1.OwnerReference{{
+					Name: machineSet.Name,
+					Kind: machineSet.Kind,
+					UID:  machineSet.UID,
+				}},
+			},
+			Status: v1beta1.MachineStatus{
+				NodeRef: &apiv1.ObjectReference{
+					Kind: node.Kind,
+					Name: node.Name,
+				},
+			},
+		}
+
+		return node, machine
+	}
+
+	nreplicas := 1
+	machineSet0 := makeMachineSet(0, nreplicas)
+	machineSet1 := makeMachineSet(1, nreplicas)
+	node0, machine0 := makeLinkedMachine(0, machineSet0)
+	node1, machine1 := makeLinkedMachine(1, machineSet1)
+
+	controller, stop := mustCreateTestController(t, testControllerConfig{
+		nodeObjects: []runtime.Object{
+			node0,
+			node1,
+		},
+		machineObjects: append([]runtime.Object{},
+			machine0, machineSet0,
+			machine1, machineSet1),
+	})
+	defer stop()
+
+	ng0, err := newNodegroupFromMachineSet(controller, machineSet0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	ng1, err := newNodegroupFromMachineSet(controller, machineSet1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Deleting nodes that are not in ng0 should fail.
+	err0 := ng0.DeleteNodes([]*apiv1.Node{node1})
+	if err0 == nil {
+		t.Error("expected an error")
+	}
+	expectedErr0 := `node "nodeid-1" doesn't belong to node group "test-namespace/machineset-0"`
+	if !strings.Contains(err0.Error(), expectedErr0) {
+		t.Errorf("expected: %q, got: %q", expectedErr0, err0.Error())
+	}
+
+	// Deleting nodes that are not in ng1 should fail.
+	err1 := ng1.DeleteNodes([]*apiv1.Node{node0})
+	if err1 == nil {
+		t.Error("expected an error")
+	}
+	expectedErr1 := `node "nodeid-0" doesn't belong to node group "test-namespace/machineset-1"`
+	if !strings.Contains(err1.Error(), expectedErr1) {
+		t.Errorf("expected: %q, got: %q", expectedErr1, err1.Error())
+	}
+
+	// Deleting from correct node group should fail because
+	// replicas would become <= 0.
+	if err := ng0.DeleteNodes([]*apiv1.Node{node0}); err == nil {
+		t.Error("expected error")
+	}
+
+	// Deleting from correct node group should fail because
+	// replicas would become <= 0.
+	if err := ng1.DeleteNodes([]*apiv1.Node{node1}); err == nil {
+		t.Error("expected error")
 	}
 }
