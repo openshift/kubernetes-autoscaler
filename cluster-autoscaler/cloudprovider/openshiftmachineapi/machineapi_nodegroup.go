@@ -24,6 +24,7 @@ import (
 	machinev1beta1 "github.com/openshift/cluster-api/pkg/client/clientset_generated/clientset/typed/machine/v1beta1"
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
+	"k8s.io/klog"
 	schedulernodeinfo "k8s.io/kubernetes/pkg/scheduler/nodeinfo"
 )
 
@@ -86,6 +87,7 @@ func (ng *nodegroup) IncreaseSize(delta int) error {
 // group. This function should wait until node group size is updated.
 // Implementation required.
 func (ng *nodegroup) DeleteNodes(nodes []*apiv1.Node) error {
+	// Step 1: Verify all nodes belong to this node group.
 	for _, node := range nodes {
 		actualNodeGroup, err := ng.machineController.nodeGroupForNode(node)
 		if err != nil {
@@ -95,7 +97,21 @@ func (ng *nodegroup) DeleteNodes(nodes []*apiv1.Node) error {
 		if actualNodeGroup.Id() != ng.Id() {
 			return fmt.Errorf("node %q doesn't belong to node group %q", node.Spec.ProviderID, ng.Id())
 		}
+	}
 
+	// Step 2: if deleting len(nodes) would make the replica count
+	// <= 0, then the request to delete that many nodes is bogus
+	// and we fail fast.
+	replicas := ng.scalableResource.Replicas()
+
+	if replicas-int32(len(nodes)) <= 0 {
+		return fmt.Errorf("unable to delete %d machines in %q, machine replicas are <= 0 ", len(nodes), ng.Id())
+	}
+
+	// Step 3: annotate the corresponding machine that it is a
+	// suitable candidate for deletion and drop the replica count
+	// by 1. Fail fast on any error.
+	for _, node := range nodes {
 		machine, err := ng.machineController.findMachineByProviderID(node.Spec.ProviderID)
 		if err != nil {
 			return err
@@ -111,17 +127,28 @@ func (ng *nodegroup) DeleteNodes(nodes []*apiv1.Node) error {
 		}
 
 		machine.Annotations[machineDeleteAnnotationKey] = time.Now().String()
-
-		if _, err := ng.machineapiClient.Machines(machine.Namespace).Update(machine); err != nil {
-			return fmt.Errorf("failed to update machine %s/%s: %v", machine.Namespace, machine.Name, err)
+		machine, err = ng.machineapiClient.Machines(machine.Namespace).Update(machine)
+		if err != nil {
+			return err
 		}
+
+		if err := ng.scalableResource.SetSize(int32(replicas - 1)); err != nil {
+			delete(machine.Annotations, machineDeleteAnnotationKey)
+			// Log errors as warnings from Update()
+			// because no action is taken even if the
+			// annotation persists until the replica count
+			// is modified during a deletion.
+			_, updateErr := ng.machineapiClient.Machines(machine.Namespace).Update(machine)
+			if updateErr != nil {
+				klog.Warningf("failed to delete annotation %q from machine %q: %v", machineDeleteAnnotationKey, machine.Name, updateErr)
+			}
+			return err
+		}
+
+		replicas--
 	}
 
-	if int(ng.scalableResource.Replicas())-len(nodes) <= 0 {
-		return fmt.Errorf("unable to delete %d machines in %q, machine replicas are <= 0", len(nodes), ng.Id())
-	}
-
-	return ng.scalableResource.SetSize(ng.scalableResource.Replicas() - int32(len(nodes)))
+	return nil
 }
 
 // DecreaseTargetSize decreases the target size of the node group.
