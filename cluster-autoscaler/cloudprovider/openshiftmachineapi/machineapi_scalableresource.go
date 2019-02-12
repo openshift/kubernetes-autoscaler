@@ -42,5 +42,5 @@ type scalableResource interface {
 	SetSize(nreplicas int32) error
 
 	// Replicas returns the current replica count of the resource
-	Replicas() int32
+	Replicas() (int, error)
 }
