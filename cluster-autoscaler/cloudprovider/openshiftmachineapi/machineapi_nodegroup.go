@@ -89,6 +89,7 @@ func (ng *nodegroup) IncreaseSize(delta int) error {
 // group. This function should wait until node group size is updated.
 // Implementation required.
 func (ng *nodegroup) DeleteNodes(nodes []*apiv1.Node) error {
+	// Step 1: Verify all nodes belong to this node group.
 	for _, node := range nodes {
 		actualNodeGroup, err := ng.machineController.nodeGroupForNode(node)
 		if err != nil {
@@ -98,7 +99,24 @@ func (ng *nodegroup) DeleteNodes(nodes []*apiv1.Node) error {
 		if actualNodeGroup.Id() != ng.Id() {
 			return fmt.Errorf("node %q doesn't belong to node group %q", node.Spec.ProviderID, ng.Id())
 		}
+	}
 
+	// Step 2: if deleting len(nodes) would make the replica count
+	// <= 0, then the request to delete that many nodes is bogus
+	// and we fail fast.
+	replicas, err := ng.scalableResource.Replicas()
+	if err != nil {
+		return err
+	}
+
+	if replicas-len(nodes) <= 0 {
+		return fmt.Errorf("unable to delete %d machines in %q, machine replicas are <= 0 ", len(nodes), ng.Id())
+	}
+
+	// Step 3: annotate the corresponding machine that it is a
+	// suitable candidate for deletion and drop the replica count
+	// by 1. Fail fast on any error.
+	for _, node := range nodes {
 		machine, err := ng.machineController.findMachineByNodeProviderID(node)
 		if err != nil {
 			return err
@@ -114,21 +132,21 @@ func (ng *nodegroup) DeleteNodes(nodes []*apiv1.Node) error {
 		}
 
 		machine.Annotations[machineDeleteAnnotationKey] = time.Now().String()
-
 		if _, err := ng.machineapiClient.Machines(machine.Namespace).Update(machine); err != nil {
-			return fmt.Errorf("failed to update machine %s/%s: %v", machine.Namespace, machine.Name, err)
+			return err
 		}
+
+		if err := ng.scalableResource.SetSize(int32(replicas - 1)); err != nil {
+			delete(machine.Annotations, machineDeleteAnnotationKey)
+			// Ignore any errors from Update()
+			ng.machineapiClient.Machines(machine.Namespace).Update(machine)
+			return err
+		}
+
+		replicas--
 	}
 
-	replicas, err := ng.scalableResource.Replicas()
-	if err != nil {
-		return err
-	}
-	if replicas-len(nodes) <= 0 {
-		return fmt.Errorf("unable to delete %d machines in %q, machine replicas are <= 0 ", len(nodes), ng.Id())
-	}
-
-	return ng.scalableResource.SetSize(int32(replicas) - int32(len(nodes)))
+	return nil
 }
 
 // DecreaseTargetSize decreases the target size of the node group.
@@ -170,9 +188,8 @@ func (ng *nodegroup) Debug() string {
 	replicas, err := ng.scalableResource.Replicas()
 	if err != nil {
 		return fmt.Sprintf("%s (min: %d, max: %d, replicas: %v)", ng.Id(), ng.MinSize(), ng.MaxSize(), err)
-	} else {
-		return fmt.Sprintf("%s (min: %d, max: %d, replicas: %d)", ng.Id(), ng.MinSize(), ng.MaxSize(), replicas)
 	}
+	return fmt.Sprintf("%s (min: %d, max: %d, replicas: %d)", ng.Id(), ng.MinSize(), ng.MaxSize(), replicas)
 }
 
 // Nodes returns a list of all nodes that belong to this node group.
