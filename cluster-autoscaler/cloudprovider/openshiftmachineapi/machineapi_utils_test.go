@@ -24,6 +24,11 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+const (
+	uuid1 = "ec21c5fb-a3d5-a45f-887b-6b49aa8fc218"
+	uuid2 = "ec23ebb0-bc60-443f-d139-046ec5046283"
+)
+
 func TestParseScalingBounds(t *testing.T) {
 	for i, tc := range []struct {
 		description string
@@ -117,7 +122,7 @@ func TestParseScalingBounds(t *testing.T) {
 
 		min, max, err := parseScalingBounds(machineSet.Annotations)
 		if tc.error != nil && err == nil {
-			t.Fatal("expected an error", i)
+			t.Fatalf("test #%d: expected an error", i)
 		}
 
 		if tc.error != nil && tc.error != err {
@@ -165,13 +170,13 @@ func TestMachineSetIsOwnedByMachineDeployment(t *testing.T) {
 			ObjectMeta: v1.ObjectMeta{
 				OwnerReferences: []v1.OwnerReference{{
 					Kind: "MachineSet",
-					UID:  "ec21c5fb-a3d5-a45f-887b-6b49aa8fc218",
+					UID:  uuid1,
 				}},
 			},
 		},
 		machineDeployment: v1beta1.MachineDeployment{
 			ObjectMeta: v1.ObjectMeta{
-				UID: "ec21c5fb-a3d5-a45f-887b-6b49aa8fc218",
+				UID: uuid1,
 			},
 		},
 		owned: false,
@@ -182,7 +187,7 @@ func TestMachineSetIsOwnedByMachineDeployment(t *testing.T) {
 				OwnerReferences: []v1.OwnerReference{{
 					Kind: "MachineSet",
 					Name: "foo",
-					UID:  "ec23ebb0-bc60-443f-d139-046ec5046283",
+					UID:  uuid2,
 				}},
 			},
 		},
@@ -191,7 +196,7 @@ func TestMachineSetIsOwnedByMachineDeployment(t *testing.T) {
 				Kind: "MachineDeployment",
 			},
 			ObjectMeta: v1.ObjectMeta{
-				UID: "ec21c5fb-a3d5-a45f-887b-6b49aa8fc218",
+				UID: uuid1,
 			},
 		},
 		owned: false,
@@ -202,7 +207,7 @@ func TestMachineSetIsOwnedByMachineDeployment(t *testing.T) {
 				OwnerReferences: []v1.OwnerReference{{
 					Kind: "MachineDeployment",
 					Name: "foo",
-					UID:  "ec21c5fb-a3d5-a45f-887b-6b49aa8fc218",
+					UID:  uuid1,
 				}},
 			},
 		},
@@ -212,7 +217,7 @@ func TestMachineSetIsOwnedByMachineDeployment(t *testing.T) {
 			},
 			ObjectMeta: v1.ObjectMeta{
 				Name: "foo",
-				UID:  "ec21c5fb-a3d5-a45f-887b-6b49aa8fc218",
+				UID:  uuid1,
 			},
 		},
 		owned: true,
@@ -254,13 +259,13 @@ func TestMachineIsOwnedByMachineSet(t *testing.T) {
 			ObjectMeta: v1.ObjectMeta{
 				OwnerReferences: []v1.OwnerReference{{
 					Kind: "MachineSet",
-					UID:  "ec21c5fb-a3d5-a45f-887b-6b49aa8fc218",
+					UID:  uuid1,
 				}},
 			},
 		},
 		machineSet: v1beta1.MachineSet{
 			ObjectMeta: v1.ObjectMeta{
-				UID: "ec21c5fb-a3d5-a45f-887b-6b49aa8fc218",
+				UID: uuid1,
 			},
 		},
 		owned: false,
@@ -271,7 +276,7 @@ func TestMachineIsOwnedByMachineSet(t *testing.T) {
 				OwnerReferences: []v1.OwnerReference{{
 					Kind: "MachineSet",
 					Name: "foo",
-					UID:  "ec23ebb0-bc60-443f-d139-046ec5046283",
+					UID:  uuid2,
 				}},
 			},
 		},
@@ -280,7 +285,7 @@ func TestMachineIsOwnedByMachineSet(t *testing.T) {
 				Kind: "MachineSet",
 			},
 			ObjectMeta: v1.ObjectMeta{
-				UID: "ec21c5fb-a3d5-a45f-887b-6b49aa8fc218",
+				UID: uuid1,
 			},
 		},
 		owned: false,
@@ -291,7 +296,7 @@ func TestMachineIsOwnedByMachineSet(t *testing.T) {
 				OwnerReferences: []v1.OwnerReference{{
 					Kind: "MachineSet",
 					Name: "foo",
-					UID:  "ec21c5fb-a3d5-a45f-887b-6b49aa8fc218",
+					UID:  uuid1,
 				}},
 			},
 		},
@@ -301,7 +306,7 @@ func TestMachineIsOwnedByMachineSet(t *testing.T) {
 			},
 			ObjectMeta: v1.ObjectMeta{
 				Name: "foo",
-				UID:  "ec21c5fb-a3d5-a45f-887b-6b49aa8fc218",
+				UID:  uuid1,
 			},
 		},
 		owned: true,
