@@ -143,7 +143,7 @@ func TestControllerFindMachineOwner(t *testing.T) {
 			Namespace: "test-namespace",
 			OwnerReferences: []v1.OwnerReference{{
 				Kind: "MachineSet",
-				UID:  "ec21c5fb-a3d5-a45f-887b-6b49aa8fc218",
+				UID:  uuid1,
 				Name: "testMachineSet",
 			}},
 		},
@@ -184,7 +184,7 @@ func TestControllerFindMachineOwner(t *testing.T) {
 		ObjectMeta: v1.ObjectMeta{
 			Name:      "testMachineSet",
 			Namespace: "test-namespace",
-			UID:       "ec21c5fb-a3d5-a45f-887b-6b49aa8fc218",
+			UID:       uuid1,
 		},
 	}
 
@@ -323,7 +323,7 @@ func TestControllerMachinesInMachineSet(t *testing.T) {
 		ObjectMeta: v1.ObjectMeta{
 			Name:      "testMachineSet1",
 			Namespace: "test-namespace",
-			UID:       "ec21c5fb-a3d5-a45f-887b-6b49aa8fc218",
+			UID:       uuid1,
 		},
 	}
 
@@ -334,7 +334,7 @@ func TestControllerMachinesInMachineSet(t *testing.T) {
 		ObjectMeta: v1.ObjectMeta{
 			Name:      "testMachineSet2",
 			Namespace: "test-namespace",
-			UID:       "abcdef12-a3d5-a45f-887b-6b49aa8fc218",
+			UID:       "a-value-that-is-not-uuid1-or-uuid2",
 		},
 	}
 
@@ -359,7 +359,7 @@ func TestControllerMachinesInMachineSet(t *testing.T) {
 		if i%2 == 0 {
 			testMachines[i].OwnerReferences = []v1.OwnerReference{{
 				Kind: "MachineSet",
-				UID:  "ec21c5fb-a3d5-a45f-887b-6b49aa8fc218",
+				UID:  uuid1,
 				Name: "testMachineSet1",
 			}}
 		}
@@ -425,11 +425,13 @@ func TestControllerNodeGroupsSizes(t *testing.T) {
 			nodeGroupMaxSizeAnnotationKey: "0",
 		},
 	}, {
+		description: "success, number of nodegroups == 1",
 		annotations: map[string]string{
 			nodeGroupMaxSizeAnnotationKey: "10",
 		},
 		count: 1,
 	}, {
+		description: "success, number of nodegroups == 1",
 		annotations: map[string]string{
 			nodeGroupMinSizeAnnotationKey: "1",
 			nodeGroupMaxSizeAnnotationKey: "10",
@@ -465,7 +467,7 @@ func TestControllerNodeGroupsSizes(t *testing.T) {
 	}
 }
 
-func TestControllerNodeGroupForNodeWithMissingNode(t *testing.T) {
+func TestControllerLookupNodeGroupForNodeThatDoesNotExist(t *testing.T) {
 	machine := &v1beta1.Machine{
 		TypeMeta: v1.TypeMeta{
 			Kind: "Machine",
@@ -475,7 +477,7 @@ func TestControllerNodeGroupForNodeWithMissingNode(t *testing.T) {
 			Namespace: "test-namespace",
 			OwnerReferences: []v1.OwnerReference{{
 				Kind: "MachineSet",
-				UID:  "ec21c5fb-a3d5-a45f-887b-6b49aa8fc218",
+				UID:  uuid1,
 				Name: "testMachineSet",
 			}},
 		},
@@ -488,7 +490,7 @@ func TestControllerNodeGroupForNodeWithMissingNode(t *testing.T) {
 		ObjectMeta: v1.ObjectMeta{
 			Name:      "machineset",
 			Namespace: "test-namespace",
-			UID:       "ec21c5fb-a3d5-a45f-887b-6b49aa8fc218",
+			UID:       uuid1,
 		},
 	}
 
@@ -509,6 +511,8 @@ func TestControllerNodeGroupForNodeWithMissingNode(t *testing.T) {
 		},
 	})
 
+	// Looking up a node that doesn't exist doesn't generate an
+	// error. But, equally, the ng should actually be nil.
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -551,7 +555,7 @@ func TestControllerNodeGroupForNodeWithMissingMachineOwner(t *testing.T) {
 		ObjectMeta: v1.ObjectMeta{
 			Name:      "machineset",
 			Namespace: "test-namespace",
-			UID:       "ec21c5fb-a3d5-a45f-887b-6b49aa8fc218",
+			UID:       uuid1,
 		},
 	}
 
@@ -610,7 +614,7 @@ func TestControllerNodeGroupForNodeSuccessFromMachineSet(t *testing.T) {
 		ObjectMeta: v1.ObjectMeta{
 			Name:      "machineset",
 			Namespace: "test-namespace",
-			UID:       "ec21c5fb-a3d5-a45f-887b-6b49aa8fc218",
+			UID:       uuid1,
 		},
 	}
 

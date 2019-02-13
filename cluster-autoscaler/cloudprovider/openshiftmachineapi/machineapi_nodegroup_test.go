@@ -584,6 +584,10 @@ func TestNodeGroupDecreaseSize(t *testing.T) {
 }
 
 func TestNodeGroupMachineSetDeleteNodes(t *testing.T) {
+	// Note: 10 is an upper bound for this test. Going beyond 10
+	// will break the sorting that happens later in this function
+	// because sort.Strings() will not do natural sorting and the
+	// expected semantics in this test will fail.
 	nodes := make([]*apiv1.Node, 10)
 	machines := make([]*v1beta1.Machine, 10)
 	nodeObjects := make([]runtime.Object, 10)
