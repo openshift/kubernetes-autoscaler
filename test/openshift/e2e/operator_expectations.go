@@ -61,7 +61,13 @@ func newWorkLoad() *batchv1.Job {
 					},
 					RestartPolicy: corev1.RestartPolicy("Never"),
 					NodeSelector: map[string]string{
-						"node-role.kubernetes.io/worker": "",
+						"node-role.kubernetes.io/compute": "",
+					},
+					Tolerations: []corev1.Toleration{
+						{
+							Key:      "kubemark",
+							Operator: corev1.TolerationOpExists,
+						},
 					},
 				},
 			},
@@ -146,6 +152,7 @@ func (tc *testConfig) ExpectAutoscalerScalesOut(ctx context.Context) error {
 				DelayAfterAdd:     "10s",
 				DelayAfterDelete:  "10s",
 				DelayAfterFailure: "10s",
+				UnneededTime:      "10s",
 			},
 		},
 	}

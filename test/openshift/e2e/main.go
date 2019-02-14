@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	namespace = "openshift-machine-api"
+	namespace = "kube-system"
 )
 
 func init() {
@@ -68,12 +68,14 @@ func runSuite(stopCh <-chan struct{}) error {
 		}
 	}()
 
-	glog.Info("RUN: ExpectOperatorAvailable")
-	if err := testConfig.ExpectOperatorAvailable(ctx); err != nil {
-		glog.Errorf("FAIL: ExpectOperatorAvailable: %v", err)
-		return err
+	if false {
+		glog.Info("RUN: ExpectOperatorAvailable")
+		if err := testConfig.ExpectOperatorAvailable(ctx); err != nil {
+			glog.Errorf("FAIL: ExpectOperatorAvailable: %v", err)
+			return err
+		}
+		glog.Info("PASS: ExpectOperatorAvailable")
 	}
-	glog.Info("PASS: ExpectOperatorAvailable")
 
 	glog.Info("RUN: ExpectAutoscalerScalesOut")
 	if err := testConfig.ExpectAutoscalerScalesOut(ctx); err != nil {
