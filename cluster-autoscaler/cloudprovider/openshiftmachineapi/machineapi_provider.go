@@ -62,7 +62,7 @@ func (p *provider) NodeGroups() []cloudprovider.NodeGroup {
 		return nil
 	}
 	for _, ng := range nodegroups {
-		glog.Infof("discovered node group: %s", ng.Debug())
+		glog.V(4).Infof("discovered node group: %s", ng.Debug())
 	}
 	return nodegroups
 }
