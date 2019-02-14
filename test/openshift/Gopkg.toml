@@ -4,7 +4,7 @@
 
 [[constraint]]
   name = "github.com/openshift/cluster-autoscaler-operator"
-  version = "0.0.0"
+  revision = "4bcabb30b24b7289ea2b935f5a9cf0b89784835d"
 
 [[constraint]]
   name = "github.com/openshift/cluster-api"
