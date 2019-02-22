@@ -29,6 +29,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	fakekube "k8s.io/client-go/kubernetes/fake"
 )
 
@@ -59,6 +60,50 @@ func mustCreateTestController(t *testing.T, config testControllerConfig) (*machi
 	return controller, func() {
 		close(stopCh)
 	}
+}
+
+func makeMachineOwner(i int, replicaCount int, annotations map[string]string, ownedByMachineDeployment bool) (*v1beta1.MachineSet, *v1beta1.MachineDeployment) {
+	machineSet := v1beta1.MachineSet{
+		TypeMeta: v1.TypeMeta{
+			Kind: "MachineSet",
+		},
+		ObjectMeta: v1.ObjectMeta{
+			Name:      fmt.Sprintf("machineset-%d", i),
+			Namespace: "test-namespace",
+			UID:       types.UID(fmt.Sprintf("machineset-%d", i)),
+		},
+		Spec: v1beta1.MachineSetSpec{
+			Replicas: int32ptr(int32(replicaCount)),
+		},
+	}
+
+	if !ownedByMachineDeployment {
+		machineSet.ObjectMeta.Annotations = annotations
+		return &machineSet, nil
+	}
+
+	machineDeployment := v1beta1.MachineDeployment{
+		TypeMeta: v1.TypeMeta{
+			Kind: "MachineDeployment",
+		},
+		ObjectMeta: v1.ObjectMeta{
+			Name:        fmt.Sprintf("machinedeployment-%d", i),
+			Namespace:   "test-namespace",
+			UID:         types.UID(fmt.Sprintf("machinedeployment-%d", i)),
+			Annotations: annotations,
+		},
+		Spec: v1beta1.MachineDeploymentSpec{
+			Replicas: int32ptr(int32(replicaCount)),
+		},
+	}
+
+	machineSet.OwnerReferences = append(machineSet.OwnerReferences, v1.OwnerReference{
+		Name: machineDeployment.Name,
+		Kind: machineDeployment.Kind,
+		UID:  machineDeployment.UID,
+	})
+
+	return &machineSet, &machineDeployment
 }
 
 func TestControllerFindMachineByID(t *testing.T) {
@@ -926,5 +971,90 @@ func TestControllerNodeGroupsWithMachineSets(t *testing.T) {
 		if actual := len(nodegroups); actual != tc.nodegroups {
 			t.Errorf("expected %d, got %d", tc.nodegroups, actual)
 		}
+	}
+}
+
+func TestControllerNodeGroupForNodeLookup(t *testing.T) {
+	for i, tc := range []struct {
+		description    string
+		annotations    map[string]string
+		lookupSucceeds bool
+	}{{
+		description:    "lookup is nil because no annotations",
+		annotations:    map[string]string{},
+		lookupSucceeds: false,
+	}, {
+		description: "lookup is nil because scaling range == 0",
+		annotations: map[string]string{
+			nodeGroupMinSizeAnnotationKey: "1",
+			nodeGroupMaxSizeAnnotationKey: "1",
+		},
+		lookupSucceeds: false,
+	}, {
+		description: "lookup is successful because scaling range >= 1",
+		annotations: map[string]string{
+			nodeGroupMinSizeAnnotationKey: "1",
+			nodeGroupMaxSizeAnnotationKey: "2",
+		},
+		lookupSucceeds: true,
+	}} {
+		test := func(t *testing.T, i int, annotations map[string]string, useMachineDeployment bool) {
+			t.Helper()
+
+			machineSet, machineDeployment := makeMachineOwner(i, 1, annotations, useMachineDeployment)
+
+			node, machine := makeLinkedNodeAndMachine(i, v1.OwnerReference{
+				Name: machineSet.Name,
+				Kind: machineSet.Kind,
+				UID:  machineSet.UID,
+			})
+
+			machineObjects := []runtime.Object{
+				machine,
+				machineSet,
+			}
+
+			if machineDeployment != nil {
+				machineObjects = append(machineObjects, machineDeployment)
+			}
+
+			controller, stop := mustCreateTestController(t, testControllerConfig{
+				nodeObjects:    []runtime.Object{node},
+				machineObjects: machineObjects,
+			})
+			defer stop()
+
+			ng, err := controller.nodeGroupForNode(node)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if ng == nil && tc.lookupSucceeds {
+				t.Fatalf("expected nil from lookup")
+			}
+
+			if ng != nil && !tc.lookupSucceeds {
+				t.Fatalf("expected non-nil from lookup")
+			}
+
+			if tc.lookupSucceeds {
+				var expected string
+
+				if useMachineDeployment {
+					expected = path.Join(machineDeployment.Namespace, machineDeployment.Name)
+				} else {
+					expected = path.Join(machineSet.Namespace, machineSet.Name)
+				}
+
+				if actual := ng.Id(); actual != expected {
+					t.Errorf("expected %q, got %q", expected, actual)
+				}
+			}
+		}
+
+		t.Run(tc.description, func(t *testing.T) {
+			test(t, i, tc.annotations, true) // with MachineDeployment
+			test(t, i, tc.annotations, false)
+		})
 	}
 }
