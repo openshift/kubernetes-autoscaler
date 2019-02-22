@@ -63,6 +63,66 @@ func int32ptr(v int32) *int32 {
 	return &v
 }
 
+func makeMachineSet(i int, replicaCount int, annotations map[string]string) *v1beta1.MachineSet {
+	return &v1beta1.MachineSet{
+		TypeMeta: v1.TypeMeta{
+			Kind: "MachineSet",
+		},
+		ObjectMeta: v1.ObjectMeta{
+			Name:        fmt.Sprintf("machineset-%d", i),
+			Namespace:   "test-namespace",
+			UID:         types.UID(fmt.Sprintf("machineset-%d", i)),
+			Annotations: annotations,
+		},
+		Spec: v1beta1.MachineSetSpec{
+			Replicas: int32ptr(int32(replicaCount)),
+		},
+	}
+}
+
+// makeLinkedNodeAndMachine creates a node and machine. The machine
+// has its NodeRef set to the new node and the new machine's owner
+// reference is set to owner.
+func makeLinkedNodeAndMachine(i int, owner v1.OwnerReference) (*apiv1.Node, *v1beta1.Machine) {
+	node := &apiv1.Node{
+		TypeMeta: v1.TypeMeta{
+			Kind: "Node",
+		},
+		ObjectMeta: v1.ObjectMeta{
+			Name: fmt.Sprintf("node-%d", i),
+			Annotations: map[string]string{
+				machineAnnotationKey: fmt.Sprintf("test-namespace/machine-%d", i),
+			},
+		},
+		Spec: apiv1.NodeSpec{
+			ProviderID: fmt.Sprintf("nodeid-%d", i),
+		},
+	}
+
+	machine := &v1beta1.Machine{
+		TypeMeta: v1.TypeMeta{
+			Kind: "Machine",
+		},
+		ObjectMeta: v1.ObjectMeta{
+			Name:      fmt.Sprintf("machine-%d", i),
+			Namespace: "test-namespace",
+			OwnerReferences: []v1.OwnerReference{{
+				Name: owner.Name,
+				Kind: owner.Kind,
+				UID:  owner.UID,
+			}},
+		},
+		Status: v1beta1.MachineStatus{
+			NodeRef: &apiv1.ObjectReference{
+				Kind: node.Kind,
+				Name: node.Name,
+			},
+		},
+	}
+
+	return node, machine
+}
+
 func testNewNodeGroupProperties(t *testing.T, ng *nodegroup, tc nodeGroupConstructorTestCase) {
 	t.Helper()
 
@@ -603,6 +663,10 @@ func TestNodeGroupMachineSetDeleteNodes(t *testing.T) {
 			Name:      "machineset",
 			Namespace: "test-namespace",
 			UID:       "abcdef12-a3d5-a45f-887b-6b49aa8fc218",
+			Annotations: map[string]string{
+				nodeGroupMinSizeAnnotationKey: "1",
+				nodeGroupMaxSizeAnnotationKey: "3",
+			},
 		},
 		Spec: v1beta1.MachineSetSpec{
 			Replicas: int32ptr(int32(len(machines))),
@@ -703,70 +767,29 @@ func TestNodeGroupMachineSetDeleteNodes(t *testing.T) {
 }
 
 func TestNodeGroupMachineSetDeleteNodesWithMismatchedNodes(t *testing.T) {
-	makeMachineSet := func(i int, replicaCount int) *v1beta1.MachineSet {
-		name := fmt.Sprintf("machineset-%d", i)
-		return &v1beta1.MachineSet{
-			TypeMeta: v1.TypeMeta{
-				Kind: "MachineSet",
-			},
-			ObjectMeta: v1.ObjectMeta{
-				Name:      name,
-				Namespace: "test-namespace",
-				UID:       types.UID(name),
-			},
-			Spec: v1beta1.MachineSetSpec{
-				Replicas: int32ptr(int32(replicaCount)),
-			},
-		}
-	}
-
-	// Creates a machine and node; links the machine and node.
-	// Additionally links the machine with machineSet.
-	makeLinkedMachine := func(i int, machineSet *v1beta1.MachineSet) (*apiv1.Node, *v1beta1.Machine) {
-		node := &apiv1.Node{
-			TypeMeta: v1.TypeMeta{
-				Kind: "Node",
-			},
-			ObjectMeta: v1.ObjectMeta{
-				Name: fmt.Sprintf("node-%d", i),
-				Annotations: map[string]string{
-					machineAnnotationKey: fmt.Sprintf("test-namespace/machine-%d", i),
-				},
-			},
-			Spec: apiv1.NodeSpec{
-				ProviderID: fmt.Sprintf("nodeid-%d", i),
-			},
-		}
-
-		machine := &v1beta1.Machine{
-			TypeMeta: v1.TypeMeta{
-				Kind: "Machine",
-			},
-			ObjectMeta: v1.ObjectMeta{
-				Name:      fmt.Sprintf("machine-%d", i),
-				Namespace: "test-namespace",
-				OwnerReferences: []v1.OwnerReference{{
-					Name: machineSet.Name,
-					Kind: machineSet.Kind,
-					UID:  machineSet.UID,
-				}},
-			},
-			Status: v1beta1.MachineStatus{
-				NodeRef: &apiv1.ObjectReference{
-					Kind: node.Kind,
-					Name: node.Name,
-				},
-			},
-		}
-
-		return node, machine
-	}
-
 	nreplicas := 1
-	machineSet0 := makeMachineSet(0, nreplicas)
-	machineSet1 := makeMachineSet(1, nreplicas)
-	node0, machine0 := makeLinkedMachine(0, machineSet0)
-	node1, machine1 := makeLinkedMachine(1, machineSet1)
+
+	machineSet0 := makeMachineSet(0, nreplicas, map[string]string{
+		nodeGroupMinSizeAnnotationKey: "1",
+		nodeGroupMaxSizeAnnotationKey: "3",
+	})
+
+	machineSet1 := makeMachineSet(1, nreplicas, map[string]string{
+		nodeGroupMinSizeAnnotationKey: "1",
+		nodeGroupMaxSizeAnnotationKey: "3",
+	})
+
+	node0, machine0 := makeLinkedNodeAndMachine(0, v1.OwnerReference{
+		Name: machineSet0.Name,
+		Kind: machineSet0.Kind,
+		UID:  machineSet0.UID,
+	})
+
+	node1, machine1 := makeLinkedNodeAndMachine(1, v1.OwnerReference{
+		Name: machineSet1.Name,
+		Kind: machineSet1.Kind,
+		UID:  machineSet1.UID,
+	})
 
 	controller, stop := mustCreateTestController(t, testControllerConfig{
 		nodeObjects: []runtime.Object{
