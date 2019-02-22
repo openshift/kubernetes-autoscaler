@@ -406,6 +406,12 @@ func (c *machineController) nodeGroupForNode(node *apiv1.Node) (cloudprovider.No
 			if err != nil {
 				return nil, fmt.Errorf("failed to build nodegroup for node %q: %v", node.Name, err)
 			}
+			// We don't scale from 0 so nodes must belong
+			// to a nodegroup that has a scale size of at
+			// least 1.
+			if nodegroup.MaxSize()-nodegroup.MinSize() < 1 {
+				return nil, nil
+			}
 			return nodegroup, nil
 		}
 	}
@@ -413,6 +419,12 @@ func (c *machineController) nodeGroupForNode(node *apiv1.Node) (cloudprovider.No
 	nodegroup, err := newNodegroupFromMachineSet(c, machineSet)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build nodegroup for node %q: %v", node.Name, err)
+	}
+
+	// We don't scale from 0 so nodes must belong to a nodegroup
+	// that has a scale size of at least 1.
+	if nodegroup.MaxSize()-nodegroup.MinSize() < 1 {
+		return nil, nil
 	}
 
 	glog.V(4).Infof("node %q is in nodegroup %q", node.Name, machineSet.Name)
