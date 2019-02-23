@@ -24,7 +24,6 @@ import (
 	machinev1beta1 "github.com/openshift/cluster-api/pkg/client/clientset_generated/clientset/typed/machine/v1beta1"
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
-	kubeclient "k8s.io/client-go/kubernetes"
 	schedulercache "k8s.io/kubernetes/pkg/scheduler/cache"
 )
 
@@ -34,7 +33,6 @@ const (
 
 type nodegroup struct {
 	machineapiClient  machinev1beta1.MachineV1beta1Interface
-	kubeclient        kubeclient.Interface
 	machineController *machineController
 	scalableResource  scalableResource
 }

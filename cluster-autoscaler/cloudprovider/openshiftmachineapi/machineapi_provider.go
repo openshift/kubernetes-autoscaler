@@ -22,7 +22,6 @@ import (
 
 	"github.com/golang/glog"
 	clusterclientset "github.com/openshift/cluster-api/pkg/client/clientset_generated/clientset"
-	machinev1beta1 "github.com/openshift/cluster-api/pkg/client/clientset_generated/clientset/typed/machine/v1beta1"
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
@@ -41,10 +40,9 @@ const (
 var _ cloudprovider.CloudProvider = (*provider)(nil)
 
 type provider struct {
-	controller       *machineController
-	providerName     string
-	resourceLimiter  *cloudprovider.ResourceLimiter
-	machineapiClient machinev1beta1.MachineV1beta1Interface
+	controller      *machineController
+	providerName    string
+	resourceLimiter *cloudprovider.ResourceLimiter
 }
 
 func (p *provider) Name() string {
