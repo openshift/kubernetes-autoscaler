@@ -1,15 +1,21 @@
+# Force dep to vendor the code generators, which aren't imported just used at dev time.
+required = [
+  "github.com/openshift/cluster-api-actuator-pkg/pkg/e2e/actuators",
+  "github.com/openshift/cluster-api-actuator-pkg/pkg/e2e/autoscaler",
+  "github.com/openshift/cluster-api-actuator-pkg/pkg/e2e/infra",
+  "github.com/openshift/cluster-api-actuator-pkg/pkg/e2e/operators",
+  "github.com/openshift/cluster-autoscaler-operator/pkg/apis",
+  "github.com/onsi/ginkgo",
+  "github.com/onsi/gomega",
+  "github.com/golang/glog",
+  "github.com/openshift/cluster-api/pkg/apis/machine/v1beta1",
+  "k8s.io/client-go/kubernetes/scheme",
+  "github.com/openshift/api/config/v1",
+]
+
 [[constraint]]
   branch = "master"
   name = "github.com/golang/glog"
-
-[[constraint]]
-  name = "github.com/openshift/cluster-autoscaler-operator"
-  revision = "4bcabb30b24b7289ea2b935f5a9cf0b89784835d"
-
-[[constraint]]
-  name = "github.com/openshift/cluster-api"
-  # This is temporoary while we finish the pivot to OpenShift types.
-  revision = "91fca585a85b163ddfd119fd09c128c9feadddca"
 
 [[override]]
   name = "github.com/json-iterator/go"
@@ -41,6 +47,17 @@
   revision = "a67a5036fa19242e7ca874420224bc26753b811f"
   # version = "v1.6.0"
 
+# We need to specify fsnotify source to avoid dep panic
+# https://github.com/golang/dep/issues/1799
+[[override]]
+  name = "gopkg.in/fsnotify.v1"
+  source = "https://github.com/fsnotify/fsnotify.git"
+
 [prune]
   go-tests = true
   unused-packages = true
+
+  [[prune.project]]
+    name = "github.com/openshift/cluster-api-actuator-pkg"
+    unused-packages = false
+    go-tests = false
