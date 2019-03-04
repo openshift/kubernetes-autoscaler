@@ -76,7 +76,11 @@ func (r machineDeploymentScalableResource) Nodes() ([]string, error) {
 }
 
 func (r machineDeploymentScalableResource) Replicas() (int, error) {
-	return int(pointer.Int32PtrDerefOr(r.machineDeployment.Spec.Replicas, 0)), nil
+	machineDeployment, err := r.machineapiClient.MachineDeployments(r.Namespace()).Get(r.Name(), metav1.GetOptions{})
+	if err != nil {
+		return 0, fmt.Errorf("unable to get MachineDeployment %q: %v", r.ID(), err)
+	}
+	return int(pointer.Int32PtrDerefOr(machineDeployment.Spec.Replicas, 0)), nil
 }
 
 func (r machineDeploymentScalableResource) SetSize(nreplicas int32) error {

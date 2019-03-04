@@ -61,7 +61,11 @@ func (r machineSetScalableResource) Nodes() ([]string, error) {
 }
 
 func (r machineSetScalableResource) Replicas() (int, error) {
-	return int(pointer.Int32PtrDerefOr(r.machineSet.Spec.Replicas, 0)), nil
+	machineSet, err := r.machineapiClient.MachineSets(r.Namespace()).Get(r.Name(), metav1.GetOptions{})
+	if err != nil {
+		return 0, fmt.Errorf("unable to get MachineSet %q: %v", r.ID(), err)
+	}
+	return int(pointer.Int32PtrDerefOr(machineSet.Spec.Replicas, 0)), nil
 }
 
 func (r machineSetScalableResource) SetSize(nreplicas int32) error {
