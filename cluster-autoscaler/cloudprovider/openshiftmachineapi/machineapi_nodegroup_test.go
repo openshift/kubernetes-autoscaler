@@ -179,16 +179,8 @@ func testNewNodeGroupProperties(t *testing.T, ng *nodegroup, tc nodeGroupConstru
 	}
 }
 
-func testNewMachineSetHelper(t *testing.T, testnum int, tc nodeGroupConstructorTestCase) {
+func testNewMachineSetHelper(t *testing.T, tc nodeGroupConstructorTestCase) {
 	t.Helper()
-
-	controller, stop := mustCreateTestController(t, testControllerConfig{})
-	defer stop()
-
-	tc.name = fmt.Sprintf("%d", testnum)
-	tc.namespace = t.Name()
-	tc.id = path.Join(tc.namespace, tc.name)
-	tc.debug = fmt.Sprintf("%s (min: %d, max: %d, replicas: %d)", path.Join(tc.namespace, tc.name), tc.minSize, tc.maxSize, tc.replicas)
 
 	machineSet := &v1beta1.MachineSet{
 		TypeMeta: v1.TypeMeta{
@@ -203,6 +195,13 @@ func testNewMachineSetHelper(t *testing.T, testnum int, tc nodeGroupConstructorT
 			Replicas: &tc.replicas,
 		},
 	}
+
+	controller, stop := mustCreateTestController(t, testControllerConfig{
+		machineObjects: []runtime.Object{
+			machineSet,
+		},
+	})
+	defer stop()
 
 	ng, err := newNodegroupFromMachineSet(controller, machineSet)
 
@@ -219,16 +218,8 @@ func testNewMachineSetHelper(t *testing.T, testnum int, tc nodeGroupConstructorT
 	}
 }
 
-func testNewMachineDeploymentHelper(t *testing.T, testnum int, tc nodeGroupConstructorTestCase) {
+func testNewMachineDeploymentHelper(t *testing.T, tc nodeGroupConstructorTestCase) {
 	t.Helper()
-
-	controller, stop := mustCreateTestController(t, testControllerConfig{})
-	defer stop()
-
-	tc.name = fmt.Sprintf("%d", testnum)
-	tc.namespace = t.Name()
-	tc.id = path.Join(tc.namespace, tc.name)
-	tc.debug = fmt.Sprintf("%s (min: %d, max: %d, replicas: %d)", path.Join(tc.namespace, tc.name), tc.minSize, tc.maxSize, tc.replicas)
 
 	machineDeployment := &v1beta1.MachineDeployment{
 		TypeMeta: v1.TypeMeta{
@@ -243,6 +234,13 @@ func testNewMachineDeploymentHelper(t *testing.T, testnum int, tc nodeGroupConst
 			Replicas: &tc.replicas,
 		},
 	}
+
+	controller, stop := mustCreateTestController(t, testControllerConfig{
+		machineObjects: []runtime.Object{
+			machineDeployment,
+		},
+	})
+	defer stop()
 
 	ng, err := newNodegroupFromMachineDeployment(controller, machineDeployment)
 
@@ -313,8 +311,13 @@ func TestNodeGroupNewNodeGroup(t *testing.T) {
 	}} {
 		t.Logf("test #%d: %s", i, tc.description)
 
-		testNewMachineSetHelper(t, i, tc)
-		testNewMachineDeploymentHelper(t, i, tc)
+		tc.name = fmt.Sprintf("%d", i)
+		tc.namespace = "test-namespace"
+		tc.id = path.Join(tc.namespace, tc.name)
+		tc.debug = fmt.Sprintf("%s (min: %d, max: %d, replicas: %d)", path.Join(tc.namespace, tc.name), tc.minSize, tc.maxSize, tc.replicas)
+
+		testNewMachineSetHelper(t, tc)
+		testNewMachineDeploymentHelper(t, tc)
 	}
 }
 
