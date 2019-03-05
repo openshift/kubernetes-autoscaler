@@ -66,8 +66,8 @@ func (r *machineSetScalableResource) Nodes() ([]string, error) {
 	return r.controller.machineSetNodeNames(machineSet)
 }
 
-func (r *machineSetScalableResource) Replicas() (int, error) {
-	return int(r.replicas), nil
+func (r *machineSetScalableResource) TargetSize() (int32, error) {
+	return r.replicas, nil
 }
 
 func (r *machineSetScalableResource) SetSize(nreplicas int32) error {

@@ -41,6 +41,6 @@ type scalableResource interface {
 	// SetSize() sets the replica count of the resource
 	SetSize(nreplicas int32) error
 
-	// Replicas returns the current replica count of the resource
-	Replicas() (int, error)
+	// TargetSize returns the current replica count of the resource
+	TargetSize() (int32, error)
 }

@@ -82,8 +82,8 @@ func (r *machineDeploymentScalableResource) Nodes() ([]string, error) {
 	return result, nil
 }
 
-func (r *machineDeploymentScalableResource) Replicas() (int, error) {
-	return int(r.replicas), nil
+func (r *machineDeploymentScalableResource) TargetSize() (int32, error) {
+	return r.replicas, nil
 }
 
 func (r *machineDeploymentScalableResource) SetSize(nreplicas int32) error {
