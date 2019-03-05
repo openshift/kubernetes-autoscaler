@@ -32,43 +32,40 @@ type machineSetScalableResource struct {
 	machineSet       *v1beta1.MachineSet
 	maxSize          int
 	minSize          int
+	replicas         int32
 }
 
 var _ scalableResource = (*machineSetScalableResource)(nil)
 
-func (r machineSetScalableResource) ID() string {
+func (r *machineSetScalableResource) ID() string {
 	return path.Join(r.Namespace(), r.Name())
 }
 
-func (r machineSetScalableResource) MaxSize() int {
+func (r *machineSetScalableResource) MaxSize() int {
 	return r.maxSize
 }
 
-func (r machineSetScalableResource) MinSize() int {
+func (r *machineSetScalableResource) MinSize() int {
 	return r.minSize
 }
 
-func (r machineSetScalableResource) Name() string {
+func (r *machineSetScalableResource) Name() string {
 	return r.machineSet.Name
 }
 
-func (r machineSetScalableResource) Namespace() string {
+func (r *machineSetScalableResource) Namespace() string {
 	return r.machineSet.Namespace
 }
 
-func (r machineSetScalableResource) Nodes() ([]string, error) {
+func (r *machineSetScalableResource) Nodes() ([]string, error) {
 	return r.controller.machineSetNodeNames(r.machineSet)
 }
 
-func (r machineSetScalableResource) Replicas() (int, error) {
-	machineSet, err := r.machineapiClient.MachineSets(r.Namespace()).Get(r.Name(), metav1.GetOptions{})
-	if err != nil {
-		return 0, fmt.Errorf("unable to get MachineSet %q: %v", r.ID(), err)
-	}
-	return int(pointer.Int32PtrDerefOr(machineSet.Spec.Replicas, 0)), nil
+func (r *machineSetScalableResource) Replicas() (int, error) {
+	return int(r.replicas), nil
 }
 
-func (r machineSetScalableResource) SetSize(nreplicas int32) error {
+func (r *machineSetScalableResource) SetSize(nreplicas int32) error {
 	machineSet, err := r.machineapiClient.MachineSets(r.Namespace()).Get(r.Name(), metav1.GetOptions{})
 	if err != nil {
 		return fmt.Errorf("unable to get MachineSet %q: %v", r.ID(), err)
@@ -81,6 +78,8 @@ func (r machineSetScalableResource) SetSize(nreplicas int32) error {
 	if err != nil {
 		return fmt.Errorf("unable to update number of replicas of machineset %q: %v", r.ID(), err)
 	}
+
+	r.replicas = nreplicas
 	return nil
 }
 
@@ -96,5 +95,6 @@ func newMachineSetScalableResource(controller *machineController, machineSet *v1
 		machineSet:       machineSet,
 		maxSize:          maxSize,
 		minSize:          minSize,
+		replicas:         pointer.Int32PtrDerefOr(machineSet.Spec.Replicas, 0),
 	}, nil
 }

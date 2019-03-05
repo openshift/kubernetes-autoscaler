@@ -32,31 +32,32 @@ type machineDeploymentScalableResource struct {
 	machineDeployment *v1beta1.MachineDeployment
 	maxSize           int
 	minSize           int
+	replicas          int32
 }
 
 var _ scalableResource = (*machineDeploymentScalableResource)(nil)
 
-func (r machineDeploymentScalableResource) ID() string {
+func (r *machineDeploymentScalableResource) ID() string {
 	return path.Join(r.Namespace(), r.Name())
 }
 
-func (r machineDeploymentScalableResource) MaxSize() int {
+func (r *machineDeploymentScalableResource) MaxSize() int {
 	return r.maxSize
 }
 
-func (r machineDeploymentScalableResource) MinSize() int {
+func (r *machineDeploymentScalableResource) MinSize() int {
 	return r.minSize
 }
 
-func (r machineDeploymentScalableResource) Name() string {
+func (r *machineDeploymentScalableResource) Name() string {
 	return r.machineDeployment.Name
 }
 
-func (r machineDeploymentScalableResource) Namespace() string {
+func (r *machineDeploymentScalableResource) Namespace() string {
 	return r.machineDeployment.Namespace
 }
 
-func (r machineDeploymentScalableResource) Nodes() ([]string, error) {
+func (r *machineDeploymentScalableResource) Nodes() ([]string, error) {
 	result := []string{}
 
 	if err := r.controller.filterAllMachineSets(func(machineSet *v1beta1.MachineSet) error {
@@ -75,15 +76,11 @@ func (r machineDeploymentScalableResource) Nodes() ([]string, error) {
 	return result, nil
 }
 
-func (r machineDeploymentScalableResource) Replicas() (int, error) {
-	machineDeployment, err := r.machineapiClient.MachineDeployments(r.Namespace()).Get(r.Name(), metav1.GetOptions{})
-	if err != nil {
-		return 0, fmt.Errorf("unable to get MachineDeployment %q: %v", r.ID(), err)
-	}
-	return int(pointer.Int32PtrDerefOr(machineDeployment.Spec.Replicas, 0)), nil
+func (r *machineDeploymentScalableResource) Replicas() (int, error) {
+	return int(r.replicas), nil
 }
 
-func (r machineDeploymentScalableResource) SetSize(nreplicas int32) error {
+func (r *machineDeploymentScalableResource) SetSize(nreplicas int32) error {
 	machineDeployment, err := r.machineapiClient.MachineDeployments(r.Namespace()).Get(r.Name(), metav1.GetOptions{})
 	if err != nil {
 		return fmt.Errorf("unable to get MachineDeployment %q: %v", r.ID(), err)
@@ -96,6 +93,8 @@ func (r machineDeploymentScalableResource) SetSize(nreplicas int32) error {
 	if err != nil {
 		return fmt.Errorf("unable to update number of replicas of machineDeployment %q: %v", r.ID(), err)
 	}
+
+	r.replicas = pointer.Int32PtrDerefOr(machineDeployment.Spec.Replicas, 0)
 	return nil
 }
 
@@ -111,5 +110,6 @@ func newMachineDeploymentScalableResource(controller *machineController, machine
 		machineDeployment: machineDeployment,
 		maxSize:           maxSize,
 		minSize:           minSize,
+		replicas:          pointer.Int32PtrDerefOr(machineDeployment.Spec.Replicas, 0),
 	}, nil
 }
