@@ -29,7 +29,8 @@ import (
 type machineSetScalableResource struct {
 	machineapiClient machinev1beta1.MachineV1beta1Interface
 	controller       *machineController
-	machineSet       *v1beta1.MachineSet
+	name             string
+	namespace        string
 	maxSize          int
 	minSize          int
 	replicas         int32
@@ -50,15 +51,19 @@ func (r *machineSetScalableResource) MinSize() int {
 }
 
 func (r *machineSetScalableResource) Name() string {
-	return r.machineSet.Name
+	return r.name
 }
 
 func (r *machineSetScalableResource) Namespace() string {
-	return r.machineSet.Namespace
+	return r.namespace
 }
 
 func (r *machineSetScalableResource) Nodes() ([]string, error) {
-	return r.controller.machineSetNodeNames(r.machineSet)
+	machineSet, err := r.machineapiClient.MachineSets(r.namespace).Get(r.name, metav1.GetOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("unable to get MachineSet %q: %v", r.ID(), err)
+	}
+	return r.controller.machineSetNodeNames(machineSet)
 }
 
 func (r *machineSetScalableResource) Replicas() (int, error) {
@@ -66,7 +71,7 @@ func (r *machineSetScalableResource) Replicas() (int, error) {
 }
 
 func (r *machineSetScalableResource) SetSize(nreplicas int32) error {
-	machineSet, err := r.machineapiClient.MachineSets(r.Namespace()).Get(r.Name(), metav1.GetOptions{})
+	machineSet, err := r.machineapiClient.MachineSets(r.namespace).Get(r.name, metav1.GetOptions{})
 	if err != nil {
 		return fmt.Errorf("unable to get MachineSet %q: %v", r.ID(), err)
 	}
@@ -92,7 +97,8 @@ func newMachineSetScalableResource(controller *machineController, machineSet *v1
 	return &machineSetScalableResource{
 		machineapiClient: controller.clusterClientset.MachineV1beta1(),
 		controller:       controller,
-		machineSet:       machineSet,
+		name:             machineSet.Name,
+		namespace:        machineSet.Namespace,
 		maxSize:          maxSize,
 		minSize:          minSize,
 		replicas:         pointer.Int32PtrDerefOr(machineSet.Spec.Replicas, 0),

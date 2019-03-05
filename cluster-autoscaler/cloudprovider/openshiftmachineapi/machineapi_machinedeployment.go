@@ -27,18 +27,19 @@ import (
 )
 
 type machineDeploymentScalableResource struct {
-	machineapiClient  machinev1beta1.MachineV1beta1Interface
-	controller        *machineController
-	machineDeployment *v1beta1.MachineDeployment
-	maxSize           int
-	minSize           int
-	replicas          int32
+	machineapiClient machinev1beta1.MachineV1beta1Interface
+	controller       *machineController
+	name             string
+	namespace        string
+	maxSize          int
+	minSize          int
+	replicas         int32
 }
 
 var _ scalableResource = (*machineDeploymentScalableResource)(nil)
 
 func (r *machineDeploymentScalableResource) ID() string {
-	return path.Join(r.Namespace(), r.Name())
+	return path.Join(r.namespace, r.name)
 }
 
 func (r *machineDeploymentScalableResource) MaxSize() int {
@@ -50,18 +51,23 @@ func (r *machineDeploymentScalableResource) MinSize() int {
 }
 
 func (r *machineDeploymentScalableResource) Name() string {
-	return r.machineDeployment.Name
+	return r.name
 }
 
 func (r *machineDeploymentScalableResource) Namespace() string {
-	return r.machineDeployment.Namespace
+	return r.namespace
 }
 
 func (r *machineDeploymentScalableResource) Nodes() ([]string, error) {
+	machineDeployment, err := r.machineapiClient.MachineDeployments(r.Namespace()).Get(r.Name(), metav1.GetOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("unable to get MachineDeployment %q: %v", r.ID(), err)
+	}
+
 	result := []string{}
 
 	if err := r.controller.filterAllMachineSets(func(machineSet *v1beta1.MachineSet) error {
-		if machineSetIsOwnedByMachineDeployment(machineSet, r.machineDeployment) {
+		if machineSetIsOwnedByMachineDeployment(machineSet, machineDeployment) {
 			names, err := r.controller.machineSetNodeNames(machineSet)
 			if err != nil {
 				return err
@@ -105,11 +111,12 @@ func newMachineDeploymentScalableResource(controller *machineController, machine
 	}
 
 	return &machineDeploymentScalableResource{
-		machineapiClient:  controller.clusterClientset.MachineV1beta1(),
-		controller:        controller,
-		machineDeployment: machineDeployment,
-		maxSize:           maxSize,
-		minSize:           minSize,
-		replicas:          pointer.Int32PtrDerefOr(machineDeployment.Spec.Replicas, 0),
+		machineapiClient: controller.clusterClientset.MachineV1beta1(),
+		controller:       controller,
+		name:             machineDeployment.Name,
+		namespace:        machineDeployment.Namespace,
+		maxSize:          maxSize,
+		minSize:          minSize,
+		replicas:         pointer.Int32PtrDerefOr(machineDeployment.Spec.Replicas, 0),
 	}, nil
 }
