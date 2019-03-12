@@ -306,17 +306,13 @@
 
 [[projects]]
   branch = "master"
-  digest = "1:58c36697cf6c2927addf3435cbc27002f7440473d62dc1ea2413ad07af01aa91"
+  digest = "1:ee97ac0227ac301fd540cd73c7f7c7547d4173b5e7df8390efb1d196c6f22a97"
   name = "github.com/openshift/api"
-  packages = [
-    "config/v1",
-    "security/v1",
-  ]
+  packages = ["config/v1"]
   pruneopts = "UT"
   revision = "c58918e29f89383d2e1467bad7156e2b0c49497f"
 
 [[projects]]
-  branch = "master"
   digest = "1:923b72a548291930286c5c4caf8ba7da8c41819a5b3bdb28e3ad66ca5cddfd66"
   name = "github.com/openshift/cluster-api"
   packages = [
@@ -337,7 +333,7 @@
 
 [[projects]]
   branch = "master"
-  digest = "1:eaea9bd99a16cae8d58a2c91d40c46b902deb76a1ab850ec4b75ce90ebdbc9f0"
+  digest = "1:fb272c1a3d6a0e8925f203ef47e13bcfbefa2217a79577ae582ad8b552fe5e18"
   name = "github.com/openshift/cluster-api-actuator-pkg"
   packages = [
     "pkg/e2e/actuators",
@@ -349,7 +345,7 @@
     "pkg/types",
   ]
   pruneopts = ""
-  revision = "46c9e34b233ddc7e2f952e74226bb6af792748cc"
+  revision = "b418c2172440181ab972ed820b54af0daede57e5"
 
 [[projects]]
   branch = "master"
@@ -363,11 +359,12 @@
   revision = "1df9eecb2d95391e36a0269669e199c2943fde66"
 
 [[projects]]
-  digest = "1:0e3b7a9cf6390cfcc247a67c517eb716ed7918869ac2f58adb5e4926dff97a7d"
-  name = "github.com/openshift/cluster-version-operator"
-  packages = ["lib/resourcemerge"]
+  branch = "master"
+  digest = "1:fb1baca237786871362ee17ee7d8d3bbda8345adc517b387e00b34467080dca7"
+  name = "github.com/openshift/library-go"
+  packages = ["pkg/config/clusteroperator/v1helpers"]
   pruneopts = "UT"
-  revision = "70c0232ed95e4b0e0cd78efdcdec6f2410f592bb"
+  revision = "51a1e47ef123a462296101395ff83998715da643"
 
 [[projects]]
   digest = "1:e5d0bd87abc2781d14e274807a470acd180f0499f8bf5bb18606e9ec22ad9de9"
@@ -665,7 +662,7 @@
   revision = "103fd098999dc9c0c88536f5c9ad2e5da39373ae"
 
 [[projects]]
-  digest = "1:cd6bfafd9a23bafb0d8d317312021b725450dabaf5573a1d5d041af94e89a824"
+  digest = "1:026709ca5861b8b90b58514d6e8f543ff0bb677b99d1278311a03d5376fc64fa"
   name = "k8s.io/client-go"
   packages = [
     "discovery",
@@ -709,6 +706,14 @@
     "rest",
     "rest/watch",
     "restmapper",
+    "scale",
+    "scale/scheme",
+    "scale/scheme/appsint",
+    "scale/scheme/appsv1beta1",
+    "scale/scheme/appsv1beta2",
+    "scale/scheme/autoscalingv1",
+    "scale/scheme/extensionsint",
+    "scale/scheme/extensionsv1beta1",
     "tools/auth",
     "tools/cache",
     "tools/clientcmd",
@@ -743,17 +748,6 @@
   version = "v0.2.0"
 
 [[projects]]
-  digest = "1:e814f29315f3aa552628cf42febdd75ada6b0223af4f7a78697e9be7934dc27f"
-  name = "k8s.io/kube-aggregator"
-  packages = [
-    "pkg/apis/apiregistration",
-    "pkg/apis/apiregistration/v1",
-  ]
-  pruneopts = "UT"
-  revision = "89cd614e9090a2f1e78316ed459857c49c55d276"
-  version = "kubernetes-1.11.1"
-
-[[projects]]
   branch = "master"
   digest = "1:0728020defbd5d26e88ec5f6a9e844b6f2982998bad1356b649ccc9469e0aa89"
   name = "k8s.io/kube-openapi"
@@ -763,6 +757,14 @@
   ]
   pruneopts = "UT"
   revision = "d50a959ae76a85c7c262a9767ef29f37093c2b8a"
+
+[[projects]]
+  branch = "master"
+  digest = "1:f8ae6e0da72b154967c7e6b7566486fc0337ac0d5d0362db67f9c31323a03c28"
+  name = "k8s.io/utils"
+  packages = ["pointer"]
+  pruneopts = "UT"
+  revision = "21c4ce38f2a793ec01e925ddc31216500183b773"
 
 [[projects]]
   digest = "1:9bf88f2082655455535099895e8220704fddbea2e7104b5684c19506c1076b69"
