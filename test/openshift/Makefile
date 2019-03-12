@@ -1,5 +1,6 @@
 .PHONY: deps
 deps:
+	type -P dep 2>&1 > /dev/null || go get -u github.com/golang/dep/cmd/dep
 	dep ensure -v
 
 define test =
