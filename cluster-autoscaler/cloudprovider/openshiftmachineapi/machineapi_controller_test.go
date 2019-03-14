@@ -831,7 +831,7 @@ func TestControllerNodeGroupForNodeLookup(t *testing.T) {
 
 			machineSet, machineDeployment := makeMachineOwner(i, 1, annotations, useMachineDeployment)
 
-			node, machine := makeLinkedNodeAndMachine(i, v1.OwnerReference{
+			node, machine := makeLinkedNodeAndMachine(i, machineSet.Namespace, v1.OwnerReference{
 				Name: machineSet.Name,
 				Kind: machineSet.Kind,
 				UID:  machineSet.UID,

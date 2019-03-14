@@ -36,17 +36,138 @@ const (
 	machineAnnotationKey = "machine.openshift.io/machine"
 )
 
-type nodeGroupConstructorTestCase struct {
-	description string
-	annotations map[string]string
-	errors      bool
-	minSize     int
-	maxSize     int
-	replicas    int32
-	name        string
-	namespace   string
-	id          string
-	debug       string
+type clusterTestConfig struct {
+	machineDeployment *v1beta1.MachineDeployment
+	machineSet        *v1beta1.MachineSet
+	machines          []*v1beta1.Machine
+	nodes             []*apiv1.Node
+}
+
+type clusterTestSpec struct {
+	annotations             map[string]string
+	id                      int
+	machineDeploymentPrefix string
+	machineSetPrefix        string
+	namespace               string
+	nodeCount               int
+	replicaCount            int32
+	rootIsMachineDeployment bool
+}
+
+func (config clusterTestConfig) newNodeGroup(t *testing.T, c *machineController) (*nodegroup, error) {
+	if config.machineDeployment != nil {
+		return newNodegroupFromMachineDeployment(c, config.machineDeployment)
+	}
+	return newNodegroupFromMachineSet(c, config.machineSet)
+}
+
+func (config clusterTestConfig) newMachineController(t *testing.T) (*machineController, testControllerShutdownFunc) {
+	nodeObjects := make([]runtime.Object, len(config.nodes))
+	machineObjects := make([]runtime.Object, len(config.machines))
+
+	for i := range config.nodes {
+		nodeObjects[i] = config.nodes[i]
+	}
+
+	for i := range config.machines {
+		machineObjects[i] = config.machines[i]
+	}
+
+	machineObjects = append(machineObjects, config.machineSet)
+	if config.machineDeployment != nil {
+		machineObjects = append(machineObjects, config.machineDeployment)
+	}
+
+	return mustCreateTestController(t, testControllerConfig{
+		nodeObjects:    nodeObjects,
+		machineObjects: machineObjects,
+	})
+}
+
+func newMachineSetTestObjs(namespace string, id, nodeCount int, replicaCount int32, annotations map[string]string) (*clusterTestConfig, *clusterTestSpec) {
+	spec := &clusterTestSpec{
+		id:                      id,
+		annotations:             annotations,
+		machineSetPrefix:        fmt.Sprintf("machineset-%s-", namespace),
+		namespace:               namespace,
+		nodeCount:               nodeCount,
+		replicaCount:            replicaCount,
+		rootIsMachineDeployment: false,
+	}
+
+	return makeClusterObjs(spec), spec
+}
+
+func newMachineDeploymentTestObjs(namespace string, id, nodeCount int, replicaCount int32, annotations map[string]string) (*clusterTestConfig, *clusterTestSpec) {
+	spec := &clusterTestSpec{
+		id:                      id,
+		annotations:             annotations,
+		machineDeploymentPrefix: fmt.Sprintf("machinedeployment-%s-", namespace),
+		machineSetPrefix:        fmt.Sprintf("machineset-%s-", namespace),
+		namespace:               namespace,
+		nodeCount:               nodeCount,
+		replicaCount:            replicaCount,
+		rootIsMachineDeployment: true,
+	}
+
+	return makeClusterObjs(spec), spec
+}
+
+func makeClusterObjs(spec *clusterTestSpec) *clusterTestConfig {
+	objs := clusterTestConfig{
+		nodes:    make([]*apiv1.Node, spec.nodeCount),
+		machines: make([]*v1beta1.Machine, spec.nodeCount),
+	}
+
+	objs.machineSet = &v1beta1.MachineSet{
+		TypeMeta: v1.TypeMeta{
+			Kind: "MachineSet",
+		},
+		ObjectMeta: v1.ObjectMeta{
+			Name:      fmt.Sprintf("%s%d", spec.machineSetPrefix, spec.id),
+			Namespace: spec.namespace,
+			UID:       types.UID(fmt.Sprintf("%s%d", spec.machineSetPrefix, spec.id)),
+		},
+	}
+
+	if !spec.rootIsMachineDeployment {
+		objs.machineSet.ObjectMeta.Annotations = spec.annotations
+		objs.machineSet.Spec.Replicas = int32ptr(spec.replicaCount)
+	} else {
+		objs.machineDeployment = &v1beta1.MachineDeployment{
+			TypeMeta: v1.TypeMeta{
+				Kind: "MachineDeployment",
+			},
+			ObjectMeta: v1.ObjectMeta{
+				Name:        fmt.Sprintf("%s%d", spec.machineDeploymentPrefix, spec.id),
+				Namespace:   spec.namespace,
+				UID:         types.UID(fmt.Sprintf("%s%d", spec.machineDeploymentPrefix, spec.id)),
+				Annotations: spec.annotations,
+			},
+			Spec: v1beta1.MachineDeploymentSpec{
+				Replicas: int32ptr(spec.replicaCount),
+			},
+		}
+
+		objs.machineSet.OwnerReferences = make([]v1.OwnerReference, 1)
+		objs.machineSet.OwnerReferences[0] = v1.OwnerReference{
+			Name: objs.machineDeployment.Name,
+			Kind: objs.machineDeployment.Kind,
+			UID:  objs.machineDeployment.UID,
+		}
+	}
+
+	machineOwner := v1.OwnerReference{
+		Name: objs.machineSet.Name,
+		Kind: objs.machineSet.Kind,
+		UID:  objs.machineSet.UID,
+	}
+
+	for i := 0; i < spec.nodeCount; i++ {
+		objs.nodes[i], objs.machines[i] = makeLinkedNodeAndMachine(i, spec.namespace, machineOwner)
+	}
+
+	return &objs
 }
 
 type testNodeGroupResizeTestCase struct {
@@ -83,7 +204,7 @@ func makeMachineSet(i int, replicaCount int, annotations map[string]string) *v1b
 // makeLinkedNodeAndMachine creates a node and machine. The machine
 // has its NodeRef set to the new node and the new machine's owner
 // reference is set to owner.
-func makeLinkedNodeAndMachine(i int, owner v1.OwnerReference) (*apiv1.Node, *v1beta1.Machine) {
+func makeLinkedNodeAndMachine(i int, namespace string, owner v1.OwnerReference) (*apiv1.Node, *v1beta1.Machine) {
 	node := &apiv1.Node{
 		TypeMeta: v1.TypeMeta{
 			Kind: "Node",
@@ -91,7 +212,7 @@ func makeLinkedNodeAndMachine(i int, owner v1.OwnerReference) (*apiv1.Node, *v1b
 		ObjectMeta: v1.ObjectMeta{
 			Name: fmt.Sprintf("node-%d", i),
 			Annotations: map[string]string{
-				machineAnnotationKey: fmt.Sprintf("test-namespace/machine-%d", i),
+				machineAnnotationKey: fmt.Sprintf("%s/machine-%d", namespace, i),
 			},
 		},
 		Spec: apiv1.NodeSpec{
@@ -105,7 +226,7 @@ func makeLinkedNodeAndMachine(i int, owner v1.OwnerReference) (*apiv1.Node, *v1b
 		},
 		ObjectMeta: v1.ObjectMeta{
 			Name:      fmt.Sprintf("machine-%d", i),
-			Namespace: "test-namespace",
+			Namespace: namespace,
 			OwnerReferences: []v1.OwnerReference{{
 				Name: owner.Name,
 				Kind: owner.Kind,
@@ -123,144 +244,22 @@ func makeLinkedNodeAndMachine(i int, owner v1.OwnerReference) (*apiv1.Node, *v1b
 	return node, machine
 }
 
-func testNewNodeGroupProperties(t *testing.T, ng *nodegroup, tc nodeGroupConstructorTestCase) {
-	t.Helper()
-
-	if ng.Name() != tc.name {
-		t.Errorf("expected %q, got %q", tc.name, ng.Name())
-	}
-
-	if ng.Namespace() != tc.namespace {
-		t.Errorf("expected %q, got %q", tc.namespace, ng.Namespace())
-	}
-
-	if ng.MinSize() != tc.minSize {
-		t.Errorf("expected %v, got %v", tc.minSize, ng.MinSize())
-	}
-
-	if ng.MaxSize() != tc.maxSize {
-		t.Errorf("expected %v, got %v", tc.maxSize, ng.MaxSize())
-	}
-
-	if ng.Id() != tc.id {
-		t.Errorf("expected %q, got %q", tc.id, ng.Id())
-	}
-
-	if ng.Debug() != tc.debug {
-		t.Errorf("expected %q, got %q", tc.debug, ng.Debug())
-	}
-
-	if _, err := ng.TemplateNodeInfo(); err != cloudprovider.ErrNotImplemented {
-		t.Error("expected error")
-	}
-
-	if expected, result := true, ng.Exist(); expected != result {
-		t.Errorf("expected %t, got %t", expected, result)
-	}
-
-	if _, err := ng.Create(); err != cloudprovider.ErrAlreadyExist {
-		t.Error("expected error")
-	}
-
-	if err := ng.Delete(); err != cloudprovider.ErrNotImplemented {
-		t.Error("expected error")
-	}
-
-	if result := ng.Autoprovisioned(); result {
-		t.Errorf("expected %t, got %t", false, result)
-	}
-
-	if _, err := ng.Nodes(); err != nil {
-		t.Errorf("expected no error, got %v", err)
-	}
-
-	if result, _ := ng.Nodes(); len(result) != 0 {
-		t.Errorf("expected 0 nodes, got %v", len(result))
-	}
-}
-
-func testNewMachineSetHelper(t *testing.T, testnum int, tc nodeGroupConstructorTestCase) {
-	t.Helper()
-
-	controller, stop := mustCreateTestController(t, testControllerConfig{})
-	defer stop()
-
-	tc.name = fmt.Sprintf("%d", testnum)
-	tc.namespace = t.Name()
-	tc.id = path.Join(tc.namespace, tc.name)
-	tc.debug = fmt.Sprintf("%s (min: %d, max: %d, replicas: %d)", path.Join(tc.namespace, tc.name), tc.minSize, tc.maxSize, tc.replicas)
-
-	machineSet := &v1beta1.MachineSet{
-		TypeMeta: v1.TypeMeta{
-			Kind: "MachineSet",
-		},
-		ObjectMeta: v1.ObjectMeta{
-			Name:        tc.name,
-			Namespace:   tc.namespace,
-			Annotations: tc.annotations,
-		},
-		Spec: v1beta1.MachineSetSpec{
-			Replicas: &tc.replicas,
-		},
-	}
-
-	ng, err := newNodegroupFromMachineSet(controller, machineSet)
-
-	if tc.errors && err == nil {
-		t.Fatal("expected an error")
-	}
-
-	if !tc.errors && ng == nil {
-		t.Fatalf("test case logic error: %v", err)
-	}
-
-	if !tc.errors {
-		testNewNodeGroupProperties(t, ng, tc)
-	}
-}
-
-func testNewMachineDeploymentHelper(t *testing.T, testnum int, tc nodeGroupConstructorTestCase) {
-	t.Helper()
-
-	controller, stop := mustCreateTestController(t, testControllerConfig{})
-	defer stop()
-
-	tc.name = fmt.Sprintf("%d", testnum)
-	tc.namespace = t.Name()
-	tc.id = path.Join(tc.namespace, tc.name)
-	tc.debug = fmt.Sprintf("%s (min: %d, max: %d, replicas: %d)", path.Join(tc.namespace, tc.name), tc.minSize, tc.maxSize, tc.replicas)
-
-	machineDeployment := &v1beta1.MachineDeployment{
-		TypeMeta: v1.TypeMeta{
-			Kind: "MachineDeployment",
-		},
-		ObjectMeta: v1.ObjectMeta{
-			Name:        tc.name,
-			Namespace:   tc.namespace,
-			Annotations: tc.annotations,
-		},
-		Spec: v1beta1.MachineDeploymentSpec{
-			Replicas: &tc.replicas,
-		},
-	}
-
-	ng, err := newNodegroupFromMachineDeployment(controller, machineDeployment)
-
-	if tc.errors && err == nil {
-		t.Fatal("expected an error")
-	}
-
-	if !tc.errors && ng == nil {
-		t.Fatalf("test case logic error: %v", err)
-	}
-
-	if !tc.errors {
-		testNewNodeGroupProperties(t, ng, tc)
-	}
-}
-
 func TestNodeGroupNewNodeGroup(t *testing.T) {
-	for i, tc := range []nodeGroupConstructorTestCase{{
+	type testCase struct {
+		description string
+		annotations map[string]string
+		errors      bool
+		replicas    int32
+		minSize     int
+		maxSize     int
+		name        string
+		namespace   string
+		id          string
+		debug       string
+		nodeCount   int
+	}
+
+	var testCases = []testCase{{
 		description: "errors because minSize is invalid",
 		annotations: map[string]string{
 			nodeGroupMinSizeAnnotationKey: "-1",
@@ -293,6 +292,7 @@ func TestNodeGroupNewNodeGroup(t *testing.T) {
 		minSize:     0,
 		maxSize:     0,
 		replicas:    0,
+		errors:      false,
 	}, {
 		description: "no error: min=0, max=1",
 		annotations: map[string]string{
@@ -301,21 +301,129 @@ func TestNodeGroupNewNodeGroup(t *testing.T) {
 		minSize:  0,
 		maxSize:  1,
 		replicas: 0,
+		errors:   false,
 	}, {
 		description: "no error: min=1, max=10, replicas=5",
 		annotations: map[string]string{
 			nodeGroupMinSizeAnnotationKey: "1",
 			nodeGroupMaxSizeAnnotationKey: "10",
 		},
-		minSize:  1,
-		maxSize:  10,
-		replicas: 5,
-	}} {
-		t.Logf("test #%d: %s", i, tc.description)
+		minSize:   1,
+		maxSize:   10,
+		replicas:  5,
+		nodeCount: 5,
+		errors:    false,
+	}}
 
-		testNewMachineSetHelper(t, i, tc)
-		testNewMachineDeploymentHelper(t, i, tc)
+	testNodeGroupProperties := func(t *testing.T, tc testCase, clusterObjs *clusterTestConfig) {
+		t.Helper()
+
+		controller, stop := clusterObjs.newMachineController(t)
+		defer stop()
+
+		ng, err := clusterObjs.newNodeGroup(t, controller)
+
+		if tc.errors && err == nil {
+			t.Fatal("expected an error")
+		}
+
+		if !tc.errors && ng == nil {
+			t.Fatalf("test case logic error: %v", err)
+		}
+
+		if tc.errors {
+			// if the test case is expected to error then
+			// don't assert the remainder
+			return
+		}
+
+		if ng.Name() != tc.name {
+			t.Errorf("expected %q, got %q", tc.name, ng.Name())
+		}
+
+		if ng.Namespace() != tc.namespace {
+			t.Errorf("expected %q, got %q", tc.namespace, ng.Namespace())
+		}
+
+		if ng.MinSize() != tc.minSize {
+			t.Errorf("expected %v, got %v", tc.minSize, ng.MinSize())
+		}
+
+		if ng.MaxSize() != tc.maxSize {
+			t.Errorf("expected %v, got %v", tc.maxSize, ng.MaxSize())
+		}
+
+		if ng.Id() != tc.id {
+			t.Errorf("expected %q, got %q", tc.id, ng.Id())
+		}
+
+		if ng.Debug() != tc.debug {
+			t.Errorf("expected %q, got %q", tc.debug, ng.Debug())
+		}
+
+		if _, err := ng.TemplateNodeInfo(); err != cloudprovider.ErrNotImplemented {
+			t.Error("expected error")
+		}
+
+		if expected, result := true, ng.Exist(); expected != result {
+			t.Errorf("expected %t, got %t", expected, result)
+		}
+
+		if _, err := ng.Create(); err != cloudprovider.ErrAlreadyExist {
+			t.Error("expected error")
+		}
+
+		if err := ng.Delete(); err != cloudprovider.ErrNotImplemented {
+			t.Error("expected error")
+		}
+
+		if result := ng.Autoprovisioned(); result {
+			t.Errorf("expected %t, got %t", false, result)
+		}
+
+		nodes, err := ng.Nodes()
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+
+		if len(nodes) != tc.nodeCount {
+			t.Errorf("expected %d nodes, got %v", tc.nodeCount, len(nodes))
+		}
 	}
+
+	t.Run("MachineSet", func(t *testing.T) {
+		t.Parallel()
+		for i, tc := range testCases {
+			i := i   // capture range variable
+			tc := tc // capture range variable
+			t.Run(tc.description, func(t *testing.T) {
+				t.Parallel()
+				testObjs, spec := newMachineSetTestObjs(t.Name(), i, tc.nodeCount, tc.replicas, tc.annotations)
+				tc.namespace = spec.namespace
+				tc.name = fmt.Sprintf("%s%d", spec.machineSetPrefix, i)
+				tc.id = path.Join(tc.namespace, tc.name)
+				tc.debug = fmt.Sprintf("%s (min: %d, max: %d, replicas: %d)", path.Join(tc.namespace, tc.name), tc.minSize, tc.maxSize, tc.replicas)
+				testNodeGroupProperties(t, tc, testObjs)
+			})
+		}
+	})
+
+	t.Run("MachineDeployment", func(t *testing.T) {
+		t.Parallel()
+		for i, tc := range testCases {
+			i := i   // capture range variable
+			tc := tc // capture range variable
+			t.Run(tc.description, func(t *testing.T) {
+				t.Parallel()
+				testObjs, spec := newMachineDeploymentTestObjs(t.Name(), i, tc.nodeCount, tc.replicas, tc.annotations)
+				tc.namespace = spec.namespace
+				tc.name = fmt.Sprintf("%s%d", spec.machineDeploymentPrefix, i)
+				tc.id = path.Join(tc.namespace, tc.name)
+				tc.debug = fmt.Sprintf("%s (min: %d, max: %d, replicas: %d)", path.Join(tc.namespace, tc.name), tc.minSize, tc.maxSize, tc.replicas)
+				testNodeGroupProperties(t, tc, testObjs)
+			})
+		}
+	})
 }
 
 func testNodeGroupIncreaseSizeHelper(t *testing.T, ng *nodegroup, tc testNodeGroupResizeTestCase) {
@@ -779,13 +887,13 @@ func TestNodeGroupMachineSetDeleteNodesWithMismatchedNodes(t *testing.T) {
 		nodeGroupMaxSizeAnnotationKey: "3",
 	})
 
-	node0, machine0 := makeLinkedNodeAndMachine(0, v1.OwnerReference{
+	node0, machine0 := makeLinkedNodeAndMachine(0, machineSet0.Namespace, v1.OwnerReference{
 		Name: machineSet0.Name,
 		Kind: machineSet0.Kind,
 		UID:  machineSet0.UID,
 	})
 
-	node1, machine1 := makeLinkedNodeAndMachine(1, v1.OwnerReference{
+	node1, machine1 := makeLinkedNodeAndMachine(1, machineSet1.Namespace, v1.OwnerReference{
 		Name: machineSet1.Name,
 		Kind: machineSet1.Kind,
 		UID:  machineSet1.UID,
