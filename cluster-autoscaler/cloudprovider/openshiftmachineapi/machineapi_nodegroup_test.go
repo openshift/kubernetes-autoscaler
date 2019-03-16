@@ -659,125 +659,91 @@ func TestNodeGroupDecreaseSize(t *testing.T) {
 	})
 }
 
-func TestNodeGroupMachineSetDeleteNodes(t *testing.T) {
-	// Note: 10 is an upper bound for this test. Going beyond 10
-	// will break the sorting that happens later in this function
-	// because sort.Strings() will not do natural sorting and the
-	// expected semantics in this test will fail.
-	nodes := make([]*apiv1.Node, 10)
-	machines := make([]*v1beta1.Machine, 10)
-	nodeObjects := make([]runtime.Object, 10)
-	machineObjects := make([]runtime.Object, 10)
+func TestNodeGroupDeleteNodes(t *testing.T) {
+	test := func(t *testing.T, testObjs *clusterTestConfig) {
+		t.Helper()
 
-	machineSet := &v1beta1.MachineSet{
-		TypeMeta: v1.TypeMeta{
-			Kind: "MachineSet",
-		},
-		ObjectMeta: v1.ObjectMeta{
-			Name:      "machineset",
-			Namespace: "test-namespace",
-			UID:       "abcdef12-a3d5-a45f-887b-6b49aa8fc218",
-			Annotations: map[string]string{
-				nodeGroupMinSizeAnnotationKey: "1",
-				nodeGroupMaxSizeAnnotationKey: "3",
-			},
-		},
-		Spec: v1beta1.MachineSetSpec{
-			Replicas: int32ptr(int32(len(machines))),
-		},
-	}
+		controller, stop := testObjs.newMachineController(t)
+		defer stop()
 
-	for i := 0; i < len(nodes); i++ {
-		nodes[i] = &apiv1.Node{
-			TypeMeta: v1.TypeMeta{
-				Kind: "Node",
-			},
-			ObjectMeta: v1.ObjectMeta{
-				Name: fmt.Sprintf("node-%d", i),
-				Annotations: map[string]string{
-					machineAnnotationKey: fmt.Sprintf("test-namespace/machine-%d", i),
-				},
-			},
-			Spec: apiv1.NodeSpec{
-				ProviderID: fmt.Sprintf("providerid-%d", i),
-			},
-		}
-
-		machines[i] = &v1beta1.Machine{
-			TypeMeta: v1.TypeMeta{
-				Kind: "Machine",
-			},
-			ObjectMeta: v1.ObjectMeta{
-				Name:      fmt.Sprintf("machine-%d", i),
-				Namespace: "test-namespace",
-				OwnerReferences: []v1.OwnerReference{{
-					Name: machineSet.Name,
-					Kind: machineSet.Kind,
-					UID:  machineSet.UID,
-				}},
-			},
-			Status: v1beta1.MachineStatus{
-				NodeRef: &apiv1.ObjectReference{
-					Kind: nodes[i].Kind,
-					Name: nodes[i].Name,
-				},
-			},
-		}
-
-		nodeObjects[i] = nodes[i]
-		machineObjects[i] = machines[i]
-	}
-
-	controller, stop := mustCreateTestController(t, testControllerConfig{
-		nodeObjects:    nodeObjects,
-		machineObjects: append(machineObjects, machineSet),
-	})
-	defer stop()
-
-	ng, err := newNodegroupFromMachineSet(controller, machineSet)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	nodeNames, err := ng.Nodes()
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if len(nodeNames) != len(nodes) {
-		t.Fatalf("expected len=%v, got len=%v", len(nodes), len(nodeNames))
-	}
-
-	sort.Strings(nodeNames)
-
-	for i := 0; i < len(nodes); i++ {
-		if nodeNames[i] != nodes[i].Spec.ProviderID {
-			t.Fatalf("expected %q, got %q", nodes[i].Spec.ProviderID, nodeNames[i])
-		}
-	}
-
-	if err := ng.DeleteNodes(nodes[5:]); err != nil {
-		t.Errorf("unexpected error: %v", err)
-	}
-
-	for i := 5; i < len(machines); i++ {
-		key := fmt.Sprintf("machine-%d", i)
-		machine, err := controller.clusterClientset.MachineV1beta1().Machines("test-namespace").Get(key, v1.GetOptions{})
+		ng, err := testObjs.newNodeGroup(t, controller)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if _, found := machine.Annotations[machineDeleteAnnotationKey]; !found {
-			t.Errorf("expected annotation %q on machine %s", machineDeleteAnnotationKey, machine.Name)
+
+		nodeNames, err := ng.Nodes()
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if len(nodeNames) != len(testObjs.nodes) {
+			t.Fatalf("expected len=%v, got len=%v", len(testObjs.nodes), len(nodeNames))
+		}
+
+		sort.Strings(nodeNames)
+
+		for i := 0; i < len(nodeNames); i++ {
+			if nodeNames[i] != testObjs.nodes[i].Spec.ProviderID {
+				t.Fatalf("expected %q, got %q", testObjs.nodes[i].Spec.ProviderID, nodeNames[i])
+			}
+		}
+
+		if err := ng.DeleteNodes(testObjs.nodes[5:]); err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+
+		for i := 5; i < len(testObjs.machines); i++ {
+			machine, err := controller.clusterClientset.MachineV1beta1().Machines(testObjs.machines[i].Namespace).Get(testObjs.machines[i].Name, v1.GetOptions{})
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if _, found := machine.Annotations[machineDeleteAnnotationKey]; !found {
+				t.Errorf("expected annotation %q on machine %s", machineDeleteAnnotationKey, machine.Name)
+			}
+		}
+
+		switch v := (ng.scalableResource).(type) {
+		case *machineSetScalableResource:
+			updatedMachineSet, err := controller.clusterClientset.MachineV1beta1().MachineSets(testObjs.machineSet.Namespace).Get(testObjs.machineSet.Name, v1.GetOptions{})
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if actual := pointer.Int32PtrDerefOr(updatedMachineSet.Spec.Replicas, 0); actual != 5 {
+				t.Fatalf("expected 5 nodes, got %v", actual)
+			}
+		case *machineDeploymentScalableResource:
+			updatedMachineDeployment, err := controller.clusterClientset.MachineV1beta1().MachineDeployments(testObjs.machineDeployment.Namespace).Get(testObjs.machineDeployment.Name, v1.GetOptions{})
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if actual := pointer.Int32PtrDerefOr(updatedMachineDeployment.Spec.Replicas, 0); actual != 5 {
+				t.Fatalf("expected 5 nodes, got %v", actual)
+			}
+		default:
+			t.Errorf("unexpected type: %T", v)
 		}
 	}
 
-	machineSet, err = controller.clusterClientset.MachineV1beta1().MachineSets(machineSet.Namespace).Get(machineSet.Name, v1.GetOptions{})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if actual := pointer.Int32PtrDerefOr(machineSet.Spec.Replicas, 0); actual != 5 {
-		t.Fatalf("expected 5 nodes, got %v", actual)
-	}
+	// Note: 10 is an upper bound for the number of nodes/replicas
+	// Going beyond 10 will break the sorting that happens in the
+	// test() function because sort.Strings() will not do natural
+	// sorting and the expected semantics in test() will fail.
+
+	t.Run("MachineSet", func(t *testing.T) {
+		testObjs, _ := newMachineSetTestObjs(t.Name(), 0, 10, 10, map[string]string{
+			nodeGroupMinSizeAnnotationKey: "1",
+			nodeGroupMaxSizeAnnotationKey: "10",
+		})
+		test(t, testObjs)
+	})
+
+	t.Run("MachineDeployment", func(t *testing.T) {
+		testObjs, _ := newMachineDeploymentTestObjs(t.Name(), 0, 10, 10, map[string]string{
+			nodeGroupMinSizeAnnotationKey: "1",
+			nodeGroupMaxSizeAnnotationKey: "10",
+		})
+		test(t, testObjs)
+	})
 }
 
 func TestNodeGroupMachineSetDeleteNodesWithMismatchedNodes(t *testing.T) {
