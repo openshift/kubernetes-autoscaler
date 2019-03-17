@@ -27,7 +27,6 @@ import (
 	fakeclusterapi "github.com/openshift/cluster-api/pkg/client/clientset_generated/clientset/fake"
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	fakekube "k8s.io/client-go/kubernetes/fake"
@@ -107,64 +106,64 @@ func makeMachineOwner(i int, replicaCount int, annotations map[string]string, ow
 }
 
 func TestControllerFindMachineByID(t *testing.T) {
-	controller, stop := mustCreateTestController(t, testControllerConfig{})
-	defer stop()
-
-	testMachine := &v1beta1.Machine{
-		ObjectMeta: v1.ObjectMeta{
-			Name:      "test",
-			Namespace: "test-namespace",
-		},
+	type testCase struct {
+		description    string
+		name           string
+		namespace      string
+		lookupSucceeds bool
 	}
 
-	// Verify machine count starts at 0.
-	machines, err := controller.machineInformer.Lister().Machines(v1.NamespaceAll).List(labels.Everything())
-	if err != nil {
-		t.Fatalf("unexpected error, got %v", err)
-	}
-	if len(machines) != 0 {
-		t.Fatalf("expected 0 machines, got %d", len(machines))
+	var testCases = []testCase{{
+		description:    "lookup fails",
+		lookupSucceeds: false,
+		name:           "machine-does-not-exist",
+		namespace:      "namespace-does-not-exist",
+	}, {
+		description:    "lookup fails in valid namespace",
+		lookupSucceeds: false,
+		name:           "machine-does-not-exist-in-existing-namespace",
+	}, {
+		description:    "lookup succeeds",
+		lookupSucceeds: true,
+	}}
+
+	test := func(t *testing.T, tc testCase, testObjs *clusterTestConfig) {
+		controller, stop := testObjs.newMachineController(t)
+		defer stop()
+
+		machine, err := controller.findMachine(path.Join(tc.namespace, tc.name))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if tc.lookupSucceeds && machine == nil {
+			t.Error("expected success, findMachine failed")
+		}
+
+		if tc.lookupSucceeds && machine != nil {
+			if machine.Name != tc.name {
+				t.Errorf("expected %q, got %q", tc.name, machine.Name)
+			}
+			if machine.Namespace != tc.namespace {
+				t.Errorf("expected %q, got %q", tc.namespace, machine.Namespace)
+			}
+		}
 	}
 
-	controller.machineInformer.Informer().GetStore().Add(testMachine)
-
-	// Verify machine count goes to 1.
-	machines, err = controller.machineInformer.Lister().Machines(v1.NamespaceAll).List(labels.Everything())
-	if err != nil {
-		t.Fatalf("unexpected error, got %v", err)
-	}
-	if len(machines) != 1 {
-		t.Fatalf("expected 1 machine, got %d", len(machines))
-	}
-
-	// Verify inserted machine matches retrieved machine
-	if !reflect.DeepEqual(*machines[0], *testMachine) {
-		t.Fatalf("expected machines to be equal")
-	}
-
-	// Verify findMachine() can find the test machine
-	foundMachine, err := controller.findMachine(path.Join(testMachine.Namespace, testMachine.Name))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if foundMachine == nil {
-		t.Fatalf("expected to find machine %q in namespace %q", testMachine.Name, testMachine.Namespace)
-	}
-
-	// Verify that a successful findMachine returns a DeepCopy().
-	if foundMachine == testMachine {
-		t.Fatalf("expected a copy")
-	}
-
-	// Verify non-existent machine is not found by findMachine()
-	foundMachine, err = controller.findMachine(path.Join("different-namespace", testMachine.Name))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if foundMachine != nil {
-		t.Fatalf("expected findMachine() to return nil")
+	for _, tc := range testCases {
+		t.Run(tc.description, func(t *testing.T) {
+			testObjs, _ := newMachineSetTestObjs(t.Name(), 0, 1, 1, map[string]string{
+				nodeGroupMinSizeAnnotationKey: "1",
+				nodeGroupMaxSizeAnnotationKey: "10",
+			})
+			if tc.name == "" {
+				tc.name = testObjs.machines[0].Name
+			}
+			if tc.namespace == "" {
+				tc.namespace = testObjs.machines[0].Namespace
+			}
+			test(t, tc, testObjs)
+		})
 	}
 }
 
