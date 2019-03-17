@@ -636,23 +636,15 @@ func TestControllerNodeGroupForNodeWithMissingMachineOwner(t *testing.T) {
 	}
 }
 
-func TestControllerNodeGroupsWithMachineDeployments(t *testing.T) {
-	machineDeploymentTemplate := &v1beta1.MachineDeployment{
-		TypeMeta: v1.TypeMeta{
-			Kind: "MachineDeployment",
-		},
-		ObjectMeta: v1.ObjectMeta{
-			Name:      "machinedeployment",
-			Namespace: "test-namespace",
-		},
-	}
-
-	for i, tc := range []struct {
+func TestControllerNodeGroups(t *testing.T) {
+	type testCase struct {
 		description string
 		annotations map[string]string
 		errors      bool
 		nodegroups  int
-	}{{
+	}
+
+	var testCases = []testCase{{
 		description: "errors with bad annotations",
 		annotations: map[string]string{
 			nodeGroupMinSizeAnnotationKey: "-1",
@@ -661,31 +653,26 @@ func TestControllerNodeGroupsWithMachineDeployments(t *testing.T) {
 		nodegroups: 0,
 		errors:     true,
 	}, {
-		description: "success but nodegroup count is 0 as deployment has no bounds",
+		description: "success with zero bounds",
 		nodegroups:  0,
 		errors:      false,
 	}, {
-		description: "success with valid bounds",
+		description: "success with positive bounds",
 		annotations: map[string]string{
 			nodeGroupMinSizeAnnotationKey: "1",
 			nodeGroupMaxSizeAnnotationKey: "10",
 		},
 		nodegroups: 1,
 		errors:     false,
-	}} {
-		t.Logf("test #%d: %s", i, tc.description)
+	}}
 
-		machineDeployment := machineDeploymentTemplate.DeepCopy()
-		machineDeployment.Annotations = tc.annotations
+	test := func(t *testing.T, tc testCase, testObjs *clusterTestConfig) {
+		t.Helper()
 
-		controller, stop := mustCreateTestController(t, testControllerConfig{
-			machineObjects: []runtime.Object{
-				machineDeployment,
-			},
-		})
+		controller, stop := testObjs.newMachineController(t)
 		defer stop()
 
-		nodegroups, err := controller.machineDeploymentNodeGroups()
+		nodegroups, err := controller.nodeGroups()
 		if tc.errors && err == nil {
 			t.Errorf("expected an error")
 		}
@@ -702,104 +689,24 @@ func TestControllerNodeGroupsWithMachineDeployments(t *testing.T) {
 			t.Errorf("expected %d, got %d", tc.nodegroups, actual)
 		}
 	}
-}
 
-func TestControllerNodeGroupsWithMachineSets(t *testing.T) {
-	machineSetOwnedByMachineDeployment := &v1beta1.MachineSet{
-		TypeMeta: v1.TypeMeta{
-			Kind: "MachineSet",
-		},
-		ObjectMeta: v1.ObjectMeta{
-			Name:      "machineset-owned-by-deployment",
-			Namespace: "test-namespace",
-			OwnerReferences: []v1.OwnerReference{{
-				Kind: "MachineDeployment",
-				Name: "machinedeployment",
-			}},
-		},
-	}
-
-	machineDeployment := &v1beta1.MachineDeployment{
-		TypeMeta: v1.TypeMeta{
-			Kind: "MachineDeployment",
-		},
-		ObjectMeta: v1.ObjectMeta{
-			Name:      "machinedeployment",
-			Namespace: "test-namespace",
-			Annotations: map[string]string{
-				nodeGroupMinSizeAnnotationKey: "1",
-				nodeGroupMaxSizeAnnotationKey: "10",
-			},
-		},
-	}
-
-	machineSetTemplate := &v1beta1.MachineSet{
-		TypeMeta: v1.TypeMeta{
-			Kind: "MachineSet",
-		},
-		ObjectMeta: v1.ObjectMeta{
-			Name:      "machineset",
-			Namespace: "test-namespace",
-		},
-	}
-
-	for i, tc := range []struct {
-		description string
-		annotations map[string]string
-		errors      bool
-		nodegroups  int
-	}{{
-		description: "errors with bad annotations",
-		annotations: map[string]string{
-			nodeGroupMinSizeAnnotationKey: "-1",
-			nodeGroupMaxSizeAnnotationKey: "10",
-		},
-		nodegroups: 0,
-		errors:     true,
-	}, {
-		description: "success but nodegroup count is 0 as machineset no bounds",
-		nodegroups:  0,
-		errors:      false,
-	}, {
-		description: "success with valid machineset bounds",
-		annotations: map[string]string{
-			nodeGroupMinSizeAnnotationKey: "1",
-			nodeGroupMaxSizeAnnotationKey: "10",
-		},
-		nodegroups: 1,
-		errors:     false,
-	}} {
-		t.Logf("test #%d: %s", i, tc.description)
-
-		machineSet := machineSetTemplate.DeepCopy()
-		machineSet.Annotations = tc.annotations
-
-		controller, stop := mustCreateTestController(t, testControllerConfig{
-			machineObjects: []runtime.Object{
-				machineDeployment,
-				machineSetOwnedByMachineDeployment.DeepCopy(),
-				machineSet,
-			},
-		})
-		defer stop()
-
-		nodegroups, err := controller.machineSetNodeGroups()
-		if tc.errors && err == nil {
-			t.Errorf("expected an error")
+	t.Run("MachineSet", func(t *testing.T) {
+		for _, tc := range testCases {
+			t.Run(tc.description, func(t *testing.T) {
+				testObjs, _ := newMachineSetTestObjs(t.Name(), 0, 1, 1, tc.annotations)
+				test(t, tc, testObjs)
+			})
 		}
+	})
 
-		if !tc.errors && err != nil {
-			t.Errorf("unexpected error: %v", err)
+	t.Run("MachineDeployment", func(t *testing.T) {
+		for _, tc := range testCases {
+			t.Run(tc.description, func(t *testing.T) {
+				testObjs, _ := newMachineDeploymentTestObjs(t.Name(), 0, 1, 1, tc.annotations)
+				test(t, tc, testObjs)
+			})
 		}
-
-		if tc.errors && nodegroups != nil {
-			t.Fatalf("test case logic error")
-		}
-
-		if actual := len(nodegroups); actual != tc.nodegroups {
-			t.Errorf("expected %d, got %d", tc.nodegroups, actual)
-		}
-	}
+	})
 }
 
 func TestControllerNodeGroupForNodeLookup(t *testing.T) {
