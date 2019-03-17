@@ -709,11 +709,13 @@ func TestControllerNodeGroups(t *testing.T) {
 }
 
 func TestControllerNodeGroupForNodeLookup(t *testing.T) {
-	for i, tc := range []struct {
+	type testCase struct {
 		description    string
 		annotations    map[string]string
 		lookupSucceeds bool
-	}{{
+	}
+
+	var testCases = []testCase{{
 		description:    "lookup is nil because no annotations",
 		annotations:    map[string]string{},
 		lookupSucceeds: false,
@@ -731,64 +733,59 @@ func TestControllerNodeGroupForNodeLookup(t *testing.T) {
 			nodeGroupMaxSizeAnnotationKey: "2",
 		},
 		lookupSucceeds: true,
-	}} {
-		test := func(t *testing.T, i int, annotations map[string]string, useMachineDeployment bool) {
-			t.Helper()
+	}}
 
-			machineSet, machineDeployment := makeMachineOwner(i, 1, annotations, useMachineDeployment)
+	test := func(t *testing.T, tc testCase, testObjs *clusterTestConfig, node *apiv1.Node) {
+		t.Helper()
 
-			node, machine := makeLinkedNodeAndMachine(i, machineSet.Namespace, v1.OwnerReference{
-				Name: machineSet.Name,
-				Kind: machineSet.Kind,
-				UID:  machineSet.UID,
-			})
+		controller, stop := testObjs.newMachineController(t)
+		defer stop()
 
-			machineObjects := []runtime.Object{
-				machine,
-				machineSet,
-			}
-
-			if machineDeployment != nil {
-				machineObjects = append(machineObjects, machineDeployment)
-			}
-
-			controller, stop := mustCreateTestController(t, testControllerConfig{
-				nodeObjects:    []runtime.Object{node},
-				machineObjects: machineObjects,
-			})
-			defer stop()
-
-			ng, err := controller.nodeGroupForNode(node)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-
-			if ng == nil && tc.lookupSucceeds {
-				t.Fatalf("expected nil from lookup")
-			}
-
-			if ng != nil && !tc.lookupSucceeds {
-				t.Fatalf("expected non-nil from lookup")
-			}
-
-			if tc.lookupSucceeds {
-				var expected string
-
-				if useMachineDeployment {
-					expected = path.Join(machineDeployment.Namespace, machineDeployment.Name)
-				} else {
-					expected = path.Join(machineSet.Namespace, machineSet.Name)
-				}
-
-				if actual := ng.Id(); actual != expected {
-					t.Errorf("expected %q, got %q", expected, actual)
-				}
-			}
+		ng, err := controller.nodeGroupForNode(node)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
 		}
 
-		t.Run(tc.description, func(t *testing.T) {
-			test(t, i, tc.annotations, true) // with MachineDeployment
-			test(t, i, tc.annotations, false)
-		})
+		if ng == nil && tc.lookupSucceeds {
+			t.Fatalf("expected non-nil from lookup")
+		}
+
+		if ng != nil && !tc.lookupSucceeds {
+			t.Fatalf("expected nil from lookup")
+		}
+
+		if !tc.lookupSucceeds {
+			return
+		}
+
+		var expected string
+
+		if testObjs.machineDeployment != nil {
+			expected = path.Join(testObjs.machineDeployment.Namespace, testObjs.machineDeployment.Name)
+		} else {
+			expected = path.Join(testObjs.machineSet.Namespace, testObjs.machineSet.Name)
+		}
+
+		if actual := ng.Id(); actual != expected {
+			t.Errorf("expected %q, got %q", expected, actual)
+		}
 	}
+
+	t.Run("MachineSet", func(t *testing.T) {
+		for _, tc := range testCases {
+			t.Run(tc.description, func(t *testing.T) {
+				testObjs, _ := newMachineSetTestObjs(t.Name(), 0, 1, 1, tc.annotations)
+				test(t, tc, testObjs, testObjs.nodes[0].DeepCopy())
+			})
+		}
+	})
+
+	t.Run("MachineDeployment", func(t *testing.T) {
+		for _, tc := range testCases {
+			t.Run(tc.description, func(t *testing.T) {
+				testObjs, _ := newMachineDeploymentTestObjs(t.Name(), 0, 1, 1, tc.annotations)
+				test(t, tc, testObjs, testObjs.nodes[0].DeepCopy())
+			})
+		}
+	})
 }
