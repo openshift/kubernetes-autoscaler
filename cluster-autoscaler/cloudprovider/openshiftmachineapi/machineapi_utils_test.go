@@ -112,38 +112,38 @@ func TestParseScalingBounds(t *testing.T) {
 		min: 0,
 		max: 1,
 	}} {
-		t.Logf("test #%d: %s", i, tc.description)
-		machineSet := v1beta1.MachineSet{
-
-			ObjectMeta: v1.ObjectMeta{
-				Annotations: tc.annotations,
-			},
-		}
-
-		min, max, err := parseScalingBounds(machineSet.Annotations)
-		if tc.error != nil && err == nil {
-			t.Fatalf("test #%d: expected an error", i)
-		}
-
-		if tc.error != nil && tc.error != err {
-			if !strings.HasPrefix(err.Error(), tc.error.Error()) {
-				t.Errorf("expected message to have prefix %q, got %q", tc.error.Error(), err)
+		t.Run(tc.description, func(t *testing.T) {
+			machineSet := v1beta1.MachineSet{
+				ObjectMeta: v1.ObjectMeta{
+					Annotations: tc.annotations,
+				},
 			}
-		}
 
-		if tc.error == nil {
-			if tc.min != min {
-				t.Errorf("expected min %d, got %d", tc.min, min)
+			min, max, err := parseScalingBounds(machineSet.Annotations)
+			if tc.error != nil && err == nil {
+				t.Fatalf("test #%d: expected an error", i)
 			}
-			if tc.max != max {
-				t.Errorf("expected max %d, got %d", tc.max, max)
+
+			if tc.error != nil && tc.error != err {
+				if !strings.HasPrefix(err.Error(), tc.error.Error()) {
+					t.Errorf("expected message to have prefix %q, got %q", tc.error.Error(), err)
+				}
 			}
-		}
+
+			if tc.error == nil {
+				if tc.min != min {
+					t.Errorf("expected min %d, got %d", tc.min, min)
+				}
+				if tc.max != max {
+					t.Errorf("expected max %d, got %d", tc.max, max)
+				}
+			}
+		})
 	}
 }
 
 func TestMachineSetIsOwnedByMachineDeployment(t *testing.T) {
-	for i, tc := range []struct {
+	for _, tc := range []struct {
 		description       string
 		machineSet        v1beta1.MachineSet
 		machineDeployment v1beta1.MachineDeployment
@@ -222,17 +222,17 @@ func TestMachineSetIsOwnedByMachineDeployment(t *testing.T) {
 		},
 		owned: true,
 	}} {
-		t.Logf("test #%d: %s", i, tc.description)
-		owned := machineSetIsOwnedByMachineDeployment(&tc.machineSet, &tc.machineDeployment)
-
-		if tc.owned != owned {
-			t.Errorf("expected %t, got %t", tc.owned, owned)
-		}
+		t.Run(tc.description, func(t *testing.T) {
+			owned := machineSetIsOwnedByMachineDeployment(&tc.machineSet, &tc.machineDeployment)
+			if tc.owned != owned {
+				t.Errorf("expected %t, got %t", tc.owned, owned)
+			}
+		})
 	}
 }
 
 func TestMachineIsOwnedByMachineSet(t *testing.T) {
-	for i, tc := range []struct {
+	for _, tc := range []struct {
 		description string
 		machine     v1beta1.Machine
 		machineSet  v1beta1.MachineSet
@@ -311,17 +311,17 @@ func TestMachineIsOwnedByMachineSet(t *testing.T) {
 		},
 		owned: true,
 	}} {
-		t.Logf("test #%d: %s", i, tc.description)
-		owned := machineIsOwnedByMachineSet(&tc.machine, &tc.machineSet)
-
-		if tc.owned != owned {
-			t.Errorf("expected %t, got %t", tc.owned, owned)
-		}
+		t.Run(tc.description, func(t *testing.T) {
+			owned := machineIsOwnedByMachineSet(&tc.machine, &tc.machineSet)
+			if tc.owned != owned {
+				t.Errorf("expected %t, got %t", tc.owned, owned)
+			}
+		})
 	}
 }
 
 func TestMachineSetMachineDeploymentOwnerRef(t *testing.T) {
-	for i, tc := range []struct {
+	for _, tc := range []struct {
 		description       string
 		machineSet        v1beta1.MachineSet
 		machineDeployment v1beta1.MachineDeployment
@@ -362,11 +362,11 @@ func TestMachineSetMachineDeploymentOwnerRef(t *testing.T) {
 		},
 		owned: true,
 	}} {
-		t.Logf("test #%d: %s", i, tc.description)
-
-		owned := machineSetHasMachineDeploymentOwnerRef(&tc.machineSet)
-		if tc.owned != owned {
-			t.Errorf("expected %t, got %t", tc.owned, owned)
-		}
+		t.Run(tc.description, func(t *testing.T) {
+			owned := machineSetHasMachineDeploymentOwnerRef(&tc.machineSet)
+			if tc.owned != owned {
+				t.Errorf("expected %t, got %t", tc.owned, owned)
+			}
+		})
 	}
 }
