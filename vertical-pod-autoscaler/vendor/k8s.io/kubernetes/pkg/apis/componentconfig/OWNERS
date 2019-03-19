@@ -1,0 +1,18 @@
+approvers:
+ - api-approvers
+ - mikedanese
+ - vishh
+ - mtaufen
+ - luxas
+ - sttts
+reviewers:
+ - api-reviewers
+ - thockin
+ - lavalamp
+ - smarterclayton
+ - wojtek-t
+ - deads2k
+ - vishh
+ - mikedanese
+ - liggitt
+ - luxas
