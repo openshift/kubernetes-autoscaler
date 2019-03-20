@@ -25,19 +25,16 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 )
 
-func mustCreateTestProvider(t *testing.T, name string, rl *cloudprovider.ResourceLimiter) cloudprovider.CloudProvider {
-	t.Helper()
-	controller, _ := mustCreateTestController(t, testControllerConfig{})
-	provider, err := newProvider(ProviderName, rl, controller)
+func TestProviderConstructorProperties(t *testing.T) {
+	resourceLimits := cloudprovider.ResourceLimiter{}
+
+	controller, stop := mustCreateTestController(t, testControllerConfig{})
+	defer stop()
+
+	provider, err := newProvider(ProviderName, &resourceLimits, controller)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	return provider
-}
-
-func TestProviderConstructorProperties(t *testing.T) {
-	resourceLimits := cloudprovider.ResourceLimiter{}
-	provider := mustCreateTestProvider(t, ProviderName, &resourceLimits)
 
 	if actual := provider.Name(); actual != ProviderName {
 		t.Errorf("expected %q, got %q", ProviderName, actual)
