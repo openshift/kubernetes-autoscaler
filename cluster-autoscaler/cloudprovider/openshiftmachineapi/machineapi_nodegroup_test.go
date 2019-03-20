@@ -206,39 +206,24 @@ func TestNodeGroupNewNodeGroup(t *testing.T) {
 	})
 }
 
-func TestNodeGroupIncreaseSize(t *testing.T) {
+func TestNodeGroupIncreaseSizeErrors(t *testing.T) {
 	type testCase struct {
 		description string
 		delta       int
-		expected    int32
 		initial     int32
-		maxSize     string
-		minSize     string
-		errors      bool
+		errorMsg    string
 	}
 
 	testCases := []testCase{{
 		description: "errors because delta is negative",
 		delta:       -1,
-		errors:      true,
 		initial:     3,
-		maxSize:     "10",
-		minSize:     "1",
+		errorMsg:    "size increase must be positive",
 	}, {
 		description: "errors because initial+delta > maxSize",
 		delta:       8,
-		errors:      true,
 		initial:     3,
-		maxSize:     "10",
-		minSize:     "1",
-	}, {
-		description: "no error as within bounds",
-		delta:       1,
-		errors:      false,
-		expected:    4,
-		initial:     3,
-		maxSize:     "10",
-		minSize:     "1",
+		errorMsg:    "size increase too large - desired:11 max:10",
 	}}
 
 	test := func(t *testing.T, tc *testCase, testObjs *clusterTestConfig) {
@@ -259,17 +244,19 @@ func TestNodeGroupIncreaseSize(t *testing.T) {
 			t.Errorf("expected %v, got %v", tc.initial, currReplicas)
 		}
 
+		errors := len(tc.errorMsg) > 0
+
 		err = ng.IncreaseSize(tc.delta)
-		if tc.errors && err == nil {
+		if errors && err == nil {
 			t.Fatal("expected an error")
 		}
 
-		if !tc.errors && err != nil {
+		if !errors && err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		if tc.errors {
-			return // expected to error
+		if !strings.Contains(err.Error(), tc.errorMsg) {
+			t.Errorf("expected error message to contain %q, got %q", tc.errorMsg, err.Error())
 		}
 
 		switch v := (ng.scalableResource).(type) {
@@ -279,9 +266,8 @@ func TestNodeGroupIncreaseSize(t *testing.T) {
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			actual := pointer.Int32PtrDerefOr(ms.Spec.Replicas, 0)
-			if actual != tc.expected {
-				t.Errorf("expected %v, got %v", tc.expected, actual)
+			if actual := pointer.Int32PtrDerefOr(ms.Spec.Replicas, 0); actual != tc.initial {
+				t.Errorf("expected %v, got %v", tc.initial, actual)
 			}
 		case *machineDeploymentScalableResource:
 			// A nodegroup is immutable; get a fresh copy.
@@ -289,9 +275,8 @@ func TestNodeGroupIncreaseSize(t *testing.T) {
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			actual := pointer.Int32PtrDerefOr(md.Spec.Replicas, 0)
-			if actual != tc.expected {
-				t.Errorf("expected %v, got %v", tc.expected, actual)
+			if actual := pointer.Int32PtrDerefOr(md.Spec.Replicas, 0); actual != tc.initial {
+				t.Errorf("expected %v, got %v", tc.initial, actual)
 			}
 		default:
 			t.Errorf("unexpected type: %T", v)
@@ -302,8 +287,8 @@ func TestNodeGroupIncreaseSize(t *testing.T) {
 		for i, tc := range testCases {
 			t.Run(tc.description, func(t *testing.T) {
 				annotations := map[string]string{
-					nodeGroupMinSizeAnnotationKey: tc.minSize,
-					nodeGroupMaxSizeAnnotationKey: tc.maxSize,
+					nodeGroupMinSizeAnnotationKey: "1",
+					nodeGroupMaxSizeAnnotationKey: "10",
 				}
 				test(t, &tc, newMachineSetTestObjs(t.Name(), i, int(tc.initial), tc.initial, annotations))
 			})
@@ -314,8 +299,8 @@ func TestNodeGroupIncreaseSize(t *testing.T) {
 		for i, tc := range testCases {
 			t.Run(tc.description, func(t *testing.T) {
 				annotations := map[string]string{
-					nodeGroupMinSizeAnnotationKey: tc.minSize,
-					nodeGroupMaxSizeAnnotationKey: tc.maxSize,
+					nodeGroupMinSizeAnnotationKey: "1",
+					nodeGroupMaxSizeAnnotationKey: "10",
 				}
 				test(t, &tc, newMachineDeploymentTestObjs(t.Name(), i, int(tc.initial), tc.initial, annotations))
 			})
@@ -323,39 +308,24 @@ func TestNodeGroupIncreaseSize(t *testing.T) {
 	})
 }
 
-func TestNodeGroupDecreaseSize(t *testing.T) {
+func TestNodeGroupDecreaseSizeErrors(t *testing.T) {
 	type testCase struct {
 		description string
 		delta       int
-		expected    int
-		initial     int
-		maxSize     string
-		minSize     string
-		errors      bool
+		initial     int32
+		errorMsg    string
 	}
 
 	testCases := []testCase{{
 		description: "errors because delta is positive",
 		delta:       1,
-		errors:      true,
 		initial:     3,
-		maxSize:     "10",
-		minSize:     "1",
+		errorMsg:    "size decrease must be negative",
 	}, {
-		description: "errors because delta exceeds node count",
-		delta:       -4,
-		errors:      true,
-		initial:     3,
-		maxSize:     "10",
-		minSize:     "1",
-	}, {
-		description: "errors because size+delta >= len(nodes)",
+		description: "errors because initial+delta < len(nodes)",
 		delta:       -1,
-		errors:      true,
-		expected:    2,
 		initial:     3,
-		maxSize:     "10",
-		minSize:     "1",
+		errorMsg:    "attempt to delete existing nodes targetSize:3 delta:-1 existingNodes: 3",
 	}}
 
 	test := func(t *testing.T, tc *testCase, testConfig *clusterTestConfig) {
@@ -372,21 +342,23 @@ func TestNodeGroupDecreaseSize(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		if currReplicas != tc.initial {
+		if currReplicas != int(tc.initial) {
 			t.Errorf("expected %v, got %v", tc.initial, currReplicas)
 		}
 
+		errors := len(tc.errorMsg) > 0
+
 		err = ng.DecreaseTargetSize(tc.delta)
-		if tc.errors && err == nil {
+		if errors && err == nil {
 			t.Fatal("expected an error")
 		}
 
-		if !tc.errors && err != nil {
+		if !errors && err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		if tc.errors {
-			return // expected to error
+		if !strings.Contains(err.Error(), tc.errorMsg) {
+			t.Errorf("expected error message to contain %q, got %q", tc.errorMsg, err.Error())
 		}
 
 		switch v := (ng.scalableResource).(type) {
@@ -396,9 +368,8 @@ func TestNodeGroupDecreaseSize(t *testing.T) {
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			actual := pointer.Int32PtrDerefOr(ms.Spec.Replicas, 0) + 1
-			if int(actual) != tc.expected {
-				t.Errorf("expected %v, got %v", tc.expected, actual)
+			if actual := pointer.Int32PtrDerefOr(ms.Spec.Replicas, 0); actual != tc.initial {
+				t.Errorf("expected %v, got %v", tc.initial, actual)
 			}
 		case *machineDeploymentScalableResource:
 			// A nodegroup is immutable; get a fresh copy.
@@ -406,9 +377,8 @@ func TestNodeGroupDecreaseSize(t *testing.T) {
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			actual := pointer.Int32PtrDerefOr(md.Spec.Replicas, 0)
-			if int(actual) != tc.expected {
-				t.Errorf("expected %v, got %v", tc.expected, actual)
+			if actual := pointer.Int32PtrDerefOr(md.Spec.Replicas, 0); actual != tc.initial {
+				t.Errorf("expected %v, got %v", tc.initial, actual)
 			}
 		default:
 			t.Errorf("unexpected type: %T", v)
@@ -420,10 +390,12 @@ func TestNodeGroupDecreaseSize(t *testing.T) {
 			tc := tc
 			t.Run(tc.description, func(t *testing.T) {
 				annotations := map[string]string{
-					nodeGroupMinSizeAnnotationKey: tc.minSize,
-					nodeGroupMaxSizeAnnotationKey: tc.maxSize,
+					nodeGroupMinSizeAnnotationKey: "1",
+					nodeGroupMaxSizeAnnotationKey: "10",
 				}
-				test(t, &tc, newMachineSetTestObjs(t.Name(), i, tc.initial, int32(tc.initial), annotations))
+				if tc.description == "success" {
+					test(t, &tc, newMachineSetTestObjs(t.Name(), i, int(tc.initial), tc.initial, annotations))
+				}
 			})
 		}
 	})
@@ -432,10 +404,10 @@ func TestNodeGroupDecreaseSize(t *testing.T) {
 		for i, tc := range testCases {
 			t.Run(tc.description, func(t *testing.T) {
 				annotations := map[string]string{
-					nodeGroupMinSizeAnnotationKey: tc.minSize,
-					nodeGroupMaxSizeAnnotationKey: tc.maxSize,
+					nodeGroupMinSizeAnnotationKey: "1",
+					nodeGroupMaxSizeAnnotationKey: "10",
 				}
-				test(t, &tc, newMachineDeploymentTestObjs(t.Name(), i, tc.initial, int32(tc.initial), annotations))
+				test(t, &tc, newMachineDeploymentTestObjs(t.Name(), i, int(tc.initial), tc.initial, annotations))
 			})
 		}
 	})

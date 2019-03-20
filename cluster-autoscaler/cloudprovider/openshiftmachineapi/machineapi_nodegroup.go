@@ -116,7 +116,7 @@ func (ng *nodegroup) DeleteNodes(nodes []*apiv1.Node) error {
 	}
 
 	if int(ng.scalableResource.Replicas())-len(nodes) <= 0 {
-		return fmt.Errorf("unable to delete %d machines in %q, machine replicas are <= 0 ", len(nodes), ng.Id())
+		return fmt.Errorf("unable to delete %d machines in %q, machine replicas are <= 0", len(nodes), ng.Id())
 	}
 
 	return ng.scalableResource.SetSize(ng.scalableResource.Replicas() - int32(len(nodes)))
