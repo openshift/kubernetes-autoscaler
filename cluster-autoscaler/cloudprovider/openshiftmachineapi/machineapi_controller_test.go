@@ -28,7 +28,6 @@ import (
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 	fakekube "k8s.io/client-go/kubernetes/fake"
 )
 
@@ -59,50 +58,6 @@ func mustCreateTestController(t *testing.T, config testControllerConfig) (*machi
 	return controller, func() {
 		close(stopCh)
 	}
-}
-
-func makeMachineOwner(i int, replicaCount int, annotations map[string]string, ownedByMachineDeployment bool) (*v1beta1.MachineSet, *v1beta1.MachineDeployment) {
-	machineSet := v1beta1.MachineSet{
-		TypeMeta: v1.TypeMeta{
-			Kind: "MachineSet",
-		},
-		ObjectMeta: v1.ObjectMeta{
-			Name:      fmt.Sprintf("machineset-%d", i),
-			Namespace: "test-namespace",
-			UID:       types.UID(fmt.Sprintf("machineset-%d", i)),
-		},
-		Spec: v1beta1.MachineSetSpec{
-			Replicas: int32ptr(int32(replicaCount)),
-		},
-	}
-
-	if !ownedByMachineDeployment {
-		machineSet.ObjectMeta.Annotations = annotations
-		return &machineSet, nil
-	}
-
-	machineDeployment := v1beta1.MachineDeployment{
-		TypeMeta: v1.TypeMeta{
-			Kind: "MachineDeployment",
-		},
-		ObjectMeta: v1.ObjectMeta{
-			Name:        fmt.Sprintf("machinedeployment-%d", i),
-			Namespace:   "test-namespace",
-			UID:         types.UID(fmt.Sprintf("machinedeployment-%d", i)),
-			Annotations: annotations,
-		},
-		Spec: v1beta1.MachineDeploymentSpec{
-			Replicas: int32ptr(int32(replicaCount)),
-		},
-	}
-
-	machineSet.OwnerReferences = append(machineSet.OwnerReferences, v1.OwnerReference{
-		Name: machineDeployment.Name,
-		Kind: machineDeployment.Kind,
-		UID:  machineDeployment.UID,
-	})
-
-	return &machineSet, &machineDeployment
 }
 
 func TestControllerFindMachineByID(t *testing.T) {
