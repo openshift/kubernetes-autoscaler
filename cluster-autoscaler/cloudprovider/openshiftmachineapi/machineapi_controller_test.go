@@ -666,8 +666,6 @@ func TestControllerNodeGroups(t *testing.T) {
 	}}
 
 	test := func(t *testing.T, tc testCase, testObjs *clusterTestConfig) {
-		t.Helper()
-
 		controller, stop := testObjs.newMachineController(t)
 		defer stop()
 
@@ -736,8 +734,6 @@ func TestControllerNodeGroupForNodeLookup(t *testing.T) {
 	}}
 
 	test := func(t *testing.T, tc testCase, testObjs *clusterTestConfig, node *apiv1.Node) {
-		t.Helper()
-
 		controller, stop := testObjs.newMachineController(t)
 		defer stop()
 
