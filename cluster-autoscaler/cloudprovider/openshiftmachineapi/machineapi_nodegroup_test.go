@@ -37,6 +37,7 @@ const (
 )
 
 type clusterTestConfig struct {
+	spec              *clusterTestSpec
 	machineDeployment *v1beta1.MachineDeployment
 	machineSet        *v1beta1.MachineSet
 	machines          []*v1beta1.Machine
@@ -84,7 +85,7 @@ func (config clusterTestConfig) newMachineController(t *testing.T) (*machineCont
 	})
 }
 
-func newMachineSetTestObjs(namespace string, id, nodeCount int, replicaCount int32, annotations map[string]string) (*clusterTestConfig, *clusterTestSpec) {
+func newMachineSetTestObjs(namespace string, id, nodeCount int, replicaCount int32, annotations map[string]string) *clusterTestConfig {
 	spec := &clusterTestSpec{
 		id:                      id,
 		annotations:             annotations,
@@ -95,10 +96,10 @@ func newMachineSetTestObjs(namespace string, id, nodeCount int, replicaCount int
 		rootIsMachineDeployment: false,
 	}
 
-	return makeClusterObjs(spec), spec
+	return makeClusterObjs(spec)
 }
 
-func newMachineDeploymentTestObjs(namespace string, id, nodeCount int, replicaCount int32, annotations map[string]string) (*clusterTestConfig, *clusterTestSpec) {
+func newMachineDeploymentTestObjs(namespace string, id, nodeCount int, replicaCount int32, annotations map[string]string) *clusterTestConfig {
 	spec := &clusterTestSpec{
 		id:                      id,
 		annotations:             annotations,
@@ -110,11 +111,12 @@ func newMachineDeploymentTestObjs(namespace string, id, nodeCount int, replicaCo
 		rootIsMachineDeployment: true,
 	}
 
-	return makeClusterObjs(spec), spec
+	return makeClusterObjs(spec)
 }
 
 func makeClusterObjs(spec *clusterTestSpec) *clusterTestConfig {
 	objs := clusterTestConfig{
+		spec:     spec,
 		nodes:    make([]*apiv1.Node, spec.nodeCount),
 		machines: make([]*v1beta1.Machine, spec.nodeCount),
 	}
@@ -386,9 +388,9 @@ func TestNodeGroupNewNodeGroup(t *testing.T) {
 			tc := tc // capture range variable
 			t.Run(tc.description, func(t *testing.T) {
 				t.Parallel()
-				testObjs, spec := newMachineSetTestObjs(t.Name(), i, tc.nodeCount, tc.replicas, tc.annotations)
-				tc.namespace = spec.namespace
-				tc.name = fmt.Sprintf("%s%d", spec.machineSetPrefix, i)
+				testObjs := newMachineSetTestObjs(t.Name(), i, tc.nodeCount, tc.replicas, tc.annotations)
+				tc.namespace = testObjs.spec.namespace
+				tc.name = fmt.Sprintf("%s%d", testObjs.spec.machineSetPrefix, i)
 				tc.id = path.Join(tc.namespace, tc.name)
 				tc.debug = fmt.Sprintf("%s (min: %d, max: %d, replicas: %d)", path.Join(tc.namespace, tc.name), tc.minSize, tc.maxSize, tc.replicas)
 				testNodeGroupProperties(t, tc, testObjs)
@@ -403,9 +405,9 @@ func TestNodeGroupNewNodeGroup(t *testing.T) {
 			tc := tc // capture range variable
 			t.Run(tc.description, func(t *testing.T) {
 				t.Parallel()
-				testObjs, spec := newMachineDeploymentTestObjs(t.Name(), i, tc.nodeCount, tc.replicas, tc.annotations)
-				tc.namespace = spec.namespace
-				tc.name = fmt.Sprintf("%s%d", spec.machineDeploymentPrefix, i)
+				testObjs := newMachineDeploymentTestObjs(t.Name(), i, tc.nodeCount, tc.replicas, tc.annotations)
+				tc.namespace = testObjs.spec.namespace
+				tc.name = fmt.Sprintf("%s%d", testObjs.spec.machineDeploymentPrefix, i)
 				tc.id = path.Join(tc.namespace, tc.name)
 				tc.debug = fmt.Sprintf("%s (min: %d, max: %d, replicas: %d)", path.Join(tc.namespace, tc.name), tc.minSize, tc.maxSize, tc.replicas)
 				testNodeGroupProperties(t, tc, testObjs)
@@ -513,8 +515,7 @@ func TestNodeGroupIncreaseSize(t *testing.T) {
 					nodeGroupMinSizeAnnotationKey: tc.minSize,
 					nodeGroupMaxSizeAnnotationKey: tc.maxSize,
 				}
-				testObjs, _ := newMachineSetTestObjs(t.Name(), i, int(tc.initial), tc.initial, annotations)
-				test(t, &tc, testObjs)
+				test(t, &tc, newMachineSetTestObjs(t.Name(), i, int(tc.initial), tc.initial, annotations))
 			})
 		}
 	})
@@ -526,8 +527,7 @@ func TestNodeGroupIncreaseSize(t *testing.T) {
 					nodeGroupMinSizeAnnotationKey: tc.minSize,
 					nodeGroupMaxSizeAnnotationKey: tc.maxSize,
 				}
-				testObjs, _ := newMachineDeploymentTestObjs(t.Name(), i, int(tc.initial), tc.initial, annotations)
-				test(t, &tc, testObjs)
+				test(t, &tc, newMachineDeploymentTestObjs(t.Name(), i, int(tc.initial), tc.initial, annotations))
 			})
 		}
 	})
@@ -633,8 +633,7 @@ func TestNodeGroupDecreaseSize(t *testing.T) {
 					nodeGroupMinSizeAnnotationKey: tc.minSize,
 					nodeGroupMaxSizeAnnotationKey: tc.maxSize,
 				}
-				testObjs, _ := newMachineSetTestObjs(t.Name(), i, tc.initial, int32(tc.initial), annotations)
-				test(t, &tc, testObjs)
+				test(t, &tc, newMachineSetTestObjs(t.Name(), i, tc.initial, int32(tc.initial), annotations))
 			})
 		}
 	})
@@ -646,8 +645,7 @@ func TestNodeGroupDecreaseSize(t *testing.T) {
 					nodeGroupMinSizeAnnotationKey: tc.minSize,
 					nodeGroupMaxSizeAnnotationKey: tc.maxSize,
 				}
-				testObjs, _ := newMachineDeploymentTestObjs(t.Name(), i, tc.initial, int32(tc.initial), annotations)
-				test(t, &tc, testObjs)
+				test(t, &tc, newMachineDeploymentTestObjs(t.Name(), i, tc.initial, int32(tc.initial), annotations))
 			})
 		}
 	})
@@ -722,19 +720,17 @@ func TestNodeGroupDeleteNodes(t *testing.T) {
 	// sorting and the expected semantics in test() will fail.
 
 	t.Run("MachineSet", func(t *testing.T) {
-		testObjs, _ := newMachineSetTestObjs(t.Name(), 0, 10, 10, map[string]string{
+		test(t, newMachineSetTestObjs(t.Name(), 0, 10, 10, map[string]string{
 			nodeGroupMinSizeAnnotationKey: "1",
 			nodeGroupMaxSizeAnnotationKey: "10",
-		})
-		test(t, testObjs)
+		}))
 	})
 
 	t.Run("MachineDeployment", func(t *testing.T) {
-		testObjs, _ := newMachineDeploymentTestObjs(t.Name(), 0, 10, 10, map[string]string{
+		test(t, newMachineDeploymentTestObjs(t.Name(), 0, 10, 10, map[string]string{
 			nodeGroupMinSizeAnnotationKey: "1",
 			nodeGroupMaxSizeAnnotationKey: "10",
-		})
-		test(t, testObjs)
+		}))
 	})
 }
 
