@@ -382,12 +382,8 @@ func TestNodeGroupNewNodeGroup(t *testing.T) {
 	}
 
 	t.Run("MachineSet", func(t *testing.T) {
-		t.Parallel()
 		for i, tc := range testCases {
-			i := i   // capture range variable
-			tc := tc // capture range variable
 			t.Run(tc.description, func(t *testing.T) {
-				t.Parallel()
 				testObjs := newMachineSetTestObjs(t.Name(), i, tc.nodeCount, tc.replicas, tc.annotations)
 				tc.namespace = testObjs.spec.namespace
 				tc.name = fmt.Sprintf("%s%d", testObjs.spec.machineSetPrefix, i)
@@ -399,12 +395,8 @@ func TestNodeGroupNewNodeGroup(t *testing.T) {
 	})
 
 	t.Run("MachineDeployment", func(t *testing.T) {
-		t.Parallel()
 		for i, tc := range testCases {
-			i := i   // capture range variable
-			tc := tc // capture range variable
 			t.Run(tc.description, func(t *testing.T) {
-				t.Parallel()
 				testObjs := newMachineDeploymentTestObjs(t.Name(), i, tc.nodeCount, tc.replicas, tc.annotations)
 				tc.namespace = testObjs.spec.namespace
 				tc.name = fmt.Sprintf("%s%d", testObjs.spec.machineDeploymentPrefix, i)
