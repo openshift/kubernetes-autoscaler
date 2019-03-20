@@ -107,7 +107,7 @@ func TestControllerFindMachineByID(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.description, func(t *testing.T) {
-			testObjs, _ := newMachineSetTestObjs(t.Name(), 0, 1, 1, map[string]string{
+			testObjs := newMachineSetTestObjs(t.Name(), 0, 1, 1, map[string]string{
 				nodeGroupMinSizeAnnotationKey: "1",
 				nodeGroupMaxSizeAnnotationKey: "10",
 			})
@@ -645,7 +645,7 @@ func TestControllerNodeGroups(t *testing.T) {
 	t.Run("MachineSet", func(t *testing.T) {
 		for _, tc := range testCases {
 			t.Run(tc.description, func(t *testing.T) {
-				testObjs, _ := newMachineSetTestObjs(t.Name(), 0, 1, 1, tc.annotations)
+				testObjs := newMachineSetTestObjs(t.Name(), 0, 1, 1, tc.annotations)
 				test(t, tc, testObjs)
 			})
 		}
@@ -654,8 +654,7 @@ func TestControllerNodeGroups(t *testing.T) {
 	t.Run("MachineDeployment", func(t *testing.T) {
 		for _, tc := range testCases {
 			t.Run(tc.description, func(t *testing.T) {
-				testObjs, _ := newMachineDeploymentTestObjs(t.Name(), 0, 1, 1, tc.annotations)
-				test(t, tc, testObjs)
+				test(t, tc, newMachineDeploymentTestObjs(t.Name(), 0, 1, 1, tc.annotations))
 			})
 		}
 	})
@@ -725,7 +724,7 @@ func TestControllerNodeGroupForNodeLookup(t *testing.T) {
 	t.Run("MachineSet", func(t *testing.T) {
 		for _, tc := range testCases {
 			t.Run(tc.description, func(t *testing.T) {
-				testObjs, _ := newMachineSetTestObjs(t.Name(), 0, 1, 1, tc.annotations)
+				testObjs := newMachineSetTestObjs(t.Name(), 0, 1, 1, tc.annotations)
 				test(t, tc, testObjs, testObjs.nodes[0].DeepCopy())
 			})
 		}
@@ -734,7 +733,7 @@ func TestControllerNodeGroupForNodeLookup(t *testing.T) {
 	t.Run("MachineDeployment", func(t *testing.T) {
 		for _, tc := range testCases {
 			t.Run(tc.description, func(t *testing.T) {
-				testObjs, _ := newMachineDeploymentTestObjs(t.Name(), 0, 1, 1, tc.annotations)
+				testObjs := newMachineDeploymentTestObjs(t.Name(), 0, 1, 1, tc.annotations)
 				test(t, tc, testObjs, testObjs.nodes[0].DeepCopy())
 			})
 		}
