@@ -187,6 +187,14 @@ func (tcp *TestCloudProvider) AddAutoprovisionedNodeGroup(id string, min int, ma
 	return nodeGroup
 }
 
+// DeleteNodeGroup removes node group from test cloud provider.
+func (tcp *TestCloudProvider) DeleteNodeGroup(id string) {
+	tcp.Lock()
+	defer tcp.Unlock()
+
+	delete(tcp.groups, id)
+}
+
 // AddNode adds the given node to the group.
 func (tcp *TestCloudProvider) AddNode(nodeGroupId string, node *apiv1.Node) {
 	tcp.Lock()
@@ -214,6 +222,11 @@ func (tcp *TestCloudProvider) Cleanup() error {
 // In particular the list of node groups returned by NodeGroups can change as a result of CloudProvider.Refresh().
 func (tcp *TestCloudProvider) Refresh() error {
 	return nil
+}
+
+// GetInstanceID gets the instance ID for the specified node.
+func (tcp *TestCloudProvider) GetInstanceID(node *apiv1.Node) string {
+	return node.Spec.ProviderID
 }
 
 // TestNodeGroup is a node group used by TestCloudProvider.
@@ -296,7 +309,11 @@ func (tng *TestNodeGroup) Create() (cloudprovider.NodeGroup, error) {
 // Delete deletes the node group on the cloud provider side.
 // This will be executed only for autoprovisioned node groups, once their size drops to 0.
 func (tng *TestNodeGroup) Delete() error {
-	return tng.cloudProvider.onNodeGroupDelete(tng.id)
+	err := tng.cloudProvider.onNodeGroupDelete(tng.id)
+	if err == nil {
+		tng.cloudProvider.DeleteNodeGroup(tng.Id())
+	}
+	return err
 }
 
 // DecreaseTargetSize decreases the target size of the node group. This function

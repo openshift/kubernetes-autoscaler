@@ -30,7 +30,7 @@ import (
 )
 
 const (
-	fakeVirtualMachineScaleSetVMID = "/subscriptions/test-subscription-id/resourceGroups/test-asg/providers/Microsoft.Compute/virtualMachineScaleSets/agents/virtualMachines/0"
+	fakeVirtualMachineScaleSetVMID = "/subscriptions/test-subscription-id/resourcegroups/test-asg/providers/microsoft.compute/virtualmachinescalesets/agents/virtualmachines/0"
 )
 
 // VirtualMachineScaleSetsClientMock mocks for VirtualMachineScaleSetsClient.
@@ -63,7 +63,9 @@ func (client *VirtualMachineScaleSetsClientMock) CreateOrUpdate(ctx context.Cont
 	}
 	client.FakeStore[resourceGroupName][VMScaleSetName] = parameters
 
-	return nil, nil
+	return &http.Response{
+		StatusCode: http.StatusOK,
+	}, nil
 }
 
 // DeleteInstances deletes a set of instances for specified VirtualMachineScaleSet.

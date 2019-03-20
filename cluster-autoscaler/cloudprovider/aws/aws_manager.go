@@ -22,11 +22,13 @@ import (
 	"fmt"
 	"io"
 	"math/rand"
+	"os"
 	"regexp"
 	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/ec2metadata"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/autoscaling"
 	"github.com/aws/aws-sdk-go/service/ec2"
@@ -63,7 +65,26 @@ type asgTemplate struct {
 	Tags         []*autoscaling.TagDescription
 }
 
+// getRegion deduces the current AWS Region.
+func getRegion(cfg ...*aws.Config) string {
+	region, present := os.LookupEnv("AWS_REGION")
+	if !present {
+		svc := ec2metadata.New(session.New(), cfg...)
+		if r, err := svc.Region(); err == nil {
+			region = r
+		}
+	}
+	return region
+}
+
 // createAwsManagerInternal allows for a customer autoScalingWrapper to be passed in by tests
+//
+// #1449 If running tests outside of AWS without AWS_REGION among environment
+// variables, avoid a 5+ second EC2 Metadata lookup timeout in getRegion by
+// setting and resetting AWS_REGION before calling createAWSManagerInternal:
+//
+//	defer resetAWSRegion(os.LookupEnv("AWS_REGION"))
+//	os.Setenv("AWS_REGION", "fanghorn")
 func createAWSManagerInternal(
 	configReader io.Reader,
 	discoveryOpts cloudprovider.NodeGroupDiscoveryOptions,
@@ -79,7 +100,7 @@ func createAWSManagerInternal(
 	}
 
 	if autoScalingService == nil || ec2Service == nil {
-		sess := session.New()
+		sess := session.New(aws.NewConfig().WithRegion(getRegion()))
 
 		if autoScalingService == nil {
 			autoScalingService = &autoScalingWrapper{autoscaling.New(sess)}
@@ -153,55 +174,12 @@ func (m *AwsManager) getAsgs() []*asg {
 
 // SetAsgSize sets ASG size.
 func (m *AwsManager) SetAsgSize(asg *asg, size int) error {
-	params := &autoscaling.SetDesiredCapacityInput{
-		AutoScalingGroupName: aws.String(asg.Name),
-		DesiredCapacity:      aws.Int64(int64(size)),
-		HonorCooldown:        aws.Bool(false),
-	}
-	glog.V(0).Infof("Setting asg %s size to %d", asg.Name, size)
-	_, err := m.autoScalingService.SetDesiredCapacity(params)
-	if err != nil {
-		return err
-	}
-	return nil
+	return m.asgCache.SetAsgSize(asg, size)
 }
 
 // DeleteInstances deletes the given instances. All instances must be controlled by the same ASG.
 func (m *AwsManager) DeleteInstances(instances []*AwsInstanceRef) error {
-	if len(instances) == 0 {
-		return nil
-	}
-	commonAsg := m.asgCache.FindForInstance(*instances[0])
-	if commonAsg == nil {
-		return fmt.Errorf("can't delete instance %s, which is not part of an ASG", instances[0].Name)
-	}
-
-	for _, instance := range instances {
-		asg := m.asgCache.FindForInstance(*instance)
-
-		if asg != commonAsg {
-			instanceIds := make([]string, len(instances))
-			for i, instance := range instances {
-				instanceIds[i] = instance.Name
-			}
-
-			return fmt.Errorf("can't delete instances %s as they belong to at least two different ASGs (%s and %s)", strings.Join(instanceIds, ","), commonAsg.Name, asg.Name)
-		}
-	}
-
-	for _, instance := range instances {
-		params := &autoscaling.TerminateInstanceInAutoScalingGroupInput{
-			InstanceId:                     aws.String(instance.Name),
-			ShouldDecrementDesiredCapacity: aws.Bool(true),
-		}
-		resp, err := m.autoScalingService.TerminateInstanceInAutoScalingGroup(params)
-		if err != nil {
-			return err
-		}
-		glog.V(4).Infof(*resp.Activity.Description)
-	}
-
-	return nil
+	return m.asgCache.DeleteInstances(instances)
 }
 
 // GetAsgNodes returns Asg nodes.

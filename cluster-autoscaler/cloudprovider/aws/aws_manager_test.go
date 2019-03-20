@@ -18,6 +18,12 @@ package aws
 
 import (
 	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"reflect"
+	"sort"
+	"strings"
 	"testing"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -29,6 +35,35 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	kubeletapis "k8s.io/kubernetes/pkg/kubelet/apis"
 )
+
+// resetAWSRegion resets AWS_REGION environment variable key to its pre-test
+// value, but only if it was originally present among environment variables.
+func resetAWSRegion(value string, present bool) {
+	os.Unsetenv("AWS_REGION")
+	if present {
+		os.Setenv("AWS_REGION", value)
+	}
+}
+
+// TestGetRegion ensures correct source supplies AWS Region.
+func TestGetRegion(t *testing.T) {
+	key := "AWS_REGION"
+	defer resetAWSRegion(os.LookupEnv(key))
+	// Ensure environment variable retains precedence.
+	expected1 := "the-shire-1"
+	os.Setenv(key, expected1)
+	assert.Equal(t, expected1, getRegion())
+	// Ensure without environment variable, EC2 Metadata used... and it merely
+	// chops the last character off the Availability Zone.
+	expected2 := "mordor-2"
+	expected2a := expected2 + "a"
+	os.Unsetenv(key)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(expected2a))
+	}))
+	cfg := aws.NewConfig().WithEndpoint(server.URL)
+	assert.Equal(t, expected2, getRegion(cfg))
+}
 
 func TestBuildGenericLabels(t *testing.T) {
 	labels := buildGenericLabels(&asgTemplate{
@@ -159,6 +194,9 @@ func TestFetchExplicitAsgs(t *testing.T) {
 			fmt.Sprintf("%d:%d:%s", min, max-1, groupname),
 		},
 	}
+	// #1449 Without AWS_REGION getRegion() lookup runs till timeout during tests.
+	defer resetAWSRegion(os.LookupEnv("AWS_REGION"))
+	os.Setenv("AWS_REGION", "fanghorn")
 	// fetchExplicitASGs is called at manager creation time.
 	m, err := createAWSManagerInternal(nil, do, &autoScalingWrapper{s}, nil)
 	assert.NoError(t, err)
@@ -185,6 +223,9 @@ func TestBuildInstanceType(t *testing.T) {
 		},
 	})
 
+	// #1449 Without AWS_REGION getRegion() lookup runs till timeout during tests.
+	defer resetAWSRegion(os.LookupEnv("AWS_REGION"))
+	os.Setenv("AWS_REGION", "fanghorn")
 	m, err := createAWSManagerInternal(nil, cloudprovider.NodeGroupDiscoveryOptions{}, nil, &ec2Wrapper{s})
 	assert.NoError(t, err)
 
@@ -199,21 +240,21 @@ func TestBuildInstanceType(t *testing.T) {
 	assert.Equal(t, instanceType, builtInstanceType)
 }
 
-/* Disabled due to flakiness. See https://github.com/kubernetes/autoscaler/issues/608
 func TestFetchAutoAsgs(t *testing.T) {
 	min, max := 1, 10
 	groupname, tags := "coolasg", []string{"tag", "anothertag"}
 
 	s := &AutoScalingMock{}
 	// Lookup groups associated with tags
-	s.On("DescribeTagsPages",
-		&autoscaling.DescribeTagsInput{
-			Filters: []*autoscaling.Filter{
-				{Name: aws.String("key"), Values: aws.StringSlice([]string{tags[0]})},
-				{Name: aws.String("key"), Values: aws.StringSlice([]string{tags[1]})},
-			},
-			MaxRecords: aws.Int64(maxRecordsReturnedByAPI),
+	expectedTagsInput := &autoscaling.DescribeTagsInput{
+		Filters: []*autoscaling.Filter{
+			{Name: aws.String("key"), Values: aws.StringSlice([]string{tags[0]})},
+			{Name: aws.String("key"), Values: aws.StringSlice([]string{tags[1]})},
 		},
+		MaxRecords: aws.Int64(maxRecordsReturnedByAPI),
+	}
+	// Use MatchedBy pattern to avoid list order issue https://github.com/kubernetes/autoscaler/issues/1346
+	s.On("DescribeTagsPages", mock.MatchedBy(tagsMatcher(expectedTagsInput)),
 		mock.AnythingOfType("func(*autoscaling.DescribeTagsOutput, bool) bool"),
 	).Run(func(args mock.Arguments) {
 		fn := args.Get(1).(func(*autoscaling.DescribeTagsOutput, bool) bool)
@@ -246,31 +287,45 @@ func TestFetchAutoAsgs(t *testing.T) {
 		NodeGroupAutoDiscoverySpecs: []string{fmt.Sprintf("asg:tag=%s", strings.Join(tags, ","))},
 	}
 
+	// #1449 Without AWS_REGION getRegion() lookup runs till timeout during tests.
+	defer resetAWSRegion(os.LookupEnv("AWS_REGION"))
+	os.Setenv("AWS_REGION", "fanghorn")
 	// fetchAutoASGs is called at manager creation time, via forceRefresh
-	m, err := createAWSManagerInternal(nil, do, &autoScalingWrapper{s})
+	m, err := createAWSManagerInternal(nil, do, &autoScalingWrapper{s}, nil)
 	assert.NoError(t, err)
 
-	asgs := m.asgCache.get()
+	asgs := m.asgCache.Get()
 	assert.Equal(t, 1, len(asgs))
-	validateAsg(t, asgs[0].config, groupname, min, max)
+	validateAsg(t, asgs[0], groupname, min, max)
 
 	// Simulate the previously discovered ASG disappearing
-	s.On("DescribeTagsPages",
-		&autoscaling.DescribeTagsInput{
-			Filters: []*autoscaling.Filter{
-				{Name: aws.String("key"), Values: aws.StringSlice([]string{tags[0]})},
-				{Name: aws.String("key"), Values: aws.StringSlice([]string{tags[1]})},
-			},
-			MaxRecords: aws.Int64(maxRecordsReturnedByAPI),
-		},
+	s.On("DescribeTagsPages", mock.MatchedBy(tagsMatcher(expectedTagsInput)),
 		mock.AnythingOfType("func(*autoscaling.DescribeTagsOutput, bool) bool"),
 	).Run(func(args mock.Arguments) {
 		fn := args.Get(1).(func(*autoscaling.DescribeTagsOutput, bool) bool)
 		fn(&autoscaling.DescribeTagsOutput{Tags: []*autoscaling.TagDescription{}}, false)
 	}).Return(nil).Once()
 
-	err = m.fetchAutoAsgs()
+	err = m.asgCache.regenerate()
 	assert.NoError(t, err)
-	assert.Empty(t, m.asgCache.get())
+	assert.Empty(t, m.asgCache.Get())
 }
-*/
+
+func tagsMatcher(expected *autoscaling.DescribeTagsInput) func(*autoscaling.DescribeTagsInput) bool {
+	return func(actual *autoscaling.DescribeTagsInput) bool {
+		expectedTags := flatTagSlice(expected.Filters)
+		actualTags := flatTagSlice(actual.Filters)
+
+		return *expected.MaxRecords == *actual.MaxRecords && reflect.DeepEqual(expectedTags, actualTags)
+	}
+}
+
+func flatTagSlice(filters []*autoscaling.Filter) []string {
+	tags := []string{}
+	for _, filter := range filters {
+		tags = append(tags, aws.StringValueSlice(filter.Values)...)
+	}
+	// Sort slice for compare
+	sort.Strings(tags)
+	return tags
+}
