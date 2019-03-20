@@ -95,6 +95,10 @@ func (p *provider) Refresh() error {
 	return nil
 }
 
+func (p *provider) GetInstanceID(node *apiv1.Node) string {
+	return node.Spec.ProviderID
+}
+
 func newProvider(
 	name string,
 	rl *cloudprovider.ResourceLimiter,
