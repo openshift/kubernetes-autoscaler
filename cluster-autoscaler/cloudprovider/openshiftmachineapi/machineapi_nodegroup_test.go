@@ -306,8 +306,6 @@ func TestNodeGroupNewNodeGroup(t *testing.T) {
 	}}
 
 	testNodeGroupProperties := func(t *testing.T, tc testCase, clusterObjs *clusterTestConfig) {
-		t.Helper()
-
 		controller, stop := clusterObjs.newMachineController(t)
 		defer stop()
 
@@ -452,8 +450,6 @@ func TestNodeGroupIncreaseSize(t *testing.T) {
 	}}
 
 	test := func(t *testing.T, tc *testCase, testObjs *clusterTestConfig) {
-		t.Helper()
-
 		controller, stop := testObjs.newMachineController(t)
 		defer stop()
 
@@ -573,8 +569,6 @@ func TestNodeGroupDecreaseSize(t *testing.T) {
 	}}
 
 	test := func(t *testing.T, tc *testCase, testConfig *clusterTestConfig) {
-		t.Helper()
-
 		controller, stop := testConfig.newMachineController(t)
 		defer stop()
 
@@ -661,8 +655,6 @@ func TestNodeGroupDecreaseSize(t *testing.T) {
 
 func TestNodeGroupDeleteNodes(t *testing.T) {
 	test := func(t *testing.T, testObjs *clusterTestConfig) {
-		t.Helper()
-
 		controller, stop := testObjs.newMachineController(t)
 		defer stop()
 
