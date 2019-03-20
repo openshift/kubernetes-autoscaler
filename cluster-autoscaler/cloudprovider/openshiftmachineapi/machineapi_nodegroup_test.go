@@ -104,7 +104,7 @@ func newMachineDeploymentTestObjs(namespace string, id, nodeCount int, replicaCo
 		annotations:             annotations,
 		machineDeploymentPrefix: fmt.Sprintf("machinedeployment-%s-", namespace),
 		machineSetPrefix:        fmt.Sprintf("machineset-%s-", namespace),
-		namespace:               namespace,
+		namespace:               strings.ToLower(namespace),
 		nodeCount:               nodeCount,
 		replicaCount:            replicaCount,
 		rootIsMachineDeployment: true,
