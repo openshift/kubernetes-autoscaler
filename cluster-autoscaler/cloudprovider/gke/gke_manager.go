@@ -504,17 +504,6 @@ func (m *gkeManagerImpl) refreshClusterResources() error {
 	return nil
 }
 
-func (m *gkeManagerImpl) refreshClusterResources() error {
-	cluster, err := m.GkeService.GetCluster()
-	if err != nil {
-		return err
-	}
-	m.refreshNodePools(cluster.NodePools)
-	m.refreshResourceLimiter(cluster.ResourceLimiter)
-	m.gkeConfigurationCache.setNodeLocations(cluster.Locations)
-	return nil
-}
-
 func (m *gkeManagerImpl) buildMigFromFlag(flag string) (gce.Mig, error) {
 	s, err := dynamic.SpecFromString(flag, scaleToZeroSupported)
 	if err != nil {

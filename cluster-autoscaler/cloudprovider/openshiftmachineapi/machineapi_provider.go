@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/golang/glog"
 	clusterclientset "github.com/openshift/cluster-api/pkg/client/clientset_generated/clientset"
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -30,6 +29,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/klog"
 )
 
 const (
@@ -56,11 +56,11 @@ func (p *provider) GetResourceLimiter() (*cloudprovider.ResourceLimiter, error) 
 func (p *provider) NodeGroups() []cloudprovider.NodeGroup {
 	nodegroups, err := p.controller.nodeGroups()
 	if err != nil {
-		glog.Errorf("error getting node groups: %v", err)
+		klog.Errorf("error getting node groups: %v", err)
 		return nil
 	}
 	for _, ng := range nodegroups {
-		glog.V(4).Infof("discovered node group: %s", ng.Debug())
+		klog.V(4).Infof("discovered node group: %s", ng.Debug())
 	}
 	return nodegroups
 }
@@ -95,6 +95,11 @@ func (p *provider) Refresh() error {
 	return nil
 }
 
+// GetInstanceID gets the instance ID for the specified node.
+func (p *provider) GetInstanceID(node *apiv1.Node) string {
+	return node.Spec.ProviderID
+}
+
 func newProvider(
 	name string,
 	rl *cloudprovider.ResourceLimiter,
@@ -116,8 +121,10 @@ func BuildCloudProvider(name string, opts config.AutoscalingOptions, rl *cloudpr
 		return nil, err
 	}
 
-	if opts.KubeConfigPath != "" {
-		externalConfig, err = clientcmd.BuildConfigFromFlags("", opts.KubeConfigPath)
+	kubeConfigPath := ""
+
+	if kubeConfigPath != "" {
+		externalConfig, err = clientcmd.BuildConfigFromFlags("", kubeConfigPath)
 		if err != nil {
 			return nil, err
 		}
