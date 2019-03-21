@@ -22,15 +22,15 @@ import (
 	"net/http"
 	"sync"
 
-	"github.com/Azure/azure-sdk-for-go/services/compute/mgmt/2018-04-01/compute"
+	"github.com/Azure/azure-sdk-for-go/services/compute/mgmt/2018-10-01/compute"
 	"github.com/Azure/azure-sdk-for-go/services/resources/mgmt/2017-05-10/resources"
-	"github.com/Azure/azure-sdk-for-go/services/storage/mgmt/2017-10-01/storage"
+	"github.com/Azure/azure-sdk-for-go/services/storage/mgmt/2018-07-01/storage"
 	"github.com/Azure/go-autorest/autorest"
 	"github.com/stretchr/testify/mock"
 )
 
 const (
-	fakeVirtualMachineScaleSetVMID = "/subscriptions/test-subscription-id/resourceGroups/test-asg/providers/Microsoft.Compute/virtualMachineScaleSets/agents/virtualMachines/0"
+	fakeVirtualMachineScaleSetVMID = "/subscriptions/test-subscription-id/resourcegroups/test-asg/providers/microsoft.compute/virtualmachinescalesets/agents/virtualmachines/0"
 )
 
 // VirtualMachineScaleSetsClientMock mocks for VirtualMachineScaleSetsClient.
@@ -63,7 +63,9 @@ func (client *VirtualMachineScaleSetsClientMock) CreateOrUpdate(ctx context.Cont
 	}
 	client.FakeStore[resourceGroupName][VMScaleSetName] = parameters
 
-	return nil, nil
+	return &http.Response{
+		StatusCode: http.StatusOK,
+	}, nil
 }
 
 // DeleteInstances deletes a set of instances for specified VirtualMachineScaleSet.

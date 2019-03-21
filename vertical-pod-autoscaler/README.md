@@ -8,6 +8,8 @@ When configured, it will set the requests automatically based on usage and
 thus allow proper scheduling onto nodes so that appropriate resource amount is
 available for each pod.
 
+It can both down-scale pods that are over-requesting resources, and also up-scale pods that are under-requesting resources based on their usage over time.
+
 Autoscaling is configured with a
 [Custom Resource Definition object](https://kubernetes.io/docs/concepts/api-extension/custom-resources/)
 called [VerticalPodAutoscaler](https://github.com/kubernetes/autoscaler/blob/master/vertical-pod-autoscaler/pkg/apis/poc.autoscaling.k8s.io/v1alpha1/types.go).
@@ -32,7 +34,7 @@ the old installation of VPA.
 * It is strongly recommended to use Kubernetes 1.9 or greater.
   Your cluster must support MutatingAdmissionWebhooks, which are enabled by default
   since 1.9 ([#58255](https://github.com/kubernetes/kubernetes/pull/58255)).
-  Read more about [VPA Admission Webhook](./admission-controller/README.md#running).
+  Read more about [VPA Admission Webhook](./pkg/admission-controller/README.md#running).
 * `kubectl` should be connected to the cluster you want to install VPA in.
 * The metrics server must be deployed in your cluster. Read more about [Metrics Server](https://github.com/kubernetes-incubator/metrics-server).
 * If you are using a GKE Kubernetes cluster, you will need to grant your current Google
@@ -87,7 +89,7 @@ There are three modes in which *VPAs* operate:
   the `"Auto"` mode.
 * `"Recreate"`: VPA assigns resource requests on pod creation as well as updates
   them on existing pods by evicting them when the requested resources differ significantly
-  from the new recommendation (respecting the Pod Distruption Budget, if defined).
+  from the new recommendation (respecting the Pod Disruption Budget, if defined).
   This mode should be used rarely, only if you need to ensure that the pods are restarted
   whenever the resource request changes. Otherwise prefer the `"Auto"` mode which may take
   advantage of restart free updates once they are available.
@@ -179,7 +181,7 @@ will get resources as defined in your controllers (i.e. deployment or
 replicaset) and not according to previous recommendations made by VPA.
 
 To stop using Vertical Pod Autoscaling in your cluster:
-* If runnning on GKE, clean up role bindings created in [Prerequisites](#prerequisites):
+* If running on GKE, clean up role bindings created in [Prerequisites](#prerequisites):
 ```
 kubectl delete clusterrolebinding myname-cluster-admin-binding
 ```

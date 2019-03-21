@@ -28,7 +28,7 @@ import (
 	"k8s.io/api/admission/v1beta1"
 	"k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	vpa_types "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/apis/poc.autoscaling.k8s.io/v1alpha1"
+	vpa_types "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/apis/autoscaling.k8s.io/v1beta1"
 	metrics_admission "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/metrics/admission"
 	vpa_api_util "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/vpa"
 )
@@ -125,11 +125,73 @@ func (s *AdmissionServer) getPatchesForPodResourceRequest(raw []byte, namespace 
 	return patches, nil
 }
 
-func getPatchesForVPADefaults(raw []byte) ([]patchRecord, error) {
+func parseVPA(raw []byte) (*vpa_types.VerticalPodAutoscaler, error) {
 	vpa := vpa_types.VerticalPodAutoscaler{}
 	if err := json.Unmarshal(raw, &vpa); err != nil {
 		return nil, err
 	}
+	return &vpa, nil
+}
+
+var (
+	possibleUpdateModes = map[vpa_types.UpdateMode]interface{}{
+		vpa_types.UpdateModeOff:      struct{}{},
+		vpa_types.UpdateModeInitial:  struct{}{},
+		vpa_types.UpdateModeRecreate: struct{}{},
+		vpa_types.UpdateModeAuto:     struct{}{},
+	}
+
+	possibleScalingModes = map[vpa_types.ContainerScalingMode]interface{}{
+		vpa_types.ContainerScalingModeAuto: struct{}{},
+		vpa_types.ContainerScalingModeOff:  struct{}{},
+	}
+)
+
+func validateVPA(vpa *vpa_types.VerticalPodAutoscaler) error {
+	if vpa.Spec.UpdatePolicy != nil {
+		mode := vpa.Spec.UpdatePolicy.UpdateMode
+		if mode == nil {
+			return fmt.Errorf("UpdateMode is required if UpdatePolicy is used")
+		}
+		if _, found := possibleUpdateModes[*mode]; !found {
+			return fmt.Errorf("Unexpected UpdateMode value %s", *mode)
+		}
+	}
+
+	if vpa.Spec.ResourcePolicy != nil {
+		for _, policy := range vpa.Spec.ResourcePolicy.ContainerPolicies {
+			if policy.ContainerName == "" {
+				return fmt.Errorf("ContainerPolicies.ContainerName is required")
+			}
+			mode := policy.Mode
+			if mode != nil {
+				if _, found := possibleScalingModes[*mode]; !found {
+					return fmt.Errorf("Unexpected Mode value %s", *mode)
+				}
+			}
+			for resource, min := range policy.MinAllowed {
+				max, found := policy.MaxAllowed[resource]
+				if found && max.Cmp(min) < 0 {
+					return fmt.Errorf("Max resource for %v is lower than min", resource)
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+func getPatchesForVPADefaults(raw []byte) ([]patchRecord, error) {
+	vpa, err := parseVPA(raw)
+	if err != nil {
+		return nil, err
+	}
+
+	err = validateVPA(vpa)
+	if err != nil {
+		return nil, err
+	}
+
 	glog.V(4).Infof("Processing vpa: %v", vpa)
 	patches := []patchRecord{}
 	if vpa.Spec.UpdatePolicy == nil {
@@ -144,15 +206,19 @@ func getPatchesForVPADefaults(raw []byte) ([]patchRecord, error) {
 }
 
 func (s *AdmissionServer) admit(data []byte) (*v1beta1.AdmissionResponse, metrics_admission.AdmissionStatus, metrics_admission.AdmissionResource) {
+	// we don't block the admission by default, even on unparsable JSON
+	response := v1beta1.AdmissionResponse{}
+	response.Allowed = true
+
 	ar := v1beta1.AdmissionReview{}
 	if err := json.Unmarshal(data, &ar); err != nil {
 		glog.Error(err)
-		return nil, metrics_admission.Error, metrics_admission.Unknown
+		return &response, metrics_admission.Error, metrics_admission.Unknown
 	}
 	// The externalAdmissionHookConfiguration registered via selfRegistration
 	// asks the kube-apiserver only to send admission requests regarding pods & VPA objects.
 	podResource := metav1.GroupVersionResource{Group: "", Version: "v1", Resource: "pods"}
-	vpaResource := metav1.GroupVersionResource{Group: "poc.autoscaling.k8s.io", Version: "v1alpha1", Resource: "verticalpodautoscalers"}
+	vpaResource := metav1.GroupVersionResource{Group: "autoscaling.k8s.io", Version: "v1beta1", Resource: "verticalpodautoscalers"}
 	var patches []patchRecord
 	var err error
 	resource := metrics_admission.Unknown
@@ -164,21 +230,28 @@ func (s *AdmissionServer) admit(data []byte) (*v1beta1.AdmissionResponse, metric
 	case vpaResource:
 		patches, err = getPatchesForVPADefaults(ar.Request.Object.Raw)
 		resource = metrics_admission.Vpa
+		// we don't let in problematic VPA objects - late validation
+		if err != nil {
+			status := metav1.Status{}
+			status.Status = "Failure"
+			status.Message = err.Error()
+			response.Result = &status
+			response.Allowed = false
+		}
 	default:
 		patches, err = nil, fmt.Errorf("expected the resource to be %v or %v", podResource, vpaResource)
 	}
 
 	if err != nil {
 		glog.Error(err)
-		return nil, metrics_admission.Error, resource
+		return &response, metrics_admission.Error, resource
 	}
-	response := v1beta1.AdmissionResponse{}
-	response.Allowed = true
+
 	if len(patches) > 0 {
 		patch, err := json.Marshal(patches)
 		if err != nil {
 			glog.Errorf("Cannot marshal the patch %v: %v", patches, err)
-			return nil, metrics_admission.Error, resource
+			return &response, metrics_admission.Error, resource
 		}
 		patchType := v1beta1.PatchTypeJSONPatch
 		response.PatchType = &patchType

@@ -24,7 +24,9 @@ import (
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
+	"k8s.io/autoscaler/cluster-autoscaler/config"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/errors"
+	"k8s.io/klog"
 )
 
 const (
@@ -73,7 +75,18 @@ func (kubemark *KubemarkCloudProvider) Refresh() error {
 	return cloudprovider.ErrNotImplemented
 }
 
+// GetInstanceID gets the instance ID for the specified node.
+func (kubemark *KubemarkCloudProvider) GetInstanceID(node *apiv1.Node) string {
+	return ""
+}
+
 // Cleanup cleans up all resources before the cloud provider is removed
 func (kubemark *KubemarkCloudProvider) Cleanup() error {
 	return cloudprovider.ErrNotImplemented
+}
+
+// BuildKubemark builds Kubemark cloud provider.
+func BuildKubemark(opts config.AutoscalingOptions, do cloudprovider.NodeGroupDiscoveryOptions, rl *cloudprovider.ResourceLimiter) cloudprovider.CloudProvider {
+	klog.Fatal("Failed to create Kubemark cloud provider: only supported on Linux")
+	return nil
 }

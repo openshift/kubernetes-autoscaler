@@ -27,9 +27,10 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	"k8s.io/autoscaler/cluster-autoscaler/expander"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/gpu"
+	"k8s.io/autoscaler/cluster-autoscaler/utils/units"
 	schedulercache "k8s.io/kubernetes/pkg/scheduler/cache"
 
-	"github.com/golang/glog"
+	"k8s.io/klog"
 )
 
 // *************
@@ -47,11 +48,11 @@ type priceBased struct {
 var (
 	// defaultPreferredNode is the node that is preferred if PreferredNodeProvider fails.
 	// 4 cpu, 16gb ram.
-	defaultPreferredNode = buildNode(4*1000, 4*4*1024*1024*1024)
+	defaultPreferredNode = buildNode(4*1000, 4*4*units.GiB)
 
 	// priceStabilizationPod is the pod cost to stabilize node_cost/pod_cost ratio a bit.
 	// 0.5 cpu, 500 mb ram
-	priceStabilizationPod = buildPod("stabilize", 500, 500*1024*1024)
+	priceStabilizationPod = buildPod("stabilize", 500, 500*units.MiB)
 
 	// Penalty given to node groups that are yet to be created.
 	// TODO: make it a flag
@@ -94,12 +95,12 @@ func (p *priceBased) BestOption(expansionOptions []expander.Option, nodeInfos ma
 
 	preferredNode, err := p.preferredNodeProvider.Node()
 	if err != nil {
-		glog.Errorf("Failed to get preferred node, switching to default: %v", err)
+		klog.Errorf("Failed to get preferred node, switching to default: %v", err)
 		preferredNode = defaultPreferredNode
 	}
 	stabilizationPrice, err := p.pricingModel.PodPrice(priceStabilizationPod, now, then)
 	if err != nil {
-		glog.Errorf("Failed to get price for stabilization pod: %v", err)
+		klog.Errorf("Failed to get price for stabilization pod: %v", err)
 		// continuing without stabilization.
 	}
 
@@ -107,12 +108,12 @@ nextoption:
 	for _, option := range expansionOptions {
 		nodeInfo, found := nodeInfos[option.NodeGroup.Id()]
 		if !found {
-			glog.Warningf("No node info for %s", option.NodeGroup.Id())
+			klog.Warningf("No node info for %s", option.NodeGroup.Id())
 			continue
 		}
 		nodePrice, err := p.pricingModel.NodePrice(nodeInfo.Node(), now, then)
 		if err != nil {
-			glog.Warningf("Failed to calculate node price for %s: %v", option.NodeGroup.Id(), err)
+			klog.Warningf("Failed to calculate node price for %s: %v", option.NodeGroup.Id(), err)
 			continue
 		}
 		totalNodePrice := nodePrice * float64(option.NodeCount)
@@ -120,7 +121,7 @@ nextoption:
 		for _, pod := range option.Pods {
 			podPrice, err := p.pricingModel.PodPrice(pod, now, then)
 			if err != nil {
-				glog.Warningf("Failed to calculate pod price for %s/%s: %v", pod.Namespace, pod.Name, err)
+				klog.Warningf("Failed to calculate pod price for %s/%s: %v", pod.Namespace, pod.Name, err)
 				continue nextoption
 			}
 			totalPodPrice += podPrice
@@ -141,7 +142,7 @@ nextoption:
 		// Set constant, very high unfitness to make them unattractive for pods that doesn't need GPU and
 		// avoid optimizing them for CPU utilization.
 		if gpu.NodeHasGpu(nodeInfo.Node()) {
-			glog.V(4).Infof("Price expander overriding unfitness for node group with GPU %s", option.NodeGroup.Id())
+			klog.V(4).Infof("Price expander overriding unfitness for node group with GPU %s", option.NodeGroup.Id())
 			supressedUnfitness = gpuUnfitnessOverride
 		}
 
@@ -160,7 +161,7 @@ nextoption:
 			optionScore,
 		)
 
-		glog.V(5).Infof("Price expander for %s: %s", option.NodeGroup.Id(), debug)
+		klog.V(5).Infof("Price expander for %s: %s", option.NodeGroup.Id(), debug)
 
 		if bestOption == nil || bestOptionScore > optionScore {
 			bestOption = &expander.Option{

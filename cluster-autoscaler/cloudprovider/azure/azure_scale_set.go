@@ -19,11 +19,9 @@ package azure
 import (
 	"fmt"
 	"math/rand"
+	"strings"
 	"sync"
 	"time"
-
-	"github.com/Azure/azure-sdk-for-go/services/compute/mgmt/2018-04-01/compute"
-	"github.com/golang/glog"
 
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -31,8 +29,11 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	"k8s.io/autoscaler/cluster-autoscaler/config/dynamic"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/gpu"
+	"k8s.io/klog"
 	kubeletapis "k8s.io/kubernetes/pkg/kubelet/apis"
 	schedulercache "k8s.io/kubernetes/pkg/scheduler/cache"
+
+	"github.com/Azure/azure-sdk-for-go/services/compute/mgmt/2018-10-01/compute"
 )
 
 // ScaleSet implements NodeGroup interface.
@@ -116,12 +117,12 @@ func (scaleSet *ScaleSet) getCurSize() (int64, error) {
 		return scaleSet.curSize, nil
 	}
 
-	glog.V(5).Infof("Get scale set size for %q", scaleSet.Name)
+	klog.V(5).Infof("Get scale set size for %q", scaleSet.Name)
 	set, err := scaleSet.getVMSSInfo()
 	if err != nil {
 		return -1, err
 	}
-	glog.V(5).Infof("Getting scale set (%q) capacity: %d\n", scaleSet.Name, *set.Sku.Capacity)
+	klog.V(5).Infof("Getting scale set (%q) capacity: %d\n", scaleSet.Name, *set.Sku.Capacity)
 
 	scaleSet.curSize = *set.Sku.Capacity
 	scaleSet.lastRefresh = time.Now()
@@ -148,15 +149,18 @@ func (scaleSet *ScaleSet) SetScaleSetSize(size int64) error {
 	op.VirtualMachineScaleSetProperties.ProvisioningState = nil
 	updateCtx, updateCancel := getContextWithCancel()
 	defer updateCancel()
-	_, err = scaleSet.manager.azClient.virtualMachineScaleSetsClient.CreateOrUpdate(updateCtx, resourceGroup, scaleSet.Name, op)
-	if err != nil {
-		glog.Errorf("virtualMachineScaleSetsClient.CreateOrUpdate for scale set %q failed: %v", scaleSet.Name, err)
-		return err
+	klog.V(3).Infof("Waiting for virtualMachineScaleSetsClient.CreateOrUpdate(%s)", scaleSet.Name)
+	resp, err := scaleSet.manager.azClient.virtualMachineScaleSetsClient.CreateOrUpdate(updateCtx, resourceGroup, scaleSet.Name, op)
+	isSuccess, realError := isSuccessHTTPResponse(resp, err)
+	if isSuccess {
+		klog.V(3).Infof("virtualMachineScaleSetsClient.CreateOrUpdate(%s) success", scaleSet.Name)
+		scaleSet.curSize = size
+		scaleSet.lastRefresh = time.Now()
+		return nil
 	}
 
-	scaleSet.curSize = size
-	scaleSet.lastRefresh = time.Now()
-	return nil
+	klog.Errorf("virtualMachineScaleSetsClient.CreateOrUpdate for scale set %q failed: %v", scaleSet.Name, realError)
+	return realError
 }
 
 // TargetSize returns the current TARGET size of the node group. It is possible that the
@@ -187,43 +191,25 @@ func (scaleSet *ScaleSet) IncreaseSize(delta int) error {
 // GetScaleSetVms returns list of nodes for the given scale set.
 // Note that the list results is not used directly because their resource ID format
 // is not consistent with Get results.
-// TODO(feiskyer): use list results directly after the issue fixed in Azure VMSS API.
-func (scaleSet *ScaleSet) GetScaleSetVms() ([]compute.VirtualMachineScaleSetVM, error) {
-	instanceIDs := make([]string, 0)
+func (scaleSet *ScaleSet) GetScaleSetVms() ([]string, error) {
 	ctx, cancel := getContextWithCancel()
 	defer cancel()
 
 	resourceGroup := scaleSet.manager.config.ResourceGroup
-	result, err := scaleSet.manager.azClient.virtualMachineScaleSetVMsClient.List(ctx, resourceGroup, scaleSet.Name, "", "", "")
+	vmList, err := scaleSet.manager.azClient.virtualMachineScaleSetVMsClient.List(ctx, resourceGroup, scaleSet.Name, "", "", "")
 	if err != nil {
-		glog.Errorf("VirtualMachineScaleSetVMsClient.List failed for %s: %v", scaleSet.Name, err)
+		klog.Errorf("VirtualMachineScaleSetVMsClient.List failed for %s: %v", scaleSet.Name, err)
 		return nil, err
 	}
 
-	for _, vm := range result {
-		instanceIDs = append(instanceIDs, *vm.InstanceID)
-	}
-
-	allVMs := make([]compute.VirtualMachineScaleSetVM, 0)
-	for _, instanceID := range instanceIDs {
-		getCtx, getCancel := getContextWithCancel()
-		defer getCancel()
-
-		vm, err := scaleSet.manager.azClient.virtualMachineScaleSetVMsClient.Get(getCtx, resourceGroup, scaleSet.Name, instanceID)
-		if err != nil {
-			exists, realErr := checkResourceExistsFromError(err)
-			if realErr != nil {
-				glog.Errorf("Failed to get VirtualMachineScaleSetVM by (%s,%s), error: %v", scaleSet.Name, instanceID, err)
-				return nil, realErr
-			}
-
-			if !exists {
-				glog.Warningf("Couldn't find VirtualMachineScaleSetVM by (%s,%s), assuming it has been removed", scaleSet.Name, instanceID)
-				continue
-			}
+	allVMs := make([]string, 0)
+	for _, vm := range vmList {
+		// The resource ID is empty string, which indicates the instance may be in deleting state.
+		if len(*vm.ID) == 0 {
+			continue
 		}
 
-		allVMs = append(allVMs, vm)
+		allVMs = append(allVMs, *vm.ID)
 	}
 
 	return allVMs, nil
@@ -259,7 +245,7 @@ func (scaleSet *ScaleSet) DecreaseTargetSize(delta int) error {
 
 // Belongs returns true if the given node belongs to the NodeGroup.
 func (scaleSet *ScaleSet) Belongs(node *apiv1.Node) (bool, error) {
-	glog.V(6).Infof("Check if node belongs to this scale set: scaleset:%v, node:%v\n", scaleSet, node)
+	klog.V(6).Infof("Check if node belongs to this scale set: scaleset:%v, node:%v\n", scaleSet, node)
 
 	ref := &azureRef{
 		Name: node.Spec.ProviderID,
@@ -272,7 +258,7 @@ func (scaleSet *ScaleSet) Belongs(node *apiv1.Node) (bool, error) {
 	if targetAsg == nil {
 		return false, fmt.Errorf("%s doesn't belong to a known scale set", node.Name)
 	}
-	if targetAsg.Id() != scaleSet.Id() {
+	if !strings.EqualFold(targetAsg.Id(), scaleSet.Id()) {
 		return false, nil
 	}
 	return true, nil
@@ -284,7 +270,7 @@ func (scaleSet *ScaleSet) DeleteInstances(instances []*azureRef) error {
 		return nil
 	}
 
-	glog.V(3).Infof("Deleting vmss instances %q", instances)
+	klog.V(3).Infof("Deleting vmss instances %q", instances)
 
 	commonAsg, err := scaleSet.manager.GetAsgForInstance(instances[0])
 	if err != nil {
@@ -298,13 +284,13 @@ func (scaleSet *ScaleSet) DeleteInstances(instances []*azureRef) error {
 			return err
 		}
 
-		if asg != commonAsg {
+		if !strings.EqualFold(asg.Id(), commonAsg.Id()) {
 			return fmt.Errorf("cannot delete instance (%s) which don't belong to the same Scale Set (%q)", instance.Name, commonAsg)
 		}
 
 		instanceID, err := getLastSegment(instance.Name)
 		if err != nil {
-			glog.Errorf("getLastSegment failed with error: %v", err)
+			klog.Errorf("getLastSegment failed with error: %v", err)
 			return err
 		}
 
@@ -323,7 +309,7 @@ func (scaleSet *ScaleSet) DeleteInstances(instances []*azureRef) error {
 
 // DeleteNodes deletes the nodes from the group.
 func (scaleSet *ScaleSet) DeleteNodes(nodes []*apiv1.Node) error {
-	glog.V(8).Infof("Delete nodes requested: %q\n", nodes)
+	klog.V(8).Infof("Delete nodes requested: %q\n", nodes)
 	size, err := scaleSet.GetScaleSetSize()
 	if err != nil {
 		return err
@@ -446,20 +432,20 @@ func (scaleSet *ScaleSet) TemplateNodeInfo() (*schedulercache.NodeInfo, error) {
 }
 
 // Nodes returns a list of all nodes that belong to this node group.
-func (scaleSet *ScaleSet) Nodes() ([]string, error) {
+func (scaleSet *ScaleSet) Nodes() ([]cloudprovider.Instance, error) {
+	scaleSet.mutex.Lock()
+	defer scaleSet.mutex.Unlock()
+
 	vms, err := scaleSet.GetScaleSetVms()
 	if err != nil {
 		return nil, err
 	}
 
-	result := make([]string, 0, len(vms))
+	instances := make([]cloudprovider.Instance, 0, len(vms))
 	for i := range vms {
-		if len(*vms[i].ID) == 0 {
-			continue
-		}
-		name := "azure://" + *vms[i].ID
-		result = append(result, name)
+		name := "azure://" + strings.ToLower(vms[i])
+		instances = append(instances, cloudprovider.Instance{Id: name})
 	}
 
-	return result, nil
+	return instances, nil
 }

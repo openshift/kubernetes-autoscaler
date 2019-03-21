@@ -22,28 +22,16 @@ import (
 	"regexp"
 	"strings"
 
-	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
-
 	gce "google.golang.org/api/compute/v1"
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/gpu"
 	kubeletapis "k8s.io/kubernetes/pkg/kubelet/apis"
 
 	"github.com/ghodss/yaml"
-	"github.com/golang/glog"
-)
-
-const (
-	mbPerGB           = 1000
-	bytesPerMB        = 1000 * 1000
-	millicoresPerCore = 1000
-	// Kubelet "evictionHard: {memory.available}" is subtracted from
-	// capacity when calculating allocatable (on top of kube-reserved).
-	// We don't have a good place to get it from, but it has been hard-coded
-	// to 100Mi since at least k8s 1.4.
-	kubeletEvictionHardMemory = 100 * 1024 * 1024
+	"k8s.io/klog"
 )
 
 // GceTemplateBuilder builds templates for GCE nodes.
@@ -59,13 +47,14 @@ func (t *GceTemplateBuilder) getAcceleratorCount(accelerators []*gce.Accelerator
 	return count
 }
 
-// BuildCapacity builds a list of resource capacities for a node.
-func (t *GceTemplateBuilder) BuildCapacity(machineType string, accelerators []*gce.AcceleratorConfig, zone string, cpu int64, mem int64) (apiv1.ResourceList, error) {
+// BuildCapacity builds a list of resource capacities given list of hardware.
+func (t *GceTemplateBuilder) BuildCapacity(cpu int64, mem int64, accelerators []*gce.AcceleratorConfig) (apiv1.ResourceList, error) {
 	capacity := apiv1.ResourceList{}
 	// TODO: get a real value.
 	capacity[apiv1.ResourcePods] = *resource.NewQuantity(110, resource.DecimalSI)
 	capacity[apiv1.ResourceCPU] = *resource.NewQuantity(cpu, resource.DecimalSI)
-	capacity[apiv1.ResourceMemory] = *resource.NewQuantity(mem, resource.DecimalSI)
+	memTotal := mem - CalculateKernelReserved(mem)
+	capacity[apiv1.ResourceMemory] = *resource.NewQuantity(memTotal, resource.DecimalSI)
 
 	if accelerators != nil && len(accelerators) > 0 {
 		capacity[gpu.ResourceNvidiaGPU] = *resource.NewQuantity(t.getAcceleratorCount(accelerators), resource.DecimalSI)
@@ -91,32 +80,20 @@ func (t *GceTemplateBuilder) BuildAllocatableFromKubeEnv(capacity apiv1.Resource
 	if err != nil {
 		return nil, err
 	}
-	if quantity, found := reserved[apiv1.ResourceMemory]; found {
-		reserved[apiv1.ResourceMemory] = *resource.NewQuantity(quantity.Value()+kubeletEvictionHardMemory, resource.BinarySI)
-	}
-	return t.getAllocatable(capacity, reserved), nil
+	return t.CalculateAllocatable(capacity, reserved), nil
 }
 
-// BuildAllocatableFromCapacity builds node allocatable based only on node capacity.
-// Calculates reserved as a ratio of capacity. See calculateReserved for more details
-func (t *GceTemplateBuilder) BuildAllocatableFromCapacity(capacity apiv1.ResourceList) apiv1.ResourceList {
-	memoryReserved := memoryReservedMB(capacity.Memory().Value() / bytesPerMB)
-	cpuReserved := cpuReservedMillicores(capacity.Cpu().MilliValue())
-	reserved := apiv1.ResourceList{}
-	reserved[apiv1.ResourceCPU] = *resource.NewMilliQuantity(cpuReserved, resource.DecimalSI)
-	// Duplicating an upstream bug treating MB as MiB (we need to predict the end result accurately).
-	memoryReserved = memoryReserved * 1024 * 1024
-	memoryReserved += kubeletEvictionHardMemory
-	reserved[apiv1.ResourceMemory] = *resource.NewQuantity(memoryReserved, resource.BinarySI)
-	return t.getAllocatable(capacity, reserved)
-}
-
-func (t *GceTemplateBuilder) getAllocatable(capacity, reserved apiv1.ResourceList) apiv1.ResourceList {
+// CalculateAllocatable computes allocatable resources subtracting kube reserved values
+// and kubelet eviction memory buffer from corresponding capacity.
+func (t *GceTemplateBuilder) CalculateAllocatable(capacity, kubeReserved apiv1.ResourceList) apiv1.ResourceList {
 	allocatable := apiv1.ResourceList{}
 	for key, value := range capacity {
 		quantity := *value.Copy()
-		if reservedQuantity, found := reserved[key]; found {
+		if reservedQuantity, found := kubeReserved[key]; found {
 			quantity.Sub(reservedQuantity)
+		}
+		if key == apiv1.ResourceMemory {
+			quantity = *resource.NewQuantity(quantity.Value()-KubeletEvictionHardMemory, resource.BinarySI)
 		}
 		allocatable[key] = quantity
 	}
@@ -139,7 +116,7 @@ func (t *GceTemplateBuilder) BuildNodeFromTemplate(mig Mig, template *gce.Instan
 		Labels:   map[string]string{},
 	}
 
-	capacity, err := t.BuildCapacity(template.Properties.MachineType, template.Properties.GuestAccelerators, mig.GceRef().Zone, cpu, mem)
+	capacity, err := t.BuildCapacity(cpu, mem, template.Properties.GuestAccelerators)
 	if err != nil {
 		return nil, err
 	}
@@ -176,7 +153,7 @@ func (t *GceTemplateBuilder) BuildNodeFromTemplate(mig Mig, template *gce.Instan
 		}
 	}
 	if nodeAllocatable == nil {
-		glog.Warningf("could not extract kube-reserved from kubeEnv for mig %q, setting allocatable to capacity.", mig.GceRef().Name)
+		klog.Warningf("could not extract kube-reserved from kubeEnv for mig %q, setting allocatable to capacity.", mig.GceRef().Name)
 		node.Status.Allocatable = node.Status.Capacity
 	} else {
 		node.Status.Allocatable = nodeAllocatable
@@ -226,7 +203,7 @@ func parseKubeReserved(kubeReserved string) (apiv1.ResourceList, error) {
 				reservedResources[apiv1.ResourceName(name)] = q
 			}
 		default:
-			glog.Warningf("ignoring resource from kube-reserved: %q", name)
+			klog.Warningf("ignoring resource from kube-reserved: %q", name)
 		}
 	}
 	return reservedResources, nil
@@ -238,7 +215,7 @@ func extractLabelsFromKubeEnv(kubeEnv string) (map[string]string, error) {
 	// fall back to the old way.
 	labels, err := extractAutoscalerVarFromKubeEnv(kubeEnv, "node_labels")
 	if err != nil {
-		glog.Errorf("node_labels not found via AUTOSCALER_ENV_VARS due to error, will try NODE_LABELS: %v", err)
+		klog.Errorf("node_labels not found via AUTOSCALER_ENV_VARS due to error, will try NODE_LABELS: %v", err)
 		labels, err = extractFromKubeEnv(kubeEnv, "NODE_LABELS")
 		if err != nil {
 			return nil, err
@@ -253,7 +230,7 @@ func extractTaintsFromKubeEnv(kubeEnv string) ([]apiv1.Taint, error) {
 	// fall back to the old way.
 	taints, err := extractAutoscalerVarFromKubeEnv(kubeEnv, "node_taints")
 	if err != nil {
-		glog.Errorf("node_taints not found via AUTOSCALER_ENV_VARS due to error, will try NODE_TAINTS: %v", err)
+		klog.Errorf("node_taints not found via AUTOSCALER_ENV_VARS due to error, will try NODE_TAINTS: %v", err)
 		taints, err = extractFromKubeEnv(kubeEnv, "NODE_TAINTS")
 		if err != nil {
 			return nil, err
@@ -272,7 +249,7 @@ func extractKubeReservedFromKubeEnv(kubeEnv string) (string, error) {
 	// fall back to the old way.
 	kubeReserved, err := extractAutoscalerVarFromKubeEnv(kubeEnv, "kube_reserved")
 	if err != nil {
-		glog.Errorf("kube_reserved not found via AUTOSCALER_ENV_VARS due to error, will try kube-reserved in KUBELET_TEST_ARGS: %v", err)
+		klog.Errorf("kube_reserved not found via AUTOSCALER_ENV_VARS due to error, will try kube-reserved in KUBELET_TEST_ARGS: %v", err)
 		kubeletArgs, err := extractFromKubeEnv(kubeEnv, "KUBELET_TEST_ARGS")
 		if err != nil {
 			return "", err
@@ -345,82 +322,4 @@ func buildTaints(kubeEnvTaints map[string]string) ([]apiv1.Taint, error) {
 		})
 	}
 	return taints, nil
-}
-
-type allocatableBracket struct {
-	threshold            int64
-	marginalReservedRate float64
-}
-
-func memoryReservedMB(memoryCapacityMB int64) int64 {
-	if memoryCapacityMB <= 1*mbPerGB {
-		// do not set any memory reserved for nodes with less than 1 Gb of capacity
-		return 0
-	}
-	return calculateReserved(memoryCapacityMB, []allocatableBracket{
-		{
-			threshold:            0,
-			marginalReservedRate: 0.25,
-		},
-		{
-			threshold:            4 * mbPerGB,
-			marginalReservedRate: 0.2,
-		},
-		{
-			threshold:            8 * mbPerGB,
-			marginalReservedRate: 0.1,
-		},
-		{
-			threshold:            16 * mbPerGB,
-			marginalReservedRate: 0.06,
-		},
-		{
-			threshold:            128 * mbPerGB,
-			marginalReservedRate: 0.02,
-		},
-	})
-}
-
-func cpuReservedMillicores(cpuCapacityMillicores int64) int64 {
-	return calculateReserved(cpuCapacityMillicores, []allocatableBracket{
-		{
-			threshold:            0,
-			marginalReservedRate: 0.06,
-		},
-		{
-			threshold:            1 * millicoresPerCore,
-			marginalReservedRate: 0.01,
-		},
-		{
-			threshold:            2 * millicoresPerCore,
-			marginalReservedRate: 0.005,
-		},
-		{
-			threshold:            4 * millicoresPerCore,
-			marginalReservedRate: 0.0025,
-		},
-	})
-}
-
-// calculateReserved calculates reserved using capacity and a series of
-// brackets as follows:  the marginalReservedRate applies to all capacity
-// greater than the bracket, but less than the next bracket.  For example, if
-// the first bracket is threshold: 0, rate:0.1, and the second bracket has
-// threshold: 100, rate: 0.4, a capacity of 100 results in a reserved of
-// 100*0.1 = 10, but a capacity of 200 results in a reserved of
-// 10 + (200-100)*.4 = 50.  Using brackets with marginal rates ensures that as
-// capacity increases, reserved always increases, and never decreases.
-func calculateReserved(capacity int64, brackets []allocatableBracket) int64 {
-	var reserved float64
-	for i, bracket := range brackets {
-		c := capacity
-		if i < len(brackets)-1 && brackets[i+1].threshold < capacity {
-			c = brackets[i+1].threshold
-		}
-		additionalReserved := float64(c-bracket.threshold) * bracket.marginalReservedRate
-		if additionalReserved > 0 {
-			reserved += additionalReserved
-		}
-	}
-	return int64(reserved)
 }

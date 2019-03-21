@@ -33,8 +33,9 @@ import (
 	apiv1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
+	schedulercache "k8s.io/kubernetes/pkg/scheduler/cache"
 
-	"github.com/golang/glog"
+	"k8s.io/klog"
 )
 
 const (
@@ -57,8 +58,8 @@ const (
 
 // ScaleUpRequest contains information about the requested node group scale up.
 type ScaleUpRequest struct {
-	// NodeGroupName is the node group to be scaled up.
-	NodeGroupName string
+	// NodeGroup is the node group to be scaled up.
+	NodeGroup cloudprovider.NodeGroup
 	// Time is the time when the request was submitted.
 	Time time.Time
 	// ExpectedAddTime is the time at which the request should be fulfilled.
@@ -71,8 +72,8 @@ type ScaleUpRequest struct {
 type ScaleDownRequest struct {
 	// NodeName is the name of the node to be deleted.
 	NodeName string
-	// NodeGroupName is the node group of the deleted node.
-	NodeGroupName string
+	// NodeGroup is the node group of the deleted node.
+	NodeGroup cloudprovider.NodeGroup
 	// Time is the time when the node deletion was requested.
 	Time time.Time
 	// ExpectedDeleteTime is the time when the node is expected to be deleted.
@@ -115,9 +116,10 @@ type UnregisteredNode struct {
 type ClusterStateRegistry struct {
 	sync.Mutex
 	config                  ClusterStateRegistryConfig
-	scaleUpRequests         []*ScaleUpRequest
+	scaleUpRequests         map[string]*ScaleUpRequest // nodeGroupName -> ScaleUpRequest
 	scaleDownRequests       []*ScaleDownRequest
 	nodes                   []*apiv1.Node
+	nodeInfosForGroups      map[string]*schedulercache.NodeInfo
 	cloudProvider           cloudprovider.CloudProvider
 	perNodeGroupReadiness   map[string]Readiness
 	totalReadiness          Readiness
@@ -125,20 +127,20 @@ type ClusterStateRegistry struct {
 	incorrectNodeGroupSizes map[string]IncorrectNodeGroupSize
 	unregisteredNodes       map[string]UnregisteredNode
 	candidatesForScaleDown  map[string][]string
-	nodeGroupBackoffInfo    *backoff.Backoff
+	nodeGroupBackoffInfo    backoff.Backoff
 	lastStatus              *api.ClusterAutoscalerStatus
 	lastScaleDownUpdateTime time.Time
 	logRecorder             *utils.LogEventRecorder
 }
 
 // NewClusterStateRegistry creates new ClusterStateRegistry.
-func NewClusterStateRegistry(cloudProvider cloudprovider.CloudProvider, config ClusterStateRegistryConfig, logRecorder *utils.LogEventRecorder) *ClusterStateRegistry {
+func NewClusterStateRegistry(cloudProvider cloudprovider.CloudProvider, config ClusterStateRegistryConfig, logRecorder *utils.LogEventRecorder, backoff backoff.Backoff) *ClusterStateRegistry {
 	emptyStatus := &api.ClusterAutoscalerStatus{
 		ClusterwideConditions: make([]api.ClusterAutoscalerCondition, 0),
 		NodeGroupStatuses:     make([]api.NodeGroupStatus, 0),
 	}
 	return &ClusterStateRegistry{
-		scaleUpRequests:         make([]*ScaleUpRequest, 0),
+		scaleUpRequests:         make(map[string]*ScaleUpRequest),
 		scaleDownRequests:       make([]*ScaleDownRequest, 0),
 		nodes:                   make([]*apiv1.Node, 0),
 		cloudProvider:           cloudProvider,
@@ -148,7 +150,7 @@ func NewClusterStateRegistry(cloudProvider cloudprovider.CloudProvider, config C
 		incorrectNodeGroupSizes: make(map[string]IncorrectNodeGroupSize),
 		unregisteredNodes:       make(map[string]UnregisteredNode),
 		candidatesForScaleDown:  make(map[string][]string),
-		nodeGroupBackoffInfo:    backoff.NewBackoff(InitialNodeGroupBackoffDuration, MaxNodeGroupBackoffDuration, NodeGroupBackoffResetTimeout),
+		nodeGroupBackoffInfo:    backoff,
 		lastStatus:              emptyStatus,
 		logRecorder:             logRecorder,
 	}
@@ -158,7 +160,17 @@ func NewClusterStateRegistry(cloudProvider cloudprovider.CloudProvider, config C
 func (csr *ClusterStateRegistry) RegisterScaleUp(request *ScaleUpRequest) {
 	csr.Lock()
 	defer csr.Unlock()
-	csr.scaleUpRequests = append(csr.scaleUpRequests, request)
+
+	oldScaleUpRequest, found := csr.scaleUpRequests[request.NodeGroup.Id()]
+	if !found {
+		csr.scaleUpRequests[request.NodeGroup.Id()] = request
+		return
+	}
+
+	// update the old request
+	oldScaleUpRequest.Time = request.Time
+	oldScaleUpRequest.ExpectedAddTime = request.ExpectedAddTime
+	oldScaleUpRequest.Increase += request.Increase
 }
 
 // RegisterScaleDown registers node scale down.
@@ -173,69 +185,57 @@ func (csr *ClusterStateRegistry) updateScaleRequests(currentTime time.Time) {
 	// clean up stale backoff info
 	csr.nodeGroupBackoffInfo.RemoveStaleBackoffData(currentTime)
 
-	timedOutSur := make([]*ScaleUpRequest, 0)
-	newSur := make([]*ScaleUpRequest, 0)
-	for _, sur := range csr.scaleUpRequests {
-		if !csr.areThereUpcomingNodesInNodeGroup(sur.NodeGroupName) {
+	for nodeGroupName, scaleUpRequest := range csr.scaleUpRequests {
+		if !csr.areThereUpcomingNodesInNodeGroup(nodeGroupName) {
 			// scale-out finished successfully
 			// remove it and reset node group backoff
-			csr.nodeGroupBackoffInfo.RemoveBackoff(sur.NodeGroupName)
-			glog.V(4).Infof("Scale up in group %v finished successfully in %v",
-				sur.NodeGroupName, currentTime.Sub(sur.Time))
+			delete(csr.scaleUpRequests, nodeGroupName)
+			csr.nodeGroupBackoffInfo.RemoveBackoff(scaleUpRequest.NodeGroup)
+			klog.V(4).Infof("Scale up in group %v finished successfully in %v",
+				nodeGroupName, currentTime.Sub(scaleUpRequest.Time))
 			continue
 		}
-		if sur.ExpectedAddTime.After(currentTime) {
-			newSur = append(newSur, sur)
-		} else {
-			timedOutSur = append(timedOutSur, sur)
-		}
-	}
-	csr.scaleUpRequests = newSur
-	for _, sur := range timedOutSur {
-		// IsNodeGroupScalingUp returns true if there is another
-		// scale-up still going on for this group, so it's ok for node
-		// group to still have upcoming nodes. If there is no other
-		// scale-up we have VMs that failed to provision within timeout,
-		// so we consider it a failed scale-up
-		if !csr.IsNodeGroupScalingUp(sur.NodeGroupName) {
-			glog.Warningf("Scale-up timed out for node group %v after %v",
-				sur.NodeGroupName, currentTime.Sub(sur.Time))
+
+		if scaleUpRequest.ExpectedAddTime.Before(currentTime) {
+			klog.Warningf("Scale-up timed out for node group %v after %v",
+				nodeGroupName, currentTime.Sub(scaleUpRequest.Time))
 			csr.logRecorder.Eventf(apiv1.EventTypeWarning, "ScaleUpTimedOut",
 				"Nodes added to group %s failed to register within %v",
-				sur.NodeGroupName, currentTime.Sub(sur.Time))
+				scaleUpRequest.NodeGroup.Id(), currentTime.Sub(scaleUpRequest.Time))
 			metrics.RegisterFailedScaleUp(metrics.Timeout)
-			csr.backoffNodeGroup(sur.NodeGroupName, currentTime)
+			csr.backoffNodeGroup(scaleUpRequest.NodeGroup, currentTime)
+			delete(csr.scaleUpRequests, nodeGroupName)
 		}
 	}
 
-	newSdr := make([]*ScaleDownRequest, 0)
-	for _, sdr := range csr.scaleDownRequests {
-		if sdr.ExpectedDeleteTime.After(currentTime) {
-			newSdr = append(newSdr, sdr)
+	newScaleDownRequests := make([]*ScaleDownRequest, 0)
+	for _, scaleDownRequest := range csr.scaleDownRequests {
+		if scaleDownRequest.ExpectedDeleteTime.After(currentTime) {
+			newScaleDownRequests = append(newScaleDownRequests, scaleDownRequest)
 		}
 	}
-	csr.scaleDownRequests = newSdr
+	csr.scaleDownRequests = newScaleDownRequests
 }
 
 // To be executed under a lock.
-func (csr *ClusterStateRegistry) backoffNodeGroup(nodeGroupName string, currentTime time.Time) {
-	backoffUntil := csr.nodeGroupBackoffInfo.Backoff(nodeGroupName, currentTime)
-	glog.Warningf("Disabling scale-up for node group %v until %v", nodeGroupName, backoffUntil)
+func (csr *ClusterStateRegistry) backoffNodeGroup(nodeGroup cloudprovider.NodeGroup, currentTime time.Time) {
+	backoffUntil := csr.nodeGroupBackoffInfo.Backoff(nodeGroup, currentTime)
+	klog.Warningf("Disabling scale-up for node group %v until %v", nodeGroup.Id(), backoffUntil)
 }
 
 // RegisterFailedScaleUp should be called after getting error from cloudprovider
 // when trying to scale-up node group. It will mark this group as not safe to autoscale
 // for some time.
-func (csr *ClusterStateRegistry) RegisterFailedScaleUp(nodeGroupName string, reason metrics.FailedScaleUpReason) {
+func (csr *ClusterStateRegistry) RegisterFailedScaleUp(nodeGroup cloudprovider.NodeGroup, reason metrics.FailedScaleUpReason) {
 	csr.Lock()
 	defer csr.Unlock()
 
 	metrics.RegisterFailedScaleUp(reason)
-	csr.backoffNodeGroup(nodeGroupName, time.Now())
+	csr.backoffNodeGroup(nodeGroup, time.Now())
 }
 
 // UpdateNodes updates the state of the nodes in the ClusterStateRegistry and recalculates the stats
-func (csr *ClusterStateRegistry) UpdateNodes(nodes []*apiv1.Node, currentTime time.Time) error {
+func (csr *ClusterStateRegistry) UpdateNodes(nodes []*apiv1.Node, nodeInfosForGroups map[string]*schedulercache.NodeInfo, currentTime time.Time) error {
 	csr.updateNodeGroupMetrics()
 	targetSizes, err := getTargetSizes(csr.cloudProvider)
 	if err != nil {
@@ -250,6 +250,7 @@ func (csr *ClusterStateRegistry) UpdateNodes(nodes []*apiv1.Node, currentTime ti
 	defer csr.Unlock()
 
 	csr.nodes = nodes
+	csr.nodeInfosForGroups = nodeInfosForGroups
 
 	csr.updateUnregisteredNodes(notRegistered)
 	csr.updateReadinessStats(currentTime)
@@ -268,7 +269,7 @@ func (csr *ClusterStateRegistry) UpdateNodes(nodes []*apiv1.Node, currentTime ti
 func (csr *ClusterStateRegistry) Recalculate() {
 	targetSizes, err := getTargetSizes(csr.cloudProvider)
 	if err != nil {
-		glog.Warningf("Failed to get target sizes, when trying to recalculate cluster state: %v", err)
+		klog.Warningf("Failed to get target sizes, when trying to recalculate cluster state: %v", err)
 	}
 
 	csr.Lock()
@@ -308,7 +309,7 @@ func (csr *ClusterStateRegistry) IsClusterHealthy() bool {
 func (csr *ClusterStateRegistry) IsNodeGroupHealthy(nodeGroupName string) bool {
 	acceptable, found := csr.acceptableRanges[nodeGroupName]
 	if !found {
-		glog.Warningf("Failed to find acceptable ranges for %v", nodeGroupName)
+		klog.Warningf("Failed to find acceptable ranges for %v", nodeGroupName)
 		return false
 	}
 
@@ -318,7 +319,7 @@ func (csr *ClusterStateRegistry) IsNodeGroupHealthy(nodeGroupName string) bool {
 		if acceptable.CurrentTarget == 0 || (acceptable.MinNodes == 0 && acceptable.CurrentTarget > 0) {
 			return true
 		}
-		glog.Warningf("Failed to find readiness information for %v", nodeGroupName)
+		klog.Warningf("Failed to find readiness information for %v", nodeGroupName)
 		return false
 	}
 
@@ -356,31 +357,49 @@ func (csr *ClusterStateRegistry) updateNodeGroupMetrics() {
 }
 
 // IsNodeGroupSafeToScaleUp returns true if node group can be scaled up now.
-func (csr *ClusterStateRegistry) IsNodeGroupSafeToScaleUp(nodeGroupName string, now time.Time) bool {
-	if !csr.IsNodeGroupHealthy(nodeGroupName) {
+func (csr *ClusterStateRegistry) IsNodeGroupSafeToScaleUp(nodeGroup cloudprovider.NodeGroup, now time.Time) bool {
+	if !csr.IsNodeGroupHealthy(nodeGroup.Id()) {
 		return false
 	}
-	return !csr.nodeGroupBackoffInfo.IsBackedOff(nodeGroupName, now)
+	return !csr.nodeGroupBackoffInfo.IsBackedOff(nodeGroup, now)
 }
 
-func (csr *ClusterStateRegistry) areThereUpcomingNodesInNodeGroup(nodeGroupName string) bool {
+func (csr *ClusterStateRegistry) getProvisionedAndTargetSizesForNodeGroup(nodeGroupName string) (provisioned, target int, ok bool) {
 	acceptable, found := csr.acceptableRanges[nodeGroupName]
 	if !found {
-		glog.Warningf("Failed to find acceptable ranges for %v", nodeGroupName)
-		return false
+		klog.Warningf("Failed to find acceptable ranges for %v", nodeGroupName)
+		return 0, 0, false
 	}
+	target = acceptable.CurrentTarget
 
 	readiness, found := csr.perNodeGroupReadiness[nodeGroupName]
 	if !found {
 		// No need to warn if node group has size 0 (was scaled to 0 before).
 		if acceptable.MinNodes != 0 {
-			glog.Warningf("Failed to find readiness information for %v", nodeGroupName)
+			klog.Warningf("Failed to find readiness information for %v", nodeGroupName)
 		}
-		return acceptable.CurrentTarget > 0
+		return 0, target, true
 	}
+	provisioned = readiness.Registered - readiness.NotStarted - readiness.LongNotStarted
 
-	provisioned := readiness.Registered - readiness.NotStarted - readiness.LongNotStarted
-	return acceptable.CurrentTarget > provisioned
+	return provisioned, target, true
+}
+
+func (csr *ClusterStateRegistry) areThereUpcomingNodesInNodeGroup(nodeGroupName string) bool {
+	provisioned, target, ok := csr.getProvisionedAndTargetSizesForNodeGroup(nodeGroupName)
+	if !ok {
+		return false
+	}
+	return target > provisioned
+}
+
+// IsNodeGroupAtTargetSize returns true if the number of nodes provisioned in the group is equal to the target number of nodes.
+func (csr *ClusterStateRegistry) IsNodeGroupAtTargetSize(nodeGroupName string) bool {
+	provisioned, target, ok := csr.getProvisionedAndTargetSizesForNodeGroup(nodeGroupName)
+	if !ok {
+		return false
+	}
+	return target == provisioned
 }
 
 // IsNodeGroupScalingUp returns true if the node group is currently scaling up.
@@ -388,13 +407,8 @@ func (csr *ClusterStateRegistry) IsNodeGroupScalingUp(nodeGroupName string) bool
 	if !csr.areThereUpcomingNodesInNodeGroup(nodeGroupName) {
 		return false
 	}
-	// Let's check if there is an active scale up request
-	for _, request := range csr.scaleUpRequests {
-		if request.NodeGroupName == nodeGroupName {
-			return true
-		}
-	}
-	return false
+	_, found := csr.scaleUpRequests[nodeGroupName]
+	return found
 }
 
 // AcceptableRange contains information about acceptable size of a node group.
@@ -423,15 +437,15 @@ func (csr *ClusterStateRegistry) updateAcceptableRanges(targetSize map[string]in
 			CurrentTarget: size,
 		}
 	}
-	for _, sur := range csr.scaleUpRequests {
-		val := result[sur.NodeGroupName]
-		val.MinNodes -= sur.Increase
-		result[sur.NodeGroupName] = val
+	for nodeGroupName, scaleUpRequest := range csr.scaleUpRequests {
+		acceptableRange := result[nodeGroupName]
+		acceptableRange.MinNodes -= scaleUpRequest.Increase
+		result[nodeGroupName] = acceptableRange
 	}
-	for _, sdr := range csr.scaleDownRequests {
-		val := result[sdr.NodeGroupName]
-		val.MaxNodes += 1
-		result[sdr.NodeGroupName] = val
+	for _, scaleDownRequest := range csr.scaleDownRequests {
+		acceptableRange := result[scaleDownRequest.NodeGroup.Id()]
+		acceptableRange.MaxNodes += 1
+		result[scaleDownRequest.NodeGroup.Id()] = acceptableRange
 	}
 	csr.acceptableRanges = result
 }
@@ -487,10 +501,10 @@ func (csr *ClusterStateRegistry) updateReadinessStats(currentTime time.Time) {
 		// Node is most likely not autoscaled, however check the errors.
 		if nodeGroup == nil || reflect.ValueOf(nodeGroup).IsNil() {
 			if errNg != nil {
-				glog.Warningf("Failed to get nodegroup for %s: %v", node.Name, errNg)
+				klog.Warningf("Failed to get nodegroup for %s: %v", node.Name, errNg)
 			}
 			if errReady != nil {
-				glog.Warningf("Failed to get readiness info for %s: %v", node.Name, errReady)
+				klog.Warningf("Failed to get readiness info for %s: %v", node.Name, errReady)
 			}
 		} else {
 			perNodeGroup[nodeGroup.Id()] = update(perNodeGroup[nodeGroup.Id()], node, ready)
@@ -501,7 +515,7 @@ func (csr *ClusterStateRegistry) updateReadinessStats(currentTime time.Time) {
 	for _, unregistered := range csr.unregisteredNodes {
 		nodeGroup, errNg := csr.cloudProvider.NodeGroupForNode(unregistered.Node)
 		if errNg != nil {
-			glog.Warningf("Failed to get nodegroup for %s: %v", unregistered.Node.Name, errNg)
+			klog.Warningf("Failed to get nodegroup for %s: %v", unregistered.Node.Name, errNg)
 			continue
 		}
 		perNgCopy := perNodeGroup[nodeGroup.Id()]
@@ -529,14 +543,14 @@ func (csr *ClusterStateRegistry) updateIncorrectNodeGroupSizes(currentTime time.
 	for _, nodeGroup := range csr.cloudProvider.NodeGroups() {
 		acceptableRange, found := csr.acceptableRanges[nodeGroup.Id()]
 		if !found {
-			glog.Warningf("Acceptable range for node group %s not found", nodeGroup.Id())
+			klog.Warningf("Acceptable range for node group %s not found", nodeGroup.Id())
 			continue
 		}
 		readiness, found := csr.perNodeGroupReadiness[nodeGroup.Id()]
 		if !found {
 			// if MinNodes == 0 node group has been scaled to 0 and everything's fine
 			if acceptableRange.MinNodes != 0 {
-				glog.Warningf("Readiness for node group %s not found", nodeGroup.Id())
+				klog.Warningf("Readiness for node group %s not found", nodeGroup.Id())
 			}
 			continue
 		}
@@ -590,7 +604,7 @@ func (csr *ClusterStateRegistry) UpdateScaleDownCandidates(nodes []*apiv1.Node, 
 	for _, node := range nodes {
 		group, err := csr.cloudProvider.NodeGroupForNode(node)
 		if err != nil {
-			glog.Warningf("Failed to get node group for %s: %v", node.Name, err)
+			klog.Warningf("Failed to get node group for %s: %v", node.Name, err)
 			continue
 		}
 		if group == nil || reflect.ValueOf(group).IsNil() {
@@ -623,7 +637,7 @@ func (csr *ClusterStateRegistry) GetStatus(now time.Time) *api.ClusterAutoscaler
 		// Scale up.
 		nodeGroupStatus.Conditions = append(nodeGroupStatus.Conditions, buildScaleUpStatusNodeGroup(
 			csr.IsNodeGroupScalingUp(nodeGroup.Id()),
-			csr.IsNodeGroupSafeToScaleUp(nodeGroup.Id(), now),
+			csr.IsNodeGroupSafeToScaleUp(nodeGroup, now),
 			readiness,
 			acceptable))
 
@@ -867,7 +881,7 @@ func (csr *ClusterStateRegistry) GetUpcomingNodes() map[string]int {
 func getNotRegisteredNodes(allNodes []*apiv1.Node, cloudProvider cloudprovider.CloudProvider, time time.Time) ([]UnregisteredNode, error) {
 	registered := sets.NewString()
 	for _, node := range allNodes {
-		registered.Insert(node.Spec.ProviderID)
+		registered.Insert(cloudProvider.GetInstanceID(node))
 	}
 	notRegistered := make([]UnregisteredNode, 0)
 	for _, nodeGroup := range cloudProvider.NodeGroups() {
@@ -876,14 +890,14 @@ func getNotRegisteredNodes(allNodes []*apiv1.Node, cloudProvider cloudprovider.C
 			return []UnregisteredNode{}, err
 		}
 		for _, node := range nodes {
-			if !registered.Has(node) {
+			if !registered.Has(node.Id) {
 				notRegistered = append(notRegistered, UnregisteredNode{
 					Node: &apiv1.Node{
 						ObjectMeta: metav1.ObjectMeta{
-							Name: node,
+							Name: node.Id,
 						},
 						Spec: apiv1.NodeSpec{
-							ProviderID: node,
+							ProviderID: node.Id,
 						},
 					},
 					UnregisteredSince: time,

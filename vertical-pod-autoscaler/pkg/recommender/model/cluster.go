@@ -25,7 +25,7 @@ import (
 	apiv1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	labels "k8s.io/apimachinery/pkg/labels"
-	vpa_types "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/apis/poc.autoscaling.k8s.io/v1alpha1"
+	vpa_types "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/apis/autoscaling.k8s.io/v1beta1"
 )
 
 // ClusterState holds all runtime information about the cluster required for the
@@ -303,7 +303,7 @@ func (cluster *ClusterState) GarbageCollectAggregateCollectionStates(now time.Ti
 	for key, aggregateContainerState := range cluster.aggregateStateMap {
 		if aggregateContainerState.isExpired(now) {
 			keysToDelete = append(keysToDelete, key)
-			glog.V(1).Info("Removing AggregateCollectionStates for %+v", key)
+			glog.V(1).Infof("Removing AggregateCollectionStates for %+v", key)
 		}
 	}
 	for _, key := range keysToDelete {

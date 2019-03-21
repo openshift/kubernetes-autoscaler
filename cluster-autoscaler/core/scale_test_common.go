@@ -24,8 +24,10 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/clusterstate/utils"
 	"k8s.io/autoscaler/cluster-autoscaler/config"
 	"k8s.io/autoscaler/cluster-autoscaler/context"
+	"k8s.io/autoscaler/cluster-autoscaler/estimator"
 	"k8s.io/autoscaler/cluster-autoscaler/expander/random"
 	"k8s.io/autoscaler/cluster-autoscaler/metrics"
+	"k8s.io/autoscaler/cluster-autoscaler/processors/nodegroups"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/errors"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/labels"
@@ -33,6 +35,8 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	apiv1 "k8s.io/api/core/v1"
+	"k8s.io/autoscaler/cluster-autoscaler/clusterstate"
+	"k8s.io/autoscaler/cluster-autoscaler/utils/backoff"
 	kube_client "k8s.io/client-go/kubernetes"
 	kube_record "k8s.io/client-go/tools/record"
 	schedulercache "k8s.io/kubernetes/pkg/scheduler/cache"
@@ -75,6 +79,9 @@ type scaleTestConfig struct {
 func NewScaleTestAutoscalingContext(options config.AutoscalingOptions, fakeClient kube_client.Interface, provider cloudprovider.CloudProvider) context.AutoscalingContext {
 	fakeRecorder := kube_record.NewFakeRecorder(5)
 	fakeLogRecorder, _ := utils.NewStatusMapRecorder(fakeClient, "kube-system", fakeRecorder, false)
+	// Ignoring error here is safe - if a test doesn't specify valid estimatorName,
+	// it either doesn't need one, or should fail when it turns out to be nil.
+	estimatorBuilder, _ := estimator.NewEstimatorBuilder(options.EstimatorName)
 	return context.AutoscalingContext{
 		AutoscalingOptions: options,
 		AutoscalingKubeClients: context.AutoscalingKubeClients{
@@ -85,6 +92,7 @@ func NewScaleTestAutoscalingContext(options config.AutoscalingOptions, fakeClien
 		CloudProvider:    provider,
 		PredicateChecker: simulator.NewTestPredicateChecker(),
 		ExpanderStrategy: random.NewStrategy(),
+		EstimatorBuilder: estimatorBuilder,
 	}
 }
 
@@ -92,11 +100,14 @@ type mockAutoprovisioningNodeGroupManager struct {
 	t *testing.T
 }
 
-func (p *mockAutoprovisioningNodeGroupManager) CreateNodeGroup(context *context.AutoscalingContext, nodeGroup cloudprovider.NodeGroup) (cloudprovider.NodeGroup, errors.AutoscalerError) {
+func (p *mockAutoprovisioningNodeGroupManager) CreateNodeGroup(context *context.AutoscalingContext, nodeGroup cloudprovider.NodeGroup) (nodegroups.CreateNodeGroupResult, errors.AutoscalerError) {
 	newNodeGroup, err := nodeGroup.Create()
 	assert.NoError(p.t, err)
 	metrics.RegisterNodeGroupCreation()
-	return newNodeGroup, nil
+	result := nodegroups.CreateNodeGroupResult{
+		MainCreatedNodeGroup: newNodeGroup,
+	}
+	return result, nil
 }
 
 func (p *mockAutoprovisioningNodeGroupManager) RemoveUnneededNodeGroups(context *context.AutoscalingContext) error {
@@ -150,4 +161,8 @@ func (p *mockAutoprovisioningNodeGroupListProcessor) Process(context *context.Au
 }
 
 func (p *mockAutoprovisioningNodeGroupListProcessor) CleanUp() {
+}
+
+func newBackoff() backoff.Backoff {
+	return backoff.NewIdBasedExponentialBackoff(clusterstate.InitialNodeGroupBackoffDuration, clusterstate.MaxNodeGroupBackoffDuration, clusterstate.NodeGroupBackoffResetTimeout)
 }

@@ -12,8 +12,7 @@ os::golang::verify_go_version
 
 bad_files=$(os::util::list_go_src_files | xargs gofmt -s -l)
 if [[ -n "${bad_files}" ]]; then
-	os::log::warning "!!! gofmt needs to be run on the listed files"
-	echo "${bad_files}"
-	os::log::fatal "Try running 'gofmt -s -d [path]'
-Or autocorrect with 'hack/verify-gofmt.sh | xargs -n 1 gofmt -s -w'"
+  echo "Please run hack/update-gofmt.sh to fix the following files:"
+  echo "${bad_files}"
+  exit 1
 fi

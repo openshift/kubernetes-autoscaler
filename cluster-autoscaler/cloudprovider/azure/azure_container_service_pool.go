@@ -21,7 +21,7 @@ import (
 	"strings"
 
 	"github.com/Azure/azure-sdk-for-go/services/containerservice/mgmt/2018-03-31/containerservice"
-	"github.com/golang/glog"
+	"k8s.io/klog"
 
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
@@ -77,8 +77,8 @@ func NewContainerServiceAgentPool(spec *dynamic.NodeGroupSpec, am *AzureManager)
 func (agentPool *ContainerServiceAgentPool) GetAKSAgentPool(agentProfiles *[]containerservice.ManagedClusterAgentPoolProfile) (ret *containerservice.ManagedClusterAgentPoolProfile) {
 	for _, value := range *agentProfiles {
 		profileName := *value.Name
-		glog.V(5).Infof("AKS AgentPool profile name: %s", profileName)
-		if profileName == (agentPool.azureRef.Name) {
+		klog.V(5).Infof("AKS AgentPool profile name: %s", profileName)
+		if strings.EqualFold(profileName, agentPool.azureRef.Name) {
 			return &value
 		}
 	}
@@ -91,8 +91,8 @@ func (agentPool *ContainerServiceAgentPool) GetAKSAgentPool(agentProfiles *[]con
 func (agentPool *ContainerServiceAgentPool) GetACSAgentPool(agentProfiles *[]containerservice.AgentPoolProfile) (ret *containerservice.AgentPoolProfile) {
 	for _, value := range *agentProfiles {
 		profileName := *value.Name
-		glog.V(5).Infof("ACS AgentPool profile name: %s", profileName)
-		if profileName == (agentPool.azureRef.Name) {
+		klog.V(5).Infof("ACS AgentPool profile name: %s", profileName)
+		if strings.EqualFold(profileName, agentPool.azureRef.Name) {
 			return &value
 		}
 	}
@@ -104,8 +104,8 @@ func (agentPool *ContainerServiceAgentPool) GetACSAgentPool(agentProfiles *[]con
 	for _, value := range *agentProfiles {
 		profileName := *value.Name
 		poolName := agentPool.azureRef.Name + "pool0"
-		glog.V(5).Infof("Workaround match check - ACS AgentPool Profile: %s <=> Poolname: %s", profileName, poolName)
-		if profileName == poolName {
+		klog.V(5).Infof("Workaround match check - ACS AgentPool Profile: %s <=> Poolname: %s", profileName, poolName)
+		if strings.EqualFold(profileName, poolName) {
 			return &value
 		}
 	}
@@ -122,7 +122,7 @@ func (agentPool *ContainerServiceAgentPool) getAKSNodeCount() (count int, err er
 		agentPool.resourceGroup,
 		agentPool.clusterName)
 	if err != nil {
-		glog.Error("Failed to get AKS cluster (name:%q): %v", agentPool.clusterName, err)
+		klog.Errorf("Failed to get AKS cluster (name:%q): %v", agentPool.clusterName, err)
 		return -1, err
 	}
 
@@ -147,7 +147,7 @@ func (agentPool *ContainerServiceAgentPool) getACSNodeCount() (count int, err er
 		agentPool.resourceGroup,
 		agentPool.clusterName)
 	if err != nil {
-		glog.Error("Failed to get ACS cluster (name:%q): %v", agentPool.clusterName, err)
+		klog.Errorf("Failed to get ACS cluster (name:%q): %v", agentPool.clusterName, err)
 		return -1, err
 	}
 
@@ -172,7 +172,7 @@ func (agentPool *ContainerServiceAgentPool) setAKSNodeCount(count int) error {
 		agentPool.resourceGroup,
 		agentPool.clusterName)
 	if err != nil {
-		glog.Error("Failed to get AKS cluster (name:%q): %v", agentPool.clusterName, err)
+		klog.Errorf("Failed to get AKS cluster (name:%q): %v", agentPool.clusterName, err)
 		return err
 	}
 
@@ -181,7 +181,7 @@ func (agentPool *ContainerServiceAgentPool) setAKSNodeCount(count int) error {
 		return fmt.Errorf("could not find pool with name: %s", agentPool.azureRef)
 	}
 
-	glog.Infof("Current size: %d, Target size requested: %d", *pool.Count, count)
+	klog.Infof("Current size: %d, Target size requested: %d", *pool.Count, count)
 
 	updateCtx, updateCancel := getContextWithCancel()
 	defer updateCancel()
@@ -190,10 +190,19 @@ func (agentPool *ContainerServiceAgentPool) setAKSNodeCount(count int) error {
 	future, err := aksClient.CreateOrUpdate(updateCtx, agentPool.resourceGroup,
 		agentPool.clusterName, managedCluster)
 	if err != nil {
-		glog.Error("Failed to update AKS cluster (%q): %v", agentPool.clusterName, err)
+		klog.Errorf("Failed to update AKS cluster (%q): %v", agentPool.clusterName, err)
 		return err
 	}
-	return future.WaitForCompletion(updateCtx, aksClient.Client)
+
+	err = future.WaitForCompletionRef(updateCtx, aksClient.Client)
+	isSuccess, realError := isSuccessHTTPResponse(future.Response(), err)
+	if isSuccess {
+		klog.V(3).Infof("aksClient.CreateOrUpdate for aks cluster %q success", agentPool.clusterName)
+		return nil
+	}
+
+	klog.Errorf("aksClient.CreateOrUpdate for aks cluster %q failed: %v", agentPool.clusterName, realError)
+	return realError
 }
 
 // setACSNodeCount sets node count for ACS agent pool.
@@ -205,7 +214,7 @@ func (agentPool *ContainerServiceAgentPool) setACSNodeCount(count int) error {
 		agentPool.resourceGroup,
 		agentPool.clusterName)
 	if err != nil {
-		glog.Error("Failed to get ACS cluster (name:%q): %v", agentPool.clusterName, err)
+		klog.Errorf("Failed to get ACS cluster (name:%q): %v", agentPool.clusterName, err)
 		return err
 	}
 
@@ -214,7 +223,7 @@ func (agentPool *ContainerServiceAgentPool) setACSNodeCount(count int) error {
 		return fmt.Errorf("could not find pool with name: %s", agentPool.azureRef)
 	}
 
-	glog.Infof("Current size: %d, Target size requested: %d", *pool.Count, count)
+	klog.Infof("Current size: %d, Target size requested: %d", *pool.Count, count)
 
 	updateCtx, updateCancel := getContextWithCancel()
 	defer updateCancel()
@@ -223,10 +232,19 @@ func (agentPool *ContainerServiceAgentPool) setACSNodeCount(count int) error {
 	future, err := acsClient.CreateOrUpdate(updateCtx, agentPool.resourceGroup,
 		agentPool.clusterName, acsCluster)
 	if err != nil {
-		glog.Error("Failed to update ACS cluster (%q): %v", agentPool.clusterName, err)
+		klog.Errorf("Failed to update ACS cluster (%q): %v", agentPool.clusterName, err)
 		return err
 	}
-	return future.WaitForCompletion(updateCtx, acsClient.Client)
+
+	err = future.WaitForCompletionRef(updateCtx, acsClient.Client)
+	isSuccess, realError := isSuccessHTTPResponse(future.Response(), err)
+	if isSuccess {
+		klog.V(3).Infof("acsClient.CreateOrUpdate for acs cluster %q success", agentPool.clusterName)
+		return nil
+	}
+
+	klog.Errorf("acsClient.CreateOrUpdate for acs cluster %q failed: %v", agentPool.clusterName, realError)
+	return realError
 }
 
 //GetNodeCount returns the count of nodes from the managed agent pool profile
@@ -252,7 +270,7 @@ func (agentPool *ContainerServiceAgentPool) SetNodeCount(count int) (err error) 
 func (agentPool *ContainerServiceAgentPool) GetProviderID(name string) string {
 	//TODO: come with a generic way to make it work with provider id formats
 	// in different version of k8s.
-	return "azure://" + name
+	return "azure://" + strings.ToLower(name)
 }
 
 //GetName extracts the name of the node (a format which underlying cloud service understands)
@@ -267,7 +285,7 @@ func (agentPool *ContainerServiceAgentPool) GetName(providerID string) (string, 
 		return "", err
 	}
 	for _, vm := range vms {
-		if strings.Compare(*vm.ID, providerID) == 0 {
+		if strings.EqualFold(*vm.ID, providerID) {
 			return *vm.Name, nil
 		}
 	}
@@ -297,11 +315,11 @@ func (agentPool *ContainerServiceAgentPool) TargetSize() (int, error) {
 //a delete is performed from a scale down.
 func (agentPool *ContainerServiceAgentPool) SetSize(targetSize int) error {
 	if targetSize > agentPool.MaxSize() || targetSize < agentPool.MinSize() {
-		glog.Errorf("Target size %d requested outside Max: %d, Min: %d", targetSize, agentPool.MaxSize(), agentPool.MaxSize)
+		klog.Errorf("Target size %d requested outside Max: %d, Min: %d", targetSize, agentPool.MaxSize(), agentPool.MaxSize())
 		return fmt.Errorf("Target size %d requested outside Max: %d, Min: %d", targetSize, agentPool.MaxSize(), agentPool.MinSize())
 	}
 
-	glog.V(2).Infof("Setting size for cluster (%q) with new count (%d)", agentPool.clusterName, targetSize)
+	klog.V(2).Infof("Setting size for cluster (%q) with new count (%d)", agentPool.clusterName, targetSize)
 	if agentPool.serviceType == vmTypeAKS {
 		return agentPool.setAKSNodeCount(targetSize)
 	}
@@ -339,16 +357,16 @@ func (agentPool *ContainerServiceAgentPool) DeleteNodesInternal(providerIDs []st
 	targetSize := currentSize
 
 	for _, providerID := range providerIDs {
-		glog.Infof("ProviderID got to delete: %s", providerID)
+		klog.Infof("ProviderID got to delete: %s", providerID)
 		nodeName, err := agentPool.GetName(providerID)
 		if err != nil {
 			return err
 		}
-		glog.Infof("VM name got to delete: %s", nodeName)
+		klog.Infof("VM name got to delete: %s", nodeName)
 
 		err = agentPool.util.DeleteVirtualMachine(agentPool.nodeResourceGroup, nodeName)
 		if err != nil {
-			glog.Error(err)
+			klog.Error(err)
 			return err
 		}
 		targetSize--
@@ -366,11 +384,11 @@ func (agentPool *ContainerServiceAgentPool) DeleteNodesInternal(providerIDs []st
 func (agentPool *ContainerServiceAgentPool) DeleteNodes(nodes []*apiv1.Node) error {
 	var providerIDs []string
 	for _, node := range nodes {
-		glog.Infof("Node: %s", node.Spec.ProviderID)
+		klog.Infof("Node: %s", node.Spec.ProviderID)
 		providerIDs = append(providerIDs, node.Spec.ProviderID)
 	}
 	for _, p := range providerIDs {
-		glog.Infof("ProviderID before calling acsmgr: %s", p)
+		klog.Infof("ProviderID before calling acsmgr: %s", p)
 	}
 	return agentPool.DeleteNodesInternal(providerIDs)
 }
@@ -379,8 +397,8 @@ func (agentPool *ContainerServiceAgentPool) DeleteNodes(nodes []*apiv1.Node) err
 func (agentPool *ContainerServiceAgentPool) IsContainerServiceNode(tags map[string]*string) bool {
 	poolName := tags["poolName"]
 	if poolName != nil {
-		glog.V(5).Infof("Matching agentPool name: %s with tag name: %s", agentPool.azureRef.Name, *poolName)
-		if *poolName == agentPool.azureRef.Name {
+		klog.V(5).Infof("Matching agentPool name: %s with tag name: %s", agentPool.azureRef.Name, *poolName)
+		if strings.EqualFold(*poolName, agentPool.azureRef.Name) {
 			return true
 		}
 	}
@@ -394,15 +412,15 @@ func (agentPool *ContainerServiceAgentPool) GetNodes() ([]string, error) {
 	defer cancel()
 	vmList, err := agentPool.manager.azClient.virtualMachinesClient.List(ctx, agentPool.nodeResourceGroup)
 	if err != nil {
-		glog.Error("Error", err)
+		klog.Errorf("Azure client list vm error : %v", err)
 		return nil, err
 	}
 	var nodeArray []string
 	for _, node := range vmList {
-		glog.V(5).Infof("Node Name: %s, ID: %s", *node.Name, *node.ID)
+		klog.V(5).Infof("Node Name: %s, ID: %s", *node.Name, *node.ID)
 		if agentPool.IsContainerServiceNode(node.Tags) {
 			providerID := agentPool.GetProviderID(*node.ID)
-			glog.V(5).Infof("Returning back the providerID: %s", providerID)
+			klog.V(5).Infof("Returning back the providerID: %s", providerID)
 			nodeArray = append(nodeArray, providerID)
 		}
 	}
@@ -412,18 +430,18 @@ func (agentPool *ContainerServiceAgentPool) GetNodes() ([]string, error) {
 //DecreaseTargetSize requests the underlying service to decrease the node count.
 func (agentPool *ContainerServiceAgentPool) DecreaseTargetSize(delta int) error {
 	if delta >= 0 {
-		glog.Errorf("Size decrease error: %d", delta)
+		klog.Errorf("Size decrease error: %d", delta)
 		return fmt.Errorf("Size decrease must be negative")
 	}
 	currentSize, err := agentPool.TargetSize()
 	if err != nil {
-		glog.Error(err)
+		klog.Error(err)
 		return err
 	}
 	// Get the current nodes in the list
 	nodes, err := agentPool.GetNodes()
 	if err != nil {
-		glog.Error(err)
+		klog.Error(err)
 		return err
 	}
 	targetSize := int(currentSize) + delta
@@ -445,8 +463,16 @@ func (agentPool *ContainerServiceAgentPool) Debug() string {
 }
 
 //Nodes returns the list of nodes in the agentPool.
-func (agentPool *ContainerServiceAgentPool) Nodes() ([]string, error) {
-	return agentPool.GetNodes()
+func (agentPool *ContainerServiceAgentPool) Nodes() ([]cloudprovider.Instance, error) {
+	instanceNames, err := agentPool.GetNodes()
+	if err != nil {
+		return nil, err
+	}
+	instances := make([]cloudprovider.Instance, 0, len(instanceNames))
+	for _, instanceName := range instanceNames {
+		instances = append(instances, cloudprovider.Instance{Id: instanceName})
+	}
+	return instances, nil
 }
 
 //TemplateNodeInfo is not implemented.

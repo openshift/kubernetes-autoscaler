@@ -28,7 +28,6 @@ import (
 	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/metrics"
 	metrics_recommender "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/metrics/recommender"
 	"k8s.io/client-go/rest"
-	kube_restclient "k8s.io/client-go/rest"
 )
 
 var (
@@ -47,7 +46,8 @@ func main() {
 
 	config := createKubeConfig(float32(*kubeApiQps), int(*kubeApiBurst))
 
-	metrics.Initialize(*address)
+	healthCheck := metrics.NewHealthCheck(*metricsFetcherInterval*5, true)
+	metrics.Initialize(*address, healthCheck)
 	metrics_recommender.Register()
 
 	useCheckpoints := *storage != "prometheus"
@@ -58,19 +58,16 @@ func main() {
 		recommender.GetClusterStateFeeder().InitFromHistoryProvider(history.NewPrometheusHistoryProvider(*prometheusAddress))
 	}
 
-	for {
-		select {
-		case <-time.After(*metricsFetcherInterval):
-			{
-				recommender.RunOnce()
-			}
-		}
+	ticker := time.Tick(*metricsFetcherInterval)
+	for range ticker {
+		recommender.RunOnce()
+		healthCheck.UpdateLastActivity()
 	}
 
 }
 
 func createKubeConfig(kubeApiQps float32, kubeApiBurst int) *rest.Config {
-	config, err := kube_restclient.InClusterConfig()
+	config, err := rest.InClusterConfig()
 	if err != nil {
 		glog.Fatalf("Failed to create config: %v", err)
 	}

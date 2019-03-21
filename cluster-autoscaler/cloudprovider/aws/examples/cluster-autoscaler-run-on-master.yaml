@@ -42,7 +42,7 @@ rules:
   resources: ["poddisruptionbudgets"]
   verbs: ["watch","list"]
 - apiGroups: ["apps"]
-  resources: ["statefulsets"]
+  resources: ["statefulsets", "replicasets"]
   verbs: ["watch","list","get"]
 - apiGroups: ["storage.k8s.io"]
   resources: ["storageclasses"]
@@ -122,11 +122,13 @@ spec:
       serviceAccountName: cluster-autoscaler
       tolerations:
       - effect: NoSchedule
+        operator: "Equal"
+        value: "true"
         key: node-role.kubernetes.io/master
       nodeSelector:
         kubernetes.io/role: master
       containers:
-        - image: k8s.gcr.io/cluster-autoscaler:v1.2.2
+        - image: k8s.gcr.io/cluster-autoscaler:v1.13.2
           name: cluster-autoscaler
           resources:
             limits:
@@ -142,9 +144,6 @@ spec:
             - --cloud-provider=aws
             - --skip-nodes-with-local-storage=false
             - --nodes={{ node_asg_min }}:{{ node_asg_max }}:{{ name }}
-          env:
-            - name: AWS_REGION
-              value: {{ region }}
           volumeMounts:
             - name: ssl-certs
               mountPath: /etc/ssl/certs/ca-certificates.crt

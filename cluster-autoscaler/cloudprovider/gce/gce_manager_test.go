@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
+	"k8s.io/autoscaler/cluster-autoscaler/utils/units"
 
 	. "k8s.io/autoscaler/cluster-autoscaler/utils/test"
 
@@ -46,146 +47,6 @@ const (
 	gceMigA = "gce-mig-a"
 	gceMigB = "gce-mig-b"
 )
-
-const allNodePools1 = `{
-  "nodePools": [
-    {
-      "name": "default-pool",
-      "config": {
-        "machineType": "n1-standard-1",
-        "diskSizeGb": 100,
-        "oauthScopes": [
-          "https://www.googleapis.com/auth/compute",
-          "https://www.googleapis.com/auth/devstorage.read_only",
-          "https://www.googleapis.com/auth/logging.write",
-          "https://www.googleapis.com/auth/monitoring.write",
-          "https://www.googleapis.com/auth/servicecontrol",
-          "https://www.googleapis.com/auth/service.management.readonly",
-          "https://www.googleapis.com/auth/trace.append"
-        ],
-        "imageType": "COS",
-        "serviceAccount": "default"
-      },
-      "initialNodeCount": 3,
-      "autoscaling": {
-         "Enabled": true,
-         "MinNodeCount": 1,
-         "MaxNodeCount": 11
-      },
-      "management": {},
-      "selfLink": "https://container.googleapis.com/v1/projects/project1/locations/us-central1-b/clusters/cluster-1/nodePools/default-pool",
-      "version": "1.6.9",
-      "instanceGroupUrls": [
-        "https://www.googleapis.com/compute/v1/projects/project1/zones/us-central1-b/instanceGroupManagers/gke-cluster-1-default-pool"
-      ],
-      "status": "RUNNING"
-    }
-  ]
-}`
-
-const allNodePoolsRegional = `{
-  "nodePools": [
-    {
-      "name": "default-pool",
-      "config": {
-        "machineType": "n1-standard-1",
-        "diskSizeGb": 100,
-        "oauthScopes": [
-          "https://www.googleapis.com/auth/compute",
-          "https://www.googleapis.com/auth/devstorage.read_only",
-          "https://www.googleapis.com/auth/logging.write",
-          "https://www.googleapis.com/auth/monitoring.write",
-          "https://www.googleapis.com/auth/servicecontrol",
-          "https://www.googleapis.com/auth/service.management.readonly",
-          "https://www.googleapis.com/auth/trace.append"
-        ],
-        "imageType": "COS",
-        "serviceAccount": "default"
-      },
-      "initialNodeCount": 3,
-      "autoscaling": {
-         "Enabled": true,
-         "MinNodeCount": 1,
-         "MaxNodeCount": 11
-      },
-      "management": {},
-      "selfLink": "https://container.googleapis.com/v1/projects/project1/locations/us-central1-b/clusters/cluster-1/nodePools/default-pool",
-      "version": "1.6.9",
-      "instanceGroupUrls": [
-        "https://www.googleapis.com/compute/v1/projects/project1/zones/us-central1-b/instanceGroupManagers/gke-cluster-1-default-pool",
-        "https://www.googleapis.com/compute/v1/projects/project1/zones/us-central1-c/instanceGroupManagers/gke-cluster-1-default-pool",
-        "https://www.googleapis.com/compute/v1/projects/project1/zones/us-central1-f/instanceGroupManagers/gke-cluster-1-default-pool"
-      ],
-      "status": "RUNNING"
-    }
-  ]
-}`
-
-const allNodePools2 = `{
-  "nodePools": [
-    {
-      "name": "default-pool",
-      "config": {
-        "machineType": "n1-standard-1",
-        "diskSizeGb": 100,
-        "oauthScopes": [
-          "https://www.googleapis.com/auth/compute",
-          "https://www.googleapis.com/auth/devstorage.read_only",
-          "https://www.googleapis.com/auth/logging.write",
-          "https://www.googleapis.com/auth/monitoring.write",
-          "https://www.googleapis.com/auth/servicecontrol",
-          "https://www.googleapis.com/auth/service.management.readonly",
-          "https://www.googleapis.com/auth/trace.append"
-        ],
-        "imageType": "COS",
-        "serviceAccount": "default"
-      },
-      "initialNodeCount": 3,
-      "autoscaling": {
-         "Enabled": true,
-         "MinNodeCount": 1,
-         "MaxNodeCount": 11},
-      "management": {},
-      "selfLink": "https://container.googleapis.com/v1/projects/project1/locations/us-central1-b/clusters/cluster-1/nodePools/default-pool",
-      "version": "1.6.9",
-      "instanceGroupUrls": [
-        "https://www.googleapis.com/compute/v1/projects/project1/zones/us-central1-b/instanceGroupManagers/gke-cluster-1-default-pool"
-      ],
-      "status": "RUNNING"
-    },
-    {
-      "name": "extra-pool-323233232",
-      "config": {
-        "machineType": "n1-standard-1",
-        "diskSizeGb": 100,
-        "oauthScopes": [
-          "https://www.googleapis.com/auth/compute",
-          "https://www.googleapis.com/auth/devstorage.read_only",
-          "https://www.googleapis.com/auth/logging.write",
-          "https://www.googleapis.com/auth/monitoring.write",
-          "https://www.googleapis.com/auth/servicecontrol",
-          "https://www.googleapis.com/auth/service.management.readonly",
-          "https://www.googleapis.com/auth/trace.append"
-        ],
-        "imageType": "COS",
-        "serviceAccount": "default"
-      },
-      "initialNodeCount": 3,
-      "autoscaling": {
-         "Enabled": true,
-         "MinNodeCount": 0,
-         "MaxNodeCount": 1000
-      },
-      "management": {},
-      "selfLink": "https://container.googleapis.com/v1/projects/project1/locations/us-central1-b/clusters/cluster-1/nodePools/extra-pool-323233232",
-      "version": "1.6.9",
-      "instanceGroupUrls": [
-        "https://www.googleapis.com/compute/v1/projects/project1/zones/us-central1-b/instanceGroupManagers/gke-cluster-1-extra-pool-323233232"
-      ],
-      "status": "RUNNING"
-    }
-  ]
-}`
 
 const instanceGroupManager = `{
   "kind": "compute#instanceGroupManager",
@@ -347,109 +208,6 @@ const managedInstancesResponse2 = `{
       "currentAction": "NONE"
     }
   ]
-}`
-
-const getClusterResponse = `{
-  "name": "usertest",
-  "nodeConfig": {
-    "machineType": "n1-standard-1",
-    "diskSizeGb": 100,
-    "oauthScopes": [
-      "https://www.googleapis.com/auth/compute",
-      "https://www.googleapis.com/auth/devstorage.read_only",
-      "https://www.googleapis.com/auth/service.management.readonly",
-      "https://www.googleapis.com/auth/servicecontrol",
-      "https://www.googleapis.com/auth/logging.write",
-      "https://www.googleapis.com/auth/monitoring"
-    ],
-    "imageType": "COS",
-    "serviceAccount": "default",
-    "diskType": "pd-standard"
-  },
-  "masterAuth": {
-    "username": "admin",
-    "password": "pass",
-    "clusterCaCertificate": "cer1",
-    "clientCertificate": "cer1",
-    "clientKey": "cer1=="
-  },
-  "loggingService": "logging.googleapis.com",
-  "monitoringService": "monitoring.googleapis.com",
-  "network": "default",
-  "clusterIpv4Cidr": "10.32.0.0/14",
-  "addonsConfig": {
-    "networkPolicyConfig": {
-      "disabled": true
-    }
-  },
-  "nodePools": [
-    {
-      "name": "default-pool",
-      "config": {
-        "machineType": "n1-standard-1",
-        "diskSizeGb": 100,
-        "oauthScopes": [
-          "https://www.googleapis.com/auth/compute",
-          "https://www.googleapis.com/auth/devstorage.read_only",
-          "https://www.googleapis.com/auth/service.management.readonly",
-          "https://www.googleapis.com/auth/servicecontrol",
-          "https://www.googleapis.com/auth/logging.write",
-          "https://www.googleapis.com/auth/monitoring"
-        ],
-        "imageType": "COS",
-        "serviceAccount": "default",
-        "diskType": "pd-standard"
-      },
-      "initialNodeCount": 1,
-      "autoscaling": {
-        "enabled": true,
-        "maxNodeCount": 5
-      },
-      "management": {},
-      "selfLink": "https:///v1beta1/projects/user-gke-dev/locations/us-central1-c/clusters/usertest/nodePools/default-pool",
-      "version": "1.8.0-gke.1",
-      "instanceGroupUrls": [
-        "https://www.googleapis.com/compute/v1/projects/user-gke-dev/zones/us-central1-c/instanceGroupManagers/gke-usertest-default-pool-fdsafds2d5-grp"
-      ],
-      "status": "RUNNING"
-    }
-  ],
-  "locations": [
-    "us-central1-b"
-  ],
-  "labelFingerprint": "fasdfds",
-  "legacyAbac": {},
-  "autoscaling": {
-    "resourceLimits": [
-      {
-        "resourceType": "cpu",
-        "minimum": "2",
-        "maximum": "3"
-      },
-      {
-        "resourceType": "memory",
-        "minimum": "2000000000",
-        "maximum": "3000000000"
-      }
-    ]
-  },
-  "networkConfig": {
-    "network": "https://www.googleapis.com/compute/v1/projects/user-gke-dev/global/networks/default"
-  },
-  "selfLink": "https:///v1beta1/projects/user-gke-dev/locations/us-central1-c/clusters/usertest",
-  "zone": "us-central1-c",
-  "endpoint": "xxx",
-  "initialClusterVersion": "1.sdafsa",
-  "currentMasterVersion": "1fdsfdsfsauser",
-  "currentNodeVersion": "xxx",
-  "createTime": "2017-10-24T12:20:00+00:00",
-  "status": "RUNNING",
-  "nodeIpv4CidrSize": 24,
-  "servicesIpv4Cidr": "10.35.240.0/20",
-  "instanceGroupUrls": [
-    "https://www.googleapis.com/compute/v1/projects/user-gke-dev/zones/us-central1-c/instanceGroupManagers/gke-usertest-default-pool-323-grp"
-  ],
-  "currentNodeCount": 1
 }`
 
 func getInstanceGroupManager(zone string) string {
@@ -1050,14 +808,14 @@ func TestGetCpuAndMemoryForMachineType(t *testing.T) {
 	cpu, mem, err := g.getCpuAndMemoryForMachineType("custom-8-2", zoneB)
 	assert.NoError(t, err)
 	assert.Equal(t, int64(8), cpu)
-	assert.Equal(t, int64(2*bytesPerMB), mem)
+	assert.Equal(t, int64(2*units.MiB), mem)
 	mock.AssertExpectationsForObjects(t, server)
 
 	// Standard machine type found in cache.
 	cpu, mem, err = g.getCpuAndMemoryForMachineType("n1-standard-1", zoneB)
 	assert.NoError(t, err)
 	assert.Equal(t, int64(1), cpu)
-	assert.Equal(t, int64(1*bytesPerMB), mem)
+	assert.Equal(t, int64(1*units.MiB), mem)
 	mock.AssertExpectationsForObjects(t, server)
 
 	// Standard machine type not found in cache.
@@ -1065,14 +823,14 @@ func TestGetCpuAndMemoryForMachineType(t *testing.T) {
 	cpu, mem, err = g.getCpuAndMemoryForMachineType("n1-standard-2", zoneB)
 	assert.NoError(t, err)
 	assert.Equal(t, int64(2), cpu)
-	assert.Equal(t, int64(3840*bytesPerMB), mem)
+	assert.Equal(t, int64(3840*units.MiB), mem)
 	mock.AssertExpectationsForObjects(t, server)
 
 	// Standard machine type cached.
 	cpu, mem, err = g.getCpuAndMemoryForMachineType("n1-standard-2", zoneB)
 	assert.NoError(t, err)
 	assert.Equal(t, int64(2), cpu)
-	assert.Equal(t, int64(3840*bytesPerMB), mem)
+	assert.Equal(t, int64(3840*units.MiB), mem)
 	mock.AssertExpectationsForObjects(t, server)
 
 	// Standard machine type not found in the zone.
@@ -1087,7 +845,7 @@ func TestParseCustomMachineType(t *testing.T) {
 	cpu, mem, err := parseCustomMachineType("custom-2-2816")
 	assert.NoError(t, err)
 	assert.Equal(t, int64(2), cpu)
-	assert.Equal(t, int64(2816*bytesPerMB), mem)
+	assert.Equal(t, int64(2816*units.MiB), mem)
 	cpu, mem, err = parseCustomMachineType("other-a2-2816")
 	assert.Error(t, err)
 	cpu, mem, err = parseCustomMachineType("other-2-2816")

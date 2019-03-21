@@ -18,12 +18,16 @@ package gce
 
 import (
 	"fmt"
+	"io"
+	"os"
 	"strings"
 
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
+	"k8s.io/autoscaler/cluster-autoscaler/config"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/errors"
+	"k8s.io/klog"
 	schedulercache "k8s.io/kubernetes/pkg/scheduler/cache"
 )
 
@@ -108,6 +112,11 @@ func (gce *GceCloudProvider) GetResourceLimiter() (*cloudprovider.ResourceLimite
 // In particular the list of node groups returned by NodeGroups can change as a result of CloudProvider.Refresh().
 func (gce *GceCloudProvider) Refresh() error {
 	return gce.gceManager.Refresh()
+}
+
+// GetInstanceID gets the instance ID for the specified node.
+func (gce *GceCloudProvider) GetInstanceID(node *apiv1.Node) string {
+	return node.Spec.ProviderID
 }
 
 // GceRef contains s reference to some entity in GCE world.
@@ -269,8 +278,17 @@ func (mig *gceMig) Debug() string {
 }
 
 // Nodes returns a list of all nodes that belong to this node group.
-func (mig *gceMig) Nodes() ([]string, error) {
-	return mig.gceManager.GetMigNodes(mig)
+func (mig *gceMig) Nodes() ([]cloudprovider.Instance, error) {
+	instanceNames, err := mig.gceManager.GetMigNodes(mig)
+	if err != nil {
+		return nil, err
+	}
+	instances := make([]cloudprovider.Instance, 0, len(instanceNames))
+	for _, instanceName := range instanceNames {
+		instances = append(instances, cloudprovider.Instance{Id: instanceName})
+	}
+	return instances, nil
+
 }
 
 // Exist checks if the node group really exists on the cloud provider side.
@@ -302,4 +320,30 @@ func (mig *gceMig) TemplateNodeInfo() (*schedulercache.NodeInfo, error) {
 	nodeInfo := schedulercache.NewNodeInfo(cloudprovider.BuildKubeProxy(mig.Id()))
 	nodeInfo.SetNode(node)
 	return nodeInfo, nil
+}
+
+// BuildGCE builds GCE cloud provider, manager etc.
+func BuildGCE(opts config.AutoscalingOptions, do cloudprovider.NodeGroupDiscoveryOptions, rl *cloudprovider.ResourceLimiter) cloudprovider.CloudProvider {
+	var config io.ReadCloser
+	if opts.CloudConfig != "" {
+		var err error
+		config, err = os.Open(opts.CloudConfig)
+		if err != nil {
+			klog.Fatalf("Couldn't open cloud provider configuration %s: %#v", opts.CloudConfig, err)
+		}
+		defer config.Close()
+	}
+
+	manager, err := CreateGceManager(config, do, opts.Regional)
+	if err != nil {
+		klog.Fatalf("Failed to create GCE Manager: %v", err)
+	}
+
+	provider, err := BuildGceCloudProvider(manager, rl)
+	if err != nil {
+		klog.Fatalf("Failed to create GCE cloud provider: %v", err)
+	}
+	// Register GCE API usage metrics.
+	RegisterMetrics()
+	return provider
 }

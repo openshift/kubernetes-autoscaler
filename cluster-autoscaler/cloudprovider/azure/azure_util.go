@@ -30,12 +30,12 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/Azure/azure-sdk-for-go/services/compute/mgmt/2018-04-01/compute"
+	"github.com/Azure/azure-sdk-for-go/services/compute/mgmt/2018-10-01/compute"
 	azStorage "github.com/Azure/azure-sdk-for-go/storage"
 	"github.com/Azure/go-autorest/autorest"
 	"github.com/Azure/go-autorest/autorest/to"
-	"github.com/golang/glog"
 	"golang.org/x/crypto/pkcs12"
+	"k8s.io/klog"
 
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	"k8s.io/client-go/pkg/version"
@@ -70,15 +70,17 @@ const (
 	k8sLinuxVMAgentClusterIDIndex  = 2
 	k8sLinuxVMAgentIndexArrayIndex = 3
 
-	k8sWindowsVMNamingFormat               = "^([a-fA-F0-9]{5})([0-9a-zA-Z]{3})([a-zA-Z0-9]{4,6})$"
+	k8sWindowsOldVMNamingFormat            = "^([a-fA-F0-9]{5})([0-9a-zA-Z]{3})([9])([a-zA-Z0-9]{3,5})$"
+	k8sWindowsVMNamingFormat               = "^([a-fA-F0-9]{4})([0-9a-zA-Z]{3})([0-9]{3,8})$"
 	k8sWindowsVMAgentPoolPrefixIndex       = 1
 	k8sWindowsVMAgentOrchestratorNameIndex = 2
 	k8sWindowsVMAgentPoolInfoIndex         = 3
 )
 
 var (
-	vmnameLinuxRegexp   = regexp.MustCompile(k8sLinuxVMNamingFormat)
-	vmnameWindowsRegexp = regexp.MustCompile(k8sWindowsVMNamingFormat)
+	vmnameLinuxRegexp      = regexp.MustCompile(k8sLinuxVMNamingFormat)
+	vmnameWindowsRegexp    = regexp.MustCompile(k8sWindowsVMNamingFormat)
+	oldvmnameWindowsRegexp = regexp.MustCompile(k8sWindowsOldVMNamingFormat)
 )
 
 //AzUtil consists of utility functions which utilizes clients to different services.
@@ -88,7 +90,7 @@ type AzUtil struct {
 	manager *AzureManager
 }
 
-// DeleteBlob deletes the blob using the storage storage client.
+// DeleteBlob deletes the blob using the storage client.
 func (util *AzUtil) DeleteBlob(accountName, vhdContainer, vhdBlob string) error {
 	ctx, cancel := getContextWithCancel()
 	defer cancel()
@@ -119,18 +121,18 @@ func (util *AzUtil) DeleteVirtualMachine(rg string, name string) error {
 	vm, err := util.manager.azClient.virtualMachinesClient.Get(ctx, rg, name, "")
 	if err != nil {
 		if exists, _ := checkResourceExistsFromError(err); !exists {
-			glog.V(2).Infof("VirtualMachine %s/%s has already been removed", rg, name)
+			klog.V(2).Infof("VirtualMachine %s/%s has already been removed", rg, name)
 			return nil
 		}
 
-		glog.Errorf("failed to get VM: %s/%s: %s", rg, name, err.Error())
+		klog.Errorf("failed to get VM: %s/%s: %s", rg, name, err.Error())
 		return err
 	}
 
 	vhd := vm.VirtualMachineProperties.StorageProfile.OsDisk.Vhd
 	managedDisk := vm.VirtualMachineProperties.StorageProfile.OsDisk.ManagedDisk
 	if vhd == nil && managedDisk == nil {
-		glog.Errorf("failed to get a valid os disk URI for VM: %s/%s", rg, name)
+		klog.Errorf("failed to get a valid os disk URI for VM: %s/%s", rg, name)
 		return fmt.Errorf("os disk does not have a VHD URI")
 	}
 
@@ -138,38 +140,38 @@ func (util *AzUtil) DeleteVirtualMachine(rg string, name string) error {
 	var nicName string
 	nicID := (*vm.VirtualMachineProperties.NetworkProfile.NetworkInterfaces)[0].ID
 	if nicID == nil {
-		glog.Warningf("NIC ID is not set for VM (%s/%s)", rg, name)
+		klog.Warningf("NIC ID is not set for VM (%s/%s)", rg, name)
 	} else {
 		nicName, err = resourceName(*nicID)
 		if err != nil {
 			return err
 		}
-		glog.Infof("found nic name for VM (%s/%s): %s", rg, name, nicName)
+		klog.Infof("found nic name for VM (%s/%s): %s", rg, name, nicName)
 	}
 
-	glog.Infof("deleting VM: %s/%s", rg, name)
+	klog.Infof("deleting VM: %s/%s", rg, name)
 	deleteCtx, deleteCancel := getContextWithCancel()
 	defer deleteCancel()
 
-	glog.Infof("waiting for VirtualMachine deletion: %s/%s", rg, name)
+	klog.Infof("waiting for VirtualMachine deletion: %s/%s", rg, name)
 	_, err = util.manager.azClient.virtualMachinesClient.Delete(deleteCtx, rg, name)
 	_, realErr := checkResourceExistsFromError(err)
 	if realErr != nil {
 		return realErr
 	}
-	glog.V(2).Infof("VirtualMachine %s/%s removed", rg, name)
+	klog.V(2).Infof("VirtualMachine %s/%s removed", rg, name)
 
 	if len(nicName) > 0 {
-		glog.Infof("deleting nic: %s/%s", rg, nicName)
+		klog.Infof("deleting nic: %s/%s", rg, nicName)
 		interfaceCtx, interfaceCancel := getContextWithCancel()
 		defer interfaceCancel()
-		glog.Infof("waiting for nic deletion: %s/%s", rg, nicName)
+		klog.Infof("waiting for nic deletion: %s/%s", rg, nicName)
 		_, nicErr := util.manager.azClient.interfacesClient.Delete(interfaceCtx, rg, nicName)
 		_, realErr := checkResourceExistsFromError(nicErr)
 		if realErr != nil {
 			return realErr
 		}
-		glog.V(2).Infof("interface %s/%s removed", rg, nicName)
+		klog.V(2).Infof("interface %s/%s removed", rg, nicName)
 	}
 
 	if vhd != nil {
@@ -178,21 +180,21 @@ func (util *AzUtil) DeleteVirtualMachine(rg string, name string) error {
 			return err
 		}
 
-		glog.Infof("found os disk storage reference: %s %s %s", accountName, vhdContainer, vhdBlob)
+		klog.Infof("found os disk storage reference: %s %s %s", accountName, vhdContainer, vhdBlob)
 
-		glog.Infof("deleting blob: %s/%s", vhdContainer, vhdBlob)
+		klog.Infof("deleting blob: %s/%s", vhdContainer, vhdBlob)
 		if err = util.DeleteBlob(accountName, vhdContainer, vhdBlob); err != nil {
 			_, realErr := checkResourceExistsFromError(err)
 			if realErr != nil {
 				return realErr
 			}
-			glog.V(2).Infof("Blob %s/%s removed", rg, vhdBlob)
+			klog.V(2).Infof("Blob %s/%s removed", rg, vhdBlob)
 		}
 	} else if managedDisk != nil {
 		if osDiskName == nil {
-			glog.Warningf("osDisk is not set for VM %s/%s", rg, name)
+			klog.Warningf("osDisk is not set for VM %s/%s", rg, name)
 		} else {
-			glog.Infof("deleting managed disk: %s/%s", rg, *osDiskName)
+			klog.Infof("deleting managed disk: %s/%s", rg, *osDiskName)
 			disksCtx, disksCancel := getContextWithCancel()
 			defer disksCancel()
 			_, diskErr := util.manager.azClient.disksClient.Delete(disksCtx, rg, *osDiskName)
@@ -200,7 +202,7 @@ func (util *AzUtil) DeleteVirtualMachine(rg string, name string) error {
 			if realErr != nil {
 				return realErr
 			}
-			glog.V(2).Infof("disk %s/%s removed", rg, *osDiskName)
+			klog.V(2).Infof("disk %s/%s removed", rg, *osDiskName)
 		}
 	}
 
@@ -242,7 +244,7 @@ func normalizeForK8sVMASScalingUp(templateMap map[string]interface{}) error {
 	for index, resource := range resources {
 		resourceMap, ok := resource.(map[string]interface{})
 		if !ok {
-			glog.Warningf("Template improperly formatted for resource")
+			klog.Warning("Template improperly formatted for resource")
 			continue
 		}
 
@@ -250,7 +252,7 @@ func normalizeForK8sVMASScalingUp(templateMap map[string]interface{}) error {
 		if ok && resourceType == nsgResourceType {
 			if nsgIndex != -1 {
 				err := fmt.Errorf("Found 2 resources with type %s in the template. There should only be 1", nsgResourceType)
-				glog.Errorf(err.Error())
+				klog.Errorf(err.Error())
 				return err
 			}
 			nsgIndex = index
@@ -258,7 +260,7 @@ func normalizeForK8sVMASScalingUp(templateMap map[string]interface{}) error {
 		if ok && resourceType == rtResourceType {
 			if rtIndex != -1 {
 				err := fmt.Errorf("Found 2 resources with type %s in the template. There should only be 1", rtResourceType)
-				glog.Warningf(err.Error())
+				klog.Warningf(err.Error())
 				return err
 			}
 			rtIndex = index
@@ -287,11 +289,11 @@ func normalizeForK8sVMASScalingUp(templateMap map[string]interface{}) error {
 	indexesToRemove := []int{}
 	if nsgIndex == -1 {
 		err := fmt.Errorf("Found no resources with type %s in the template. There should have been 1", nsgResourceType)
-		glog.Errorf(err.Error())
+		klog.Errorf(err.Error())
 		return err
 	}
 	if rtIndex == -1 {
-		glog.Infof("Found no resources with type %s in the template.", rtResourceType)
+		klog.Infof("Found no resources with type %s in the template.", rtResourceType)
 	} else {
 		indexesToRemove = append(indexesToRemove, rtIndex)
 	}
@@ -317,7 +319,7 @@ func normalizeMasterResourcesForScaling(templateMap map[string]interface{}) erro
 	for index, resource := range resources {
 		resourceMap, ok := resource.(map[string]interface{})
 		if !ok {
-			glog.Warningf("Template improperly formatted")
+			klog.Warning("Template improperly formatted")
 			continue
 		}
 
@@ -325,7 +327,7 @@ func normalizeMasterResourcesForScaling(templateMap map[string]interface{}) erro
 		if !ok || resourceType != vmResourceType {
 			resourceName, ok := resourceMap[nameFieldName].(string)
 			if !ok {
-				glog.Warningf("Template improperly formatted")
+				klog.Warning("Template improperly formatted")
 				continue
 			}
 			if strings.Contains(resourceName, "variables('masterVMNamePrefix')") && resourceType == vmExtensionType {
@@ -336,7 +338,7 @@ func normalizeMasterResourcesForScaling(templateMap map[string]interface{}) erro
 
 		resourceName, ok := resourceMap[nameFieldName].(string)
 		if !ok {
-			glog.Warningf("Template improperly formatted")
+			klog.Warning("Template improperly formatted")
 			continue
 		}
 
@@ -347,13 +349,13 @@ func normalizeMasterResourcesForScaling(templateMap map[string]interface{}) erro
 
 		resourceProperties, ok := resourceMap[propertiesFieldName].(map[string]interface{})
 		if !ok {
-			glog.Warningf("Template improperly formatted")
+			klog.Warning("Template improperly formatted")
 			continue
 		}
 
 		hardwareProfile, ok := resourceProperties[hardwareProfileFieldName].(map[string]interface{})
 		if !ok {
-			glog.Warningf("Template improperly formatted")
+			klog.Warning("Template improperly formatted")
 			continue
 		}
 
@@ -373,7 +375,7 @@ func normalizeMasterResourcesForScaling(templateMap map[string]interface{}) erro
 func removeCustomData(resourceProperties map[string]interface{}) bool {
 	osProfile, ok := resourceProperties[osProfileFieldName].(map[string]interface{})
 	if !ok {
-		glog.Warningf("Template improperly formatted")
+		klog.Warning("Template improperly formatted")
 		return ok
 	}
 
@@ -386,7 +388,7 @@ func removeCustomData(resourceProperties map[string]interface{}) bool {
 func removeImageReference(resourceProperties map[string]interface{}) bool {
 	storageProfile, ok := resourceProperties[storageProfileFieldName].(map[string]interface{})
 	if !ok {
-		glog.Warningf("Template improperly formatted. Could not find: %s", storageProfileFieldName)
+		klog.Warningf("Template improperly formatted. Could not find: %s", storageProfileFieldName)
 		return ok
 	}
 
@@ -439,28 +441,33 @@ func k8sLinuxVMNameParts(vmName string) (poolIdentifier, nameSuffix string, agen
 	return vmNameParts[k8sLinuxVMAgentPoolNameIndex], vmNameParts[k8sLinuxVMAgentClusterIDIndex], vmNum, nil
 }
 
-// windowsVMNameParts returns parts of Windows VM name e.g: 50621k8s9000
-func windowsVMNameParts(vmName string) (poolPrefix string, acsStr string, poolIndex int, agentIndex int, err error) {
-	vmNameParts := vmnameWindowsRegexp.FindStringSubmatch(vmName)
-	if len(vmNameParts) != 4 {
-		return "", "", -1, -1, fmt.Errorf("resource name was missing from identifier")
+// windowsVMNameParts returns parts of Windows VM name
+func windowsVMNameParts(vmName string) (poolPrefix string, orch string, poolIndex int, agentIndex int, err error) {
+	var poolInfo string
+	vmNameParts := oldvmnameWindowsRegexp.FindStringSubmatch(vmName)
+	if len(vmNameParts) != 5 {
+		vmNameParts = vmnameWindowsRegexp.FindStringSubmatch(vmName)
+		if len(vmNameParts) != 4 {
+			return "", "", -1, -1, fmt.Errorf("resource name was missing from identifier")
+		}
+		poolInfo = vmNameParts[3]
+	} else {
+		poolInfo = vmNameParts[4]
 	}
 
-	poolPrefix = vmNameParts[k8sWindowsVMAgentPoolPrefixIndex]
-	acsStr = vmNameParts[k8sWindowsVMAgentOrchestratorNameIndex]
-	poolInfo := vmNameParts[k8sWindowsVMAgentPoolInfoIndex]
+	poolPrefix = vmNameParts[1]
+	orch = vmNameParts[2]
 
-	poolIndex, err = strconv.Atoi(poolInfo[:3])
+	poolIndex, err = strconv.Atoi(poolInfo[:2])
 	if err != nil {
-		return "", "", -1, -1, fmt.Errorf("Error parsing VM Name: %v", err)
+		return "", "", -1, -1, fmt.Errorf("error parsing VM Name: %v", err)
 	}
-
-	agentIndex, err = strconv.Atoi(poolInfo[3:])
+	agentIndex, err = strconv.Atoi(poolInfo[2:])
 	if err != nil {
-		return "", "", -1, -1, fmt.Errorf("Error parsing VM Name: %v", err)
+		return "", "", -1, -1, fmt.Errorf("error parsing VM Name: %v", err)
 	}
 
-	return poolPrefix, acsStr, poolIndex, agentIndex, nil
+	return poolPrefix, orch, poolIndex, agentIndex, nil
 }
 
 // GetVMNameIndex return the index of VM in the node pools.
@@ -565,13 +572,13 @@ func getLastSegment(ID string) (string, error) {
 func readDeploymentParameters(paramFilePath string) (map[string]interface{}, error) {
 	contents, err := ioutil.ReadFile(paramFilePath)
 	if err != nil {
-		glog.Errorf("Failed to read deployment parameters from file %q: %v", paramFilePath, err)
+		klog.Errorf("Failed to read deployment parameters from file %q: %v", paramFilePath, err)
 		return nil, err
 	}
 
 	deploymentParameters := make(map[string]interface{})
 	if err := json.Unmarshal(contents, &deploymentParameters); err != nil {
-		glog.Errorf("Failed to unmarshal deployment parameters from file %q: %v", paramFilePath, err)
+		klog.Errorf("Failed to unmarshal deployment parameters from file %q: %v", paramFilePath, err)
 		return nil, err
 	}
 
@@ -601,4 +608,23 @@ func checkResourceExistsFromError(err error) (bool, error) {
 		return false, nil
 	}
 	return false, v
+}
+
+// isSuccessHTTPResponse determines if the response from an HTTP request suggests success
+func isSuccessHTTPResponse(resp *http.Response, err error) (isSuccess bool, realError error) {
+	if err != nil {
+		return false, err
+	}
+
+	if resp != nil {
+		// HTTP 2xx suggests a successful response
+		if 199 < resp.StatusCode && resp.StatusCode < 300 {
+			return true, nil
+		}
+
+		return false, fmt.Errorf("failed with HTTP status code %d", resp.StatusCode)
+	}
+
+	// This shouldn't happen, it only ensures all exceptions are handled.
+	return false, fmt.Errorf("failed with unknown error")
 }
