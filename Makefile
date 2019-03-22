@@ -114,7 +114,7 @@ build-rpms:
 .PHONY: build-rpms
 
 # Build images from the official RPMs
-# 
+#
 # Args:
 #
 # Example:
@@ -122,3 +122,15 @@ build-rpms:
 build-images: build-rpms
 	hack/build-images.sh
 .PHONY: build-images
+
+.PHONY: lint
+lint: ## Go lint your code
+	hack/go-lint.sh -min_confidence 0.9 ./cluster-autoscaler/cloudprovider/openshiftmachineapi/...
+
+.PHONY: fmt
+fmt: ## Go fmt your code
+	hack/go-fmt.sh ./cluster-autoscaler/cloudprovider/openshiftmachineapi
+
+.PHONY: vet
+vet: ## Go fmt your code
+	hack/go-vet.sh ./cluster-autoscaler/cloudprovider/openshiftmachineapi
