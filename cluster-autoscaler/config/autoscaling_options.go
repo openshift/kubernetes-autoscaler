@@ -121,4 +121,6 @@ type AutoscalingOptions struct {
 	Regional bool
 	// Pods newer than this will not be considered as unschedulable for scale-up.
 	NewPodScaleUpDelay time.Duration
+	// Path to kube configuration if available
+	KubeConfigPath string
 }
