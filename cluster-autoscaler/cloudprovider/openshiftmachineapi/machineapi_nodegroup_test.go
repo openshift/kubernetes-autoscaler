@@ -389,6 +389,94 @@ func TestNodeGroupIncreaseSize(t *testing.T) {
 	})
 }
 
+func TestNodeGroupDecreaseTargetSize(t *testing.T) {
+	type testCase struct {
+		description string
+		delta       int
+		initial     int32
+		expected    int32
+		errors      bool
+	}
+
+	test := func(t *testing.T, tc *testCase, testObjs *clusterTestConfig) {
+		controller, stop := testObjs.newMachineController(t)
+		defer stop()
+
+		ng, err := testObjs.newNodeGroup(t, controller)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		currReplicas, err := ng.TargetSize()
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if currReplicas != int(tc.initial) {
+			t.Errorf("initially expected %v, got %v", tc.initial, currReplicas)
+		}
+
+		if err := controller.nodeInformer.GetStore().Delete(testObjs.nodes[0]); err != nil {
+			t.Fatalf("failed to add new node: %v", err)
+		}
+
+		if err := controller.machineInformer.Informer().GetStore().Add(testObjs.machines[0]); err != nil {
+			t.Fatalf("failed to add new machine: %v", err)
+		}
+
+		if err := ng.DecreaseTargetSize(tc.delta); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		switch v := (ng.scalableResource).(type) {
+		case *machineSetScalableResource:
+			// A nodegroup is immutable; get a fresh copy.
+			ms, err := ng.machineapiClient.MachineSets(ng.Namespace()).Get(ng.Name(), v1.GetOptions{})
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if actual := pointer.Int32PtrDerefOr(ms.Spec.Replicas, 0); actual != tc.expected {
+				t.Errorf("expected %v, got %v", tc.expected, actual)
+			}
+		case *machineDeploymentScalableResource:
+			// A nodegroup is immutable; get a fresh copy.
+			md, err := ng.machineapiClient.MachineDeployments(ng.Namespace()).Get(ng.Name(), v1.GetOptions{})
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if actual := pointer.Int32PtrDerefOr(md.Spec.Replicas, 0); actual != tc.expected {
+				t.Errorf("expected %v, got %v", tc.expected, actual)
+			}
+		default:
+			t.Errorf("unexpected type: %T", v)
+		}
+	}
+
+	annotations := map[string]string{
+		nodeGroupMinSizeAnnotationKey: "1",
+		nodeGroupMaxSizeAnnotationKey: "10",
+	}
+
+	t.Run("MachineSet", func(t *testing.T) {
+		tc := testCase{
+			description: "decrease by 1",
+			initial:     3,
+			expected:    2,
+			delta:       -1,
+		}
+		test(t, &tc, newMachineSetTestObjs(t.Name(), 0, int(tc.initial), tc.initial, annotations))
+	})
+
+	t.Run("MachineDeployment", func(t *testing.T) {
+		tc := testCase{
+			description: "decrease by 1",
+			initial:     3,
+			expected:    2,
+			delta:       -1,
+		}
+		test(t, &tc, newMachineDeploymentTestObjs(t.Name(), 0, int(tc.initial), tc.initial, annotations))
+	})
+}
+
 func TestNodeGroupDecreaseSizeErrors(t *testing.T) {
 	type testCase struct {
 		description string
