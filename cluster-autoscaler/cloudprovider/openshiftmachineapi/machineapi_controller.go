@@ -19,7 +19,6 @@ package openshiftmachineapi
 import (
 	"fmt"
 
-	"github.com/golang/glog"
 	"github.com/openshift/cluster-api/pkg/apis/machine/v1beta1"
 	clusterclient "github.com/openshift/cluster-api/pkg/client/clientset_generated/clientset"
 	clusterinformers "github.com/openshift/cluster-api/pkg/client/informers_generated/externalversions"
@@ -31,6 +30,7 @@ import (
 	kubeinformers "k8s.io/client-go/informers"
 	kubeclient "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
+	"k8s.io/klog"
 )
 
 const (
@@ -133,7 +133,7 @@ func (c *machineController) run(stopCh <-chan struct{}) error {
 	c.kubeInformerFactory.Start(stopCh)
 	c.clusterInformerFactory.Start(stopCh)
 
-	glog.V(4).Infof("waiting for caches to sync")
+	klog.V(4).Infof("waiting for caches to sync")
 	if !cache.WaitForCacheSync(stopCh,
 		c.nodeInformer.HasSynced,
 		c.machineInformer.Informer().HasSynced,
@@ -268,11 +268,11 @@ func (c *machineController) machineSetNodeNames(machineSet *v1beta1.MachineSet) 
 
 	for _, machine := range machines {
 		if machine.Status.NodeRef == nil {
-			glog.V(4).Infof("Status.NodeRef of machine %q is currently nil", machine.Name)
+			klog.V(4).Infof("Status.NodeRef of machine %q is currently nil", machine.Name)
 			continue
 		}
 		if machine.Status.NodeRef.Kind != "Node" {
-			glog.Errorf("Status.NodeRef of machine %q does not reference a node (rather %q)", machine.Name, machine.Status.NodeRef.Kind)
+			klog.Errorf("Status.NodeRef of machine %q does not reference a node (rather %q)", machine.Name, machine.Status.NodeRef.Kind)
 			continue
 		}
 
@@ -286,7 +286,7 @@ func (c *machineController) machineSetNodeNames(machineSet *v1beta1.MachineSet) 
 		}
 	}
 
-	glog.V(4).Infof("nodegroup %s has nodes %v", machineSet.Name, nodes)
+	klog.V(4).Infof("nodegroup %s has nodes %v", machineSet.Name, nodes)
 
 	return nodes, nil
 }
@@ -422,6 +422,6 @@ func (c *machineController) nodeGroupForNode(node *apiv1.Node) (cloudprovider.No
 		return nil, nil
 	}
 
-	glog.V(4).Infof("node %q is in nodegroup %q", node.Name, machineSet.Name)
+	klog.V(4).Infof("node %q is in nodegroup %q", node.Name, machineSet.Name)
 	return nodegroup, nil
 }
