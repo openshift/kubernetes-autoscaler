@@ -111,6 +111,7 @@ func newProvider(
 	}, nil
 }
 
+// BuildOpenShiftMachineAPI builds CloudProvider implementation for machine api.
 func BuildOpenShiftMachineAPI(opts config.AutoscalingOptions, do cloudprovider.NodeGroupDiscoveryOptions, rl *cloudprovider.ResourceLimiter) cloudprovider.CloudProvider {
 	var err error
 	var externalConfig *rest.Config
