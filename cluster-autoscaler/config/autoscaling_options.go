@@ -139,4 +139,6 @@ type AutoscalingOptions struct {
 	FilterOutSchedulablePodsUsesPacking bool
 	// IgnoredTaints is a list of taints to ignore when considering a node template for scheduling.
 	IgnoredTaints []string
+	// Path to kube configuration if available
+	KubeConfigPath string
 }
