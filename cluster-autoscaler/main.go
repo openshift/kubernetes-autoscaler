@@ -239,6 +239,7 @@ func createAutoscalingOptions() config.AutoscalingOptions {
 		IgnoredTaints:                       *ignoreTaintsFlag,
 		NodeDeletionDelayTimeout:            *nodeDeletionDelayTimeout,
 		AWSUseStaticInstanceList:            *awsUseStaticInstanceList,
+		KubeConfigPath:                      *kubeConfigFile,
 	}
 }
 
