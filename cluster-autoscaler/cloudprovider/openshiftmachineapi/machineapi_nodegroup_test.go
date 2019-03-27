@@ -601,11 +601,13 @@ func TestNodeGroupDeleteNodes(t *testing.T) {
 			t.Fatalf("expected len=%v, got len=%v", len(testObjs.nodes), len(nodeNames))
 		}
 
-		sort.Strings(nodeNames)
+		sort.SliceStable(nodeNames, func(i, j int) bool {
+			return nodeNames[i].Id < nodeNames[j].Id
+		})
 
 		for i := 0; i < len(nodeNames); i++ {
-			if nodeNames[i] != testObjs.nodes[i].Spec.ProviderID {
-				t.Fatalf("expected %q, got %q", testObjs.nodes[i].Spec.ProviderID, nodeNames[i])
+			if nodeNames[i].Id != testObjs.nodes[i].Spec.ProviderID {
+				t.Fatalf("expected %q, got %q", testObjs.nodes[i].Spec.ProviderID, nodeNames[i].Id)
 			}
 		}
 
