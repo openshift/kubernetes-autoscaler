@@ -225,6 +225,7 @@ func createAutoscalingOptions() config.AutoscalingOptions {
 		Regional:                            *regional,
 		NewPodScaleUpDelay:                  *newPodScaleUpDelay,
 		FilterOutSchedulablePodsUsesPacking: *filterOutSchedulablePodsUsesPacking,
+		KubeConfigPath:                      *kubeConfigFile,
 	}
 }
 
