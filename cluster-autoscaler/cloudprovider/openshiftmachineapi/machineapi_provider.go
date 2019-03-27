@@ -17,10 +17,8 @@ limitations under the License.
 package openshiftmachineapi
 
 import (
-	"fmt"
 	"os"
 
-	"github.com/golang/glog"
 	clusterclientset "github.com/openshift/cluster-api/pkg/client/clientset_generated/clientset"
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -30,6 +28,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/klog"
 )
 
 const (
@@ -56,11 +55,11 @@ func (p *provider) GetResourceLimiter() (*cloudprovider.ResourceLimiter, error) 
 func (p *provider) NodeGroups() []cloudprovider.NodeGroup {
 	nodegroups, err := p.controller.nodeGroups()
 	if err != nil {
-		glog.Errorf("error getting node groups: %v", err)
+		klog.Errorf("error getting node groups: %v", err)
 		return nil
 	}
 	for _, ng := range nodegroups {
-		glog.V(4).Infof("discovered node group: %s", ng.Debug())
+		klog.V(4).Infof("discovered node group: %s", ng.Debug())
 	}
 	return nodegroups
 }
@@ -95,6 +94,11 @@ func (p *provider) Refresh() error {
 	return nil
 }
 
+// GetInstanceID gets the instance ID for the specified node.
+func (p *provider) GetInstanceID(node *apiv1.Node) string {
+	return node.Spec.ProviderID
+}
+
 func newProvider(
 	name string,
 	rl *cloudprovider.ResourceLimiter,
@@ -107,37 +111,37 @@ func newProvider(
 	}, nil
 }
 
-func BuildCloudProvider(name string, opts config.AutoscalingOptions, rl *cloudprovider.ResourceLimiter) (cloudprovider.CloudProvider, error) {
+func BuildOpenShiftMachineAPI(opts config.AutoscalingOptions, do cloudprovider.NodeGroupDiscoveryOptions, rl *cloudprovider.ResourceLimiter) cloudprovider.CloudProvider {
 	var err error
 	var externalConfig *rest.Config
 
 	externalConfig, err = rest.InClusterConfig()
 	if err != nil && err != rest.ErrNotInCluster {
-		return nil, err
+		klog.Fatal(err)
 	}
 
 	if opts.KubeConfigPath != "" {
 		externalConfig, err = clientcmd.BuildConfigFromFlags("", opts.KubeConfigPath)
 		if err != nil {
-			return nil, err
+			klog.Fatalf("cannot build config: %v", err)
 		}
 	}
 
 	kubeclient, err := kubernetes.NewForConfig(externalConfig)
 	if err != nil {
-		return nil, fmt.Errorf("create kube clientset failed: %v", err)
+		klog.Fatalf("create kube clientset failed: %v", err)
 	}
 
 	clusterclient, err := clusterclientset.NewForConfig(externalConfig)
 	if err != nil {
-		return nil, fmt.Errorf("create cluster clientset failed: %v", err)
+		klog.Fatalf("create cluster clientset failed: %v", err)
 	}
 
 	enableMachineDeployments := os.Getenv("OPENSHIFT_MACHINE_API_CLOUDPROVIDER_ENABLE_MACHINE_DEPLOYMENTS") != ""
 	controller, err := newMachineController(kubeclient, clusterclient, enableMachineDeployments)
 
 	if err != nil {
-		return nil, err
+		klog.Fatal(err)
 	}
 
 	// Ideally this would be passed in but the builder is not
@@ -145,8 +149,13 @@ func BuildCloudProvider(name string, opts config.AutoscalingOptions, rl *cloudpr
 	stopCh := make(chan struct{})
 
 	if err := controller.run(stopCh); err != nil {
-		return nil, err
+		klog.Fatal(err)
 	}
 
-	return newProvider(name, rl, controller)
+	provider, err := newProvider(ProviderName, rl, controller)
+	if err != nil {
+		klog.Fatal(err)
+	}
+
+	return provider
 }
