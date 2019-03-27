@@ -162,8 +162,20 @@ func (ng *nodegroup) Debug() string {
 }
 
 // Nodes returns a list of all nodes that belong to this node group.
-func (ng *nodegroup) Nodes() ([]string, error) {
-	return ng.scalableResource.Nodes()
+func (ng *nodegroup) Nodes() ([]cloudprovider.Instance, error) {
+	nodes, err := ng.scalableResource.Nodes()
+	if err != nil {
+		return nil, err
+	}
+
+	instances := make([]cloudprovider.Instance, len(nodes))
+	for i := range nodes {
+		instances[i] = cloudprovider.Instance{
+			Id: nodes[i],
+		}
+	}
+
+	return instances, nil
 }
 
 // TemplateNodeInfo returns a schedulercache.NodeInfo structure of an
