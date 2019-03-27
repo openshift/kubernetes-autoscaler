@@ -237,6 +237,7 @@ func createAutoscalingOptions() config.AutoscalingOptions {
 		FilterOutSchedulablePodsUsesPacking: *filterOutSchedulablePodsUsesPacking,
 		IgnoredTaints:                       *ignoreTaintsFlag,
 		NodeDeletionDelayTimeout:            *nodeDeletionDelayTimeout,
+		KubeConfigPath:                      *kubeConfigFile,
 	}
 }
 
