@@ -1,4 +1,4 @@
-// +build !gce,!aws,!azure,!kubemark,!alicloud,!magnum,!digitalocean
+// +build !gce,!aws,!azure,!kubemark,!alicloud,!magnum,!digitalocean,!openshiftmachineapi
 
 /*
 Copyright 2018 The Kubernetes Authors.
@@ -28,6 +28,7 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/magnum"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/packet"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/openshiftmachineapi"
 	"k8s.io/autoscaler/cluster-autoscaler/config"
 )
 
@@ -40,6 +41,7 @@ var AvailableCloudProviders = []string{
 	cloudprovider.BaiducloudProviderName,
 	cloudprovider.MagnumProviderName,
 	cloudprovider.DigitalOceanProviderName,
+	openshiftmachineapi.ProviderName,
 }
 
 // DefaultCloudProvider is GCE.
@@ -63,6 +65,8 @@ func buildCloudProvider(opts config.AutoscalingOptions, do cloudprovider.NodeGro
 		return magnum.BuildMagnum(opts, do, rl)
 	case packet.ProviderName:
 		return packet.BuildPacket(opts, do, rl)
+	case openshiftmachineapi.ProviderName:
+		return openshiftmachineapi.BuildOpenShiftMachineAPI(opts, do, rl)
 	}
 	return nil
 }
