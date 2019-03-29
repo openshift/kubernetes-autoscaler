@@ -420,47 +420,30 @@ func TestControllerFindMachineByNodeProviderID(t *testing.T) {
 }
 
 func TestControllerFindNodeByNodeName(t *testing.T) {
-	testNode := &apiv1.Node{
-		ObjectMeta: v1.ObjectMeta{
-			Name: "ip-10-0-18-236.us-east-2.compute.internal",
-		},
-	}
-
-	controller, stop := mustCreateTestController(t, testControllerConfig{
-		nodeObjects: []runtime.Object{
-			testNode,
-		},
+	testObjs := newMachineSetTestObjs(t.Name(), 0, 1, 1, map[string]string{
+		nodeGroupMinSizeAnnotationKey: "1",
+		nodeGroupMaxSizeAnnotationKey: "10",
 	})
+
+	controller, stop := testObjs.newMachineController(t)
 	defer stop()
 
-	// Verify inserted node can be found
-	node, err := controller.findNodeByNodeName("ip-10-0-18-236.us-east-2.compute.internal")
+	// Test #1: Verify known node can be found
+	node, err := controller.findNodeByNodeName(testObjs.nodes[0].Name)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-
 	if node == nil {
-		t.Fatal("expected a node")
+		t.Fatal("expected lookup to be successful")
 	}
 
-	// Verify node is identical to that added to the store
-	if !reflect.DeepEqual(*node, *testNode) {
-		t.Fatalf("expected %+v, got %+v", testNode, node)
-	}
-
-	// Verify that a successful findNodeByNodeName returns a DeepCopy().
-	if node == testNode {
-		t.Fatalf("expected a DeepCopy to be returned from findMachine()")
-	}
-
-	// Verify non-existent node doesn't error but is not found
-	node, err = controller.findNodeByNodeName("does-not-exist")
+	// Test #2: Verify non-existent node cannot be found
+	node, err = controller.findNodeByNodeName(testObjs.nodes[0].Name + "non-existent")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-
 	if node != nil {
-		t.Fatalf("didn't expect to find a node")
+		t.Fatal("expected lookup to fail")
 	}
 }
 
