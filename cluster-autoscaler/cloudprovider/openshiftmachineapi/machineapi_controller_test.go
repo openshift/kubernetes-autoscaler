@@ -325,84 +325,48 @@ func TestControllerFindMachineByID(t *testing.T) {
 }
 
 func TestControllerFindMachineOwner(t *testing.T) {
-	testMachineWithNoOwner := &v1beta1.Machine{
-		TypeMeta: v1.TypeMeta{
-			Kind: "Machine",
-		},
-		ObjectMeta: v1.ObjectMeta{
-			Name:      "testMachineWithNoOwner",
-			Namespace: "test-namespace",
-		},
-	}
-
-	testMachineWithOwner := &v1beta1.Machine{
-		TypeMeta: v1.TypeMeta{
-			Kind: "Machine",
-		},
-		ObjectMeta: v1.ObjectMeta{
-			Name:      "testMachineWithOwner",
-			Namespace: "test-namespace",
-			OwnerReferences: []v1.OwnerReference{{
-				Kind: "MachineSet",
-				UID:  uuid1,
-				Name: "testMachineSet",
-			}},
-		},
-	}
-
-	controller, stop := mustCreateTestController(t, testControllerConfig{
-		machineObjects: []runtime.Object{
-			testMachineWithOwner,
-			testMachineWithNoOwner,
-		},
+	testObjs := newMachineSetTestObjs(t.Name(), 0, 1, 1, map[string]string{
+		nodeGroupMinSizeAnnotationKey: "1",
+		nodeGroupMaxSizeAnnotationKey: "10",
 	})
+
+	controller, stop := testObjs.newMachineController(t)
 	defer stop()
 
-	// Verify machine has no owner.
-	foundMachineSet, err := controller.findMachineOwner(testMachineWithNoOwner)
+	// Test #1: Lookup succeeds
+	testResult1, err := controller.findMachineOwner(testObjs.machines[0].DeepCopy())
 	if err != nil {
 		t.Fatalf("unexpected error, got %v", err)
 	}
-	if foundMachineSet != nil {
-		t.Fatalf("expected no owner, got %v", foundMachineSet)
+	if testResult1 == nil {
+		t.Fatal("expected non-nil result")
+	}
+	expected := fmt.Sprintf("%s%d", testObjs.spec.machineSetPrefix, 0)
+	if expected != testResult1.Name {
+		t.Errorf("expected %q, got %q", expected, testResult1.Name)
 	}
 
-	// Verify machine still has no owner as we don't have a
-	// corresponding foundMachineSet in the store, even though the
-	// OwnerReference is valid.
-	foundMachineSet, err = controller.findMachineOwner(testMachineWithOwner)
+	// Test #2: Lookup fails as the machine UUID != machineset UUID
+	testMachine2 := testObjs.machines[0].DeepCopy()
+	testMachine2.OwnerReferences[0].UID = "does-not-match-machineset"
+	testResult2, err := controller.findMachineOwner(testMachine2)
 	if err != nil {
 		t.Fatalf("unexpected error, got %v", err)
 	}
-	if foundMachineSet != nil {
-		t.Fatalf("expected no owner, got %v", foundMachineSet)
+	if testResult2 != nil {
+		t.Fatal("expected nil result")
 	}
 
-	testMachineSet := &v1beta1.MachineSet{
-		TypeMeta: v1.TypeMeta{
-			Kind: "MachineSet",
-		},
-		ObjectMeta: v1.ObjectMeta{
-			Name:      "testMachineSet",
-			Namespace: "test-namespace",
-			UID:       uuid1,
-		},
+	// Test #3: Delete the MachineSet and lookup should fail
+	if err := controller.machineSetInformer.Informer().GetStore().Delete(testResult1); err != nil {
+		t.Fatalf("unexpected error, got %v", err)
 	}
-
-	controller.machineSetInformer.Informer().GetStore().Add(testMachineSet)
-
-	// Verify machine now has an owner
-	foundMachineSet, err = controller.findMachineOwner(testMachineWithOwner)
+	testResult3, err := controller.findMachineOwner(testObjs.machines[0].DeepCopy())
 	if err != nil {
 		t.Fatalf("unexpected error, got %v", err)
 	}
-	if foundMachineSet == nil {
-		t.Fatal("expected an owner")
-	}
-
-	// Verify that a successful result returns a DeepCopy().
-	if foundMachineSet == testMachineSet {
-		t.Fatalf("expected a copy")
+	if testResult3 != nil {
+		t.Fatal("expected lookup to fail")
 	}
 }
 
