@@ -533,49 +533,19 @@ func TestControllerMachinesInMachineSet(t *testing.T) {
 	}
 }
 
-func TestControllerLookupNodeGroupForNodeThatDoesNotExist(t *testing.T) {
-	machine := &v1beta1.Machine{
-		TypeMeta: v1.TypeMeta{
-			Kind: "Machine",
-		},
-		ObjectMeta: v1.ObjectMeta{
-			Name:      "machine",
-			Namespace: "test-namespace",
-			OwnerReferences: []v1.OwnerReference{{
-				Kind: "MachineSet",
-				UID:  uuid1,
-				Name: "testMachineSet",
-			}},
-		},
-	}
-
-	machineSet := &v1beta1.MachineSet{
-		TypeMeta: v1.TypeMeta{
-			Kind: "MachineSet",
-		},
-		ObjectMeta: v1.ObjectMeta{
-			Name:      "machineset",
-			Namespace: "test-namespace",
-			UID:       uuid1,
-		},
-	}
-
-	controller, stop := mustCreateTestController(t, testControllerConfig{
-		machineObjects: []runtime.Object{
-			machine,
-			machineSet,
-		},
+func TestControllerLookupNodeGroupForNonExistentNode(t *testing.T) {
+	testObjs := newMachineSetTestObjs(t.Name(), 0, 1, 1, map[string]string{
+		nodeGroupMinSizeAnnotationKey: "1",
+		nodeGroupMaxSizeAnnotationKey: "10",
 	})
+
+	controller, stop := testObjs.newMachineController(t)
 	defer stop()
 
-	ng, err := controller.nodeGroupForNode(&apiv1.Node{
-		TypeMeta: v1.TypeMeta{
-			Kind: "Node",
-		},
-		ObjectMeta: v1.ObjectMeta{
-			Name: "node",
-		},
-	})
+	node := testObjs.nodes[0].DeepCopy()
+	node.Spec.ProviderID = "does-not-exist"
+
+	ng, err := controller.nodeGroupForNode(node)
 
 	// Looking up a node that doesn't exist doesn't generate an
 	// error. But, equally, the ng should actually be nil.
@@ -589,28 +559,74 @@ func TestControllerLookupNodeGroupForNodeThatDoesNotExist(t *testing.T) {
 }
 
 func TestControllerNodeGroupForNodeWithMissingMachineOwner(t *testing.T) {
-	testObjs := newMachineSetTestObjs(t.Name(), 0, 1, 1, map[string]string{
-		nodeGroupMinSizeAnnotationKey: "1",
-		nodeGroupMaxSizeAnnotationKey: "10",
+	test := func(t *testing.T, testObjs *clusterTestConfig) {
+		controller, stop := testObjs.newMachineController(t)
+		defer stop()
+
+		machine := testObjs.machines[0].DeepCopy()
+		machine.OwnerReferences = []v1.OwnerReference{}
+		if err := controller.machineInformer.Informer().GetStore().Update(machine); err != nil {
+			t.Fatalf("unexpected error updating machine, got %v", err)
+		}
+
+		ng, err := controller.nodeGroupForNode(testObjs.nodes[0])
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if ng != nil {
+			t.Fatalf("unexpected nodegroup: %v", ng)
+		}
+	}
+
+	t.Run("MachineSet", func(t *testing.T) {
+		testObjs := newMachineSetTestObjs(t.Name(), 0, 1, 1, map[string]string{
+			nodeGroupMinSizeAnnotationKey: "1",
+			nodeGroupMaxSizeAnnotationKey: "10",
+		})
+		test(t, testObjs)
 	})
 
-	controller, stop := testObjs.newMachineController(t)
-	defer stop()
+	t.Run("MachineDeployment", func(t *testing.T) {
+		testObjs := newMachineDeploymentTestObjs(t.Name(), 0, 1, 1, map[string]string{
+			nodeGroupMinSizeAnnotationKey: "1",
+			nodeGroupMaxSizeAnnotationKey: "10",
+		})
+		test(t, testObjs)
+	})
+}
 
-	machine := testObjs.machines[0].DeepCopy()
-	machine.OwnerReferences = []v1.OwnerReference{}
-	if err := controller.machineInformer.Informer().GetStore().Update(machine); err != nil {
-		t.Fatalf("unexpected error updating machine, got %v", err)
+func TestControllerNodeGroupForNodeWithPositiveScalingBounds(t *testing.T) {
+	test := func(t *testing.T, testObjs *clusterTestConfig) {
+		controller, stop := testObjs.newMachineController(t)
+		defer stop()
+
+		ng, err := controller.nodeGroupForNode(testObjs.nodes[0])
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		// We don't scale from 0 so nodes must belong to a
+		// nodegroup that has a scale size of at least 1.
+		if ng != nil {
+			t.Fatalf("unexpected nodegroup: %v", ng)
+		}
 	}
 
-	ng, err := controller.nodeGroupForNode(testObjs.nodes[0])
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	t.Run("MachineSet", func(t *testing.T) {
+		testObjs := newMachineSetTestObjs(t.Name(), 0, 1, 1, map[string]string{
+			nodeGroupMinSizeAnnotationKey: "1",
+			nodeGroupMaxSizeAnnotationKey: "1",
+		})
+		test(t, testObjs)
+	})
 
-	if ng != nil {
-		t.Fatalf("unexpected nodegroup: %v", ng)
-	}
+	t.Run("MachineDeployment", func(t *testing.T) {
+		testObjs := newMachineDeploymentTestObjs(t.Name(), 0, 1, 1, map[string]string{
+			nodeGroupMinSizeAnnotationKey: "1",
+			nodeGroupMaxSizeAnnotationKey: "1",
+		})
+		test(t, testObjs)
+	})
 }
 
 func TestControllerNodeGroups(t *testing.T) {
