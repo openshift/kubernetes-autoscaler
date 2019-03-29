@@ -589,65 +589,21 @@ func TestControllerLookupNodeGroupForNodeThatDoesNotExist(t *testing.T) {
 }
 
 func TestControllerNodeGroupForNodeWithMissingMachineOwner(t *testing.T) {
-	node := &apiv1.Node{
-		TypeMeta: v1.TypeMeta{
-			Kind: "Node",
-		},
-		ObjectMeta: v1.ObjectMeta{
-			Name: "node",
-			Annotations: map[string]string{
-				machineAnnotationKey: "test-namespace/machine",
-			},
-		},
-		Spec: apiv1.NodeSpec{
-			ProviderID: "provider-id",
-		},
-	}
-
-	machine := &v1beta1.Machine{
-		TypeMeta: v1.TypeMeta{
-			Kind: "Machine",
-		},
-		ObjectMeta: v1.ObjectMeta{
-			Name:      "machine",
-			Namespace: "test-namespace",
-		},
-	}
-
-	machineSet := &v1beta1.MachineSet{
-		TypeMeta: v1.TypeMeta{
-			Kind: "MachineSet",
-		},
-		ObjectMeta: v1.ObjectMeta{
-			Name:      "machineset",
-			Namespace: "test-namespace",
-			UID:       uuid1,
-		},
-	}
-
-	controller, stop := mustCreateTestController(t, testControllerConfig{
-		nodeObjects: []runtime.Object{
-			node,
-		},
-		machineObjects: []runtime.Object{
-			machine,
-			machineSet,
-		},
+	testObjs := newMachineSetTestObjs(t.Name(), 0, 1, 1, map[string]string{
+		nodeGroupMinSizeAnnotationKey: "1",
+		nodeGroupMaxSizeAnnotationKey: "10",
 	})
+
+	controller, stop := testObjs.newMachineController(t)
 	defer stop()
 
-	ng, err := controller.nodeGroupForNode(&apiv1.Node{
-		TypeMeta: v1.TypeMeta{
-			Kind: "Node",
-		},
-		ObjectMeta: v1.ObjectMeta{
-			Name: "node",
-		},
-		Spec: apiv1.NodeSpec{
-			ProviderID: "provider-id",
-		},
-	})
+	machine := testObjs.machines[0].DeepCopy()
+	machine.OwnerReferences = []v1.OwnerReference{}
+	if err := controller.machineInformer.Informer().GetStore().Update(machine); err != nil {
+		t.Fatalf("unexpected error updating machine, got %v", err)
+	}
 
+	ng, err := controller.nodeGroupForNode(testObjs.nodes[0])
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
