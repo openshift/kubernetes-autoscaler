@@ -28,6 +28,7 @@ import (
 	fakeclusterapi "github.com/openshift/cluster-api/pkg/client/clientset_generated/clientset/fake"
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	fakekube "k8s.io/client-go/kubernetes/fake"
@@ -448,82 +449,87 @@ func TestControllerFindNodeByNodeName(t *testing.T) {
 }
 
 func TestControllerMachinesInMachineSet(t *testing.T) {
-	testMachineSet1 := &v1beta1.MachineSet{
-		TypeMeta: v1.TypeMeta{
-			Kind: "MachineSet",
-		},
-		ObjectMeta: v1.ObjectMeta{
-			Name:      "testMachineSet1",
-			Namespace: "test-namespace",
-			UID:       uuid1,
-		},
-	}
-
-	testMachineSet2 := &v1beta1.MachineSet{
-		TypeMeta: v1.TypeMeta{
-			Kind: "MachineSet",
-		},
-		ObjectMeta: v1.ObjectMeta{
-			Name:      "testMachineSet2",
-			Namespace: "test-namespace",
-			UID:       "a-value-that-is-not-uuid1-or-uuid2",
-		},
-	}
-
-	objects := []runtime.Object{
-		testMachineSet1,
-		testMachineSet2,
-	}
-
-	testMachines := make([]*v1beta1.Machine, 10)
-
-	for i := 0; i < 10; i++ {
-		testMachines[i] = &v1beta1.Machine{
-			TypeMeta: v1.TypeMeta{
-				Kind: "Machine",
-			},
-			ObjectMeta: v1.ObjectMeta{
-				Name:      fmt.Sprintf("machine-%d", i),
-				Namespace: "test-namespace",
-			},
-		}
-		// Only even numbered machines belong to testMachineSet1
-		if i%2 == 0 {
-			testMachines[i].OwnerReferences = []v1.OwnerReference{{
-				Kind: "MachineSet",
-				UID:  uuid1,
-				Name: "testMachineSet1",
-			}}
-		}
-		objects = append(objects, testMachines[i])
-	}
-
-	controller, stop := mustCreateTestController(t, testControllerConfig{
-		machineObjects: objects,
+	testObjs1 := newMachineSetTestObjs("testObjs1", 0, 5, 5, map[string]string{
+		nodeGroupMinSizeAnnotationKey: "1",
+		nodeGroupMaxSizeAnnotationKey: "10",
 	})
+
+	controller, stop := testObjs1.newMachineController(t)
 	defer stop()
 
-	foundMachines, err := controller.machinesInMachineSet(testMachineSet1)
-	if err != nil {
-		t.Fatalf("unexpected error, got %v", err)
+	// Construct a second set of objects and add the machines,
+	// nodes and the additional machineset to the existing set of
+	// test objects in the controller. This gives us two
+	// machinesets, each with their own machines and linked nodes.
+	testObjs2 := newMachineSetTestObjs("testObjs2", 1, 5, 5, map[string]string{
+		nodeGroupMinSizeAnnotationKey: "1",
+		nodeGroupMaxSizeAnnotationKey: "10",
+	})
+
+	for _, node := range testObjs2.nodes {
+		if err := controller.nodeInformer.GetStore().Add(node); err != nil {
+			t.Fatalf("error adding node, got %v", err)
+		}
 	}
-	if len(foundMachines) != 5 {
-		t.Fatalf("expected 5 machines, got %v", len(foundMachines))
+
+	for _, machine := range testObjs2.machines {
+		if err := controller.machineInformer.Informer().GetStore().Add(machine); err != nil {
+			t.Fatalf("error adding machine, got %v", err)
+		}
+	}
+
+	if err := controller.machineSetInformer.Informer().GetStore().Add(testObjs2.machineSet); err != nil {
+		t.Fatalf("error adding machineset, got %v", err)
+	}
+
+	machinesInTestObjs1, err := controller.machineInformer.Lister().Machines(testObjs1.spec.namespace).List(labels.Everything())
+	if err != nil {
+		t.Fatalf("error listing machines: %v", err)
+	}
+
+	machinesInTestObjs2, err := controller.machineInformer.Lister().Machines(testObjs2.spec.namespace).List(labels.Everything())
+	if err != nil {
+		t.Fatalf("error listing machines: %v", err)
+	}
+
+	actual := len(machinesInTestObjs1) + len(machinesInTestObjs2)
+	expected := len(testObjs1.machines) + len(testObjs2.machines)
+	if actual != expected {
+		t.Fatalf("expected %d machines, got %d", expected, actual)
 	}
 
 	// Sort results as order is not guaranteed.
-	sort.Slice(foundMachines, func(i, j int) bool {
-		return foundMachines[i].Name < foundMachines[j].Name
+	sort.Slice(machinesInTestObjs1, func(i, j int) bool {
+		return machinesInTestObjs1[i].Name < machinesInTestObjs1[j].Name
+	})
+	sort.Slice(machinesInTestObjs2, func(i, j int) bool {
+		return machinesInTestObjs2[i].Name < machinesInTestObjs2[j].Name
 	})
 
-	for i := 0; i < len(foundMachines); i++ {
-		if !reflect.DeepEqual(*testMachines[2*i], *foundMachines[i]) {
-			t.Errorf("expected %s, got %s", testMachines[2*i].Name, foundMachines[i].Name)
+	for i, m := range machinesInTestObjs1 {
+		if m.Name != testObjs1.machines[i].Name {
+			t.Errorf("expected %q, got %q", testObjs1.machines[i].Name, m.Name)
 		}
-		// Verify that a successful result is a copy
-		if testMachines[2*i] == foundMachines[i] {
-			t.Errorf("expected a copy")
+		if m.Namespace != testObjs1.machines[i].Namespace {
+			t.Errorf("expected %q, got %q", testObjs1.machines[i].Namespace, m.Namespace)
 		}
+	}
+
+	for i, m := range machinesInTestObjs2 {
+		if m.Name != testObjs2.machines[i].Name {
+			t.Errorf("expected %q, got %q", testObjs2.machines[i].Name, m.Name)
+		}
+		if m.Namespace != testObjs2.machines[i].Namespace {
+			t.Errorf("expected %q, got %q", testObjs2.machines[i].Namespace, m.Namespace)
+		}
+	}
+
+	// Finally everything in the respective objects should be equal.
+	if !reflect.DeepEqual(testObjs1.machines, machinesInTestObjs1) {
+		t.Fatalf("expected %+v, got %+v", testObjs1.machines, machinesInTestObjs1)
+	}
+	if !reflect.DeepEqual(testObjs2.machines, machinesInTestObjs2) {
+		t.Fatalf("expected %+v, got %+v", testObjs2.machines, machinesInTestObjs2)
 	}
 }
 
