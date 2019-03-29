@@ -371,67 +371,51 @@ func TestControllerFindMachineOwner(t *testing.T) {
 }
 
 func TestControllerFindMachineByNodeProviderID(t *testing.T) {
-	testNode := &apiv1.Node{
-		TypeMeta: v1.TypeMeta{
-			Kind: "Node",
-		},
-		ObjectMeta: v1.ObjectMeta{
-			Name: "ip-10-0-18-236.us-east-2.compute.internal",
-		},
-	}
-
-	testMachine := &v1beta1.Machine{
-		TypeMeta: v1.TypeMeta{
-			Kind: "Machine",
-		},
-		ObjectMeta: v1.ObjectMeta{
-			Name: "worker-us-east-2c-p4zwl",
-		},
-	}
-
-	controller, stop := mustCreateTestController(t, testControllerConfig{
-		nodeObjects: []runtime.Object{
-			testNode,
-		},
-		machineObjects: []runtime.Object{
-			testMachine,
-		},
+	testObjs := newMachineSetTestObjs(t.Name(), 0, 1, 1, map[string]string{
+		nodeGroupMinSizeAnnotationKey: "1",
+		nodeGroupMaxSizeAnnotationKey: "10",
 	})
+
+	controller, stop := testObjs.newMachineController(t)
 	defer stop()
 
-	// Verify machine cannot be found as testNode has no
-	// ProviderID and will not be indexed by the controller.
-	foundMachine, err := controller.findMachineByNodeProviderID(testNode)
+	// Test #1: Verify node can be found because it has a
+	// ProviderID value and a machine annotation.
+	machine, err := controller.findMachineByNodeProviderID(testObjs.nodes[0])
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if foundMachine != nil {
-		t.Fatalf("expected nil, got %v", foundMachine)
-	}
-
-	// Update node with machine linkage.
-	testNode.Spec.ProviderID = "aws:///us-east-2b/i-03759ec2e4e053f99"
-	testNode.Annotations = map[string]string{
-		"machine.openshift.io/machine": path.Join(testMachine.Namespace, testMachine.Name),
-	}
-
-	controller.nodeInformer.GetStore().Update(testNode)
-
-	// Verify the machine can now be found from the information in the node
-	foundMachine, err = controller.findMachineByNodeProviderID(testNode)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if foundMachine == nil {
+	if machine == nil {
 		t.Fatal("expected to find machine")
 	}
-
-	if !reflect.DeepEqual(*foundMachine, *testMachine) {
-		t.Fatalf("expected %+v, got %+v", *testMachine, *foundMachine)
+	if !reflect.DeepEqual(machine, testObjs.machines[0]) {
+		t.Fatalf("expected machines to be equal - expected %+v, got %+v", testObjs.machines[0], machine)
 	}
 
-	if foundMachine == testMachine {
-		t.Fatalf("expected a copy")
+	// Test #2: Verify node is not found if it has a non-existent ProviderID
+	node := testObjs.nodes[0].DeepCopy()
+	node.Spec.ProviderID = ""
+	nonExistentMachine, err := controller.findMachineByNodeProviderID(node)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if nonExistentMachine != nil {
+		t.Fatal("expected find to fail")
+	}
+
+	// Test #3: Verify node is not found if the stored object has
+	// no "machine" annotation
+	node = testObjs.nodes[0].DeepCopy()
+	delete(node.Annotations, machineAnnotationKey)
+	if err := controller.nodeInformer.GetStore().Update(node); err != nil {
+		t.Fatalf("unexpected error updating node, got %v", err)
+	}
+	nonExistentMachine, err = controller.findMachineByNodeProviderID(testObjs.nodes[0])
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if nonExistentMachine != nil {
+		t.Fatal("expected find to fail")
 	}
 }
 
