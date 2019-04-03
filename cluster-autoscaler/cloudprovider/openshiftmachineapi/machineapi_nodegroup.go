@@ -29,6 +29,7 @@ import (
 
 const (
 	machineDeleteAnnotationKey = "machine.openshift.io/cluster-api-delete-machine"
+	machineAnnotationKey       = "machine.openshift.io/machine"
 )
 
 type nodegroup struct {

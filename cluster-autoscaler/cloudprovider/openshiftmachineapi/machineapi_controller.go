@@ -166,7 +166,7 @@ func (c *machineController) findMachineByNodeProviderID(node *apiv1.Node) (*v1be
 		return nil, fmt.Errorf("internal error; unexpected type %T", node)
 	}
 
-	if machineName, found := node.Annotations["machine.openshift.io/machine"]; found {
+	if machineName, found := node.Annotations[machineAnnotationKey]; found {
 		return c.findMachine(machineName)
 	}
 
