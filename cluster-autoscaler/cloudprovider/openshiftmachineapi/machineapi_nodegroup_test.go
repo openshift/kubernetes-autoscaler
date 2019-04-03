@@ -29,8 +29,7 @@ import (
 )
 
 const (
-	machineAnnotationKey = "machine.openshift.io/machine"
-	testNamespace        = "test-namespace"
+	testNamespace = "test-namespace"
 )
 
 func TestNodeGroupNewNodeGroupConstructor(t *testing.T) {
