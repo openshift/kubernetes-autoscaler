@@ -141,7 +141,7 @@ func TestNodeGroupNewNodeGroupConstructor(t *testing.T) {
 		}
 
 		expectedID := path.Join(testConfig.spec.namespace, expectedName)
-		expectedDebug := fmt.Sprintf("%s (min: %d, max: %d, replicas: %d)", expectedID, tc.minSize, tc.maxSize, tc.replicas)
+		expectedDebug := fmt.Sprintf(debugFormat, expectedID, tc.minSize, tc.maxSize, tc.replicas)
 
 		if ng.Name() != expectedName {
 			t.Errorf("expected %q, got %q", expectedName, ng.Name())
