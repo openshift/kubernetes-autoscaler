@@ -34,26 +34,55 @@ import (
 	fakekube "k8s.io/client-go/kubernetes/fake"
 )
 
-type testControllerConfig struct {
-	nodeObjects    []runtime.Object
-	machineObjects []runtime.Object
-}
-
 type testControllerShutdownFunc func()
 
-func mustCreateTestController(t *testing.T, config testControllerConfig) (*machineController, testControllerShutdownFunc) {
+type testConfig struct {
+	spec              *testSpec
+	machineDeployment *v1beta1.MachineDeployment
+	machineSet        *v1beta1.MachineSet
+	machines          []*v1beta1.Machine
+	nodes             []*apiv1.Node
+}
+
+type testSpec struct {
+	annotations             map[string]string
+	machineDeploymentName   string
+	machineSetName          string
+	namespace               string
+	nodeCount               int
+	replicaCount            int32
+	rootIsMachineDeployment bool
+}
+
+func mustCreateTestController(t *testing.T, testConfigs ...*testConfig) (*machineController, testControllerShutdownFunc) {
 	t.Helper()
 
-	kubeclientSet := fakekube.NewSimpleClientset(config.nodeObjects...)
-	clusterclientSet := fakeclusterapi.NewSimpleClientset(config.machineObjects...)
+	nodeObjects := make([]runtime.Object, 0)
+	machineObjects := make([]runtime.Object, 0)
 
+	for _, config := range testConfigs {
+		for i := range config.nodes {
+			nodeObjects = append(nodeObjects, config.nodes[i])
+		}
+
+		for i := range config.machines {
+			machineObjects = append(machineObjects, config.machines[i])
+		}
+
+		machineObjects = append(machineObjects, config.machineSet)
+		if config.machineDeployment != nil {
+			machineObjects = append(machineObjects, config.machineDeployment)
+		}
+	}
+
+	kubeclientSet := fakekube.NewSimpleClientset(nodeObjects...)
+	clusterclientSet := fakeclusterapi.NewSimpleClientset(machineObjects...)
 	controller, err := newMachineController(kubeclientSet, clusterclientSet, true)
 	if err != nil {
-		t.Fatalf("failed to create test controller")
+		t.Fatal("failed to create test controller")
 	}
 
 	stopCh := make(chan struct{})
-
 	if err := controller.run(stopCh); err != nil {
 		t.Fatalf("failed to run controller: %v", err)
 	}
@@ -63,161 +92,102 @@ func mustCreateTestController(t *testing.T, config testControllerConfig) (*machi
 	}
 }
 
-type clusterTestConfig struct {
-	spec              *clusterTestSpec
-	machineDeployment *v1beta1.MachineDeployment
-	machineSet        *v1beta1.MachineSet
-	machines          []*v1beta1.Machine
-	nodes             []*apiv1.Node
+func mustCreateMachineSetTestConfig(namespace string, nodeCount int, replicaCount int32, annotations map[string]string) *testConfig {
+	return mustCreateTestConfigs(mustCreateTestSpecs(namespace, 1, nodeCount, replicaCount, false, annotations)...)[0]
 }
 
-type clusterTestSpec struct {
-	annotations             map[string]string
-	id                      int
-	machineDeploymentPrefix string
-	machineSetPrefix        string
-	namespace               string
-	nodeCount               int
-	replicaCount            int32
-	rootIsMachineDeployment bool
+func mustCreateMachineSetTestConfigs(namespace string, configCount, nodeCount int, replicaCount int32, annotations map[string]string) []*testConfig {
+	return mustCreateTestConfigs(mustCreateTestSpecs(namespace, configCount, nodeCount, replicaCount, false, annotations)...)
 }
 
-func (config clusterTestConfig) newNodeGroup(t *testing.T, c *machineController) (*nodegroup, error) {
-	if config.machineDeployment != nil {
-		return newNodegroupFromMachineDeployment(c, config.machineDeployment)
-	}
-	return newNodegroupFromMachineSet(c, config.machineSet)
+func mustCreateMachineDeploymentTestConfig(namespace string, nodeCount int, replicaCount int32, annotations map[string]string) *testConfig {
+	return mustCreateTestConfigs(mustCreateTestSpecs(namespace, 1, nodeCount, replicaCount, true, annotations)...)[0]
 }
 
-func (config clusterTestConfig) newMachineController(t *testing.T) (*machineController, testControllerShutdownFunc) {
-	nodeObjects := make([]runtime.Object, len(config.nodes))
-	machineObjects := make([]runtime.Object, len(config.machines))
-
-	for i := range config.nodes {
-		nodeObjects[i] = config.nodes[i]
-	}
-
-	for i := range config.machines {
-		machineObjects[i] = config.machines[i]
-	}
-
-	machineObjects = append(machineObjects, config.machineSet)
-	if config.machineDeployment != nil {
-		machineObjects = append(machineObjects, config.machineDeployment)
-	}
-
-	return mustCreateTestController(t, testControllerConfig{
-		nodeObjects:    nodeObjects,
-		machineObjects: machineObjects,
-	})
+func mustCreateMachineDeploymentTestConfigs(namespace string, configCount, nodeCount int, replicaCount int32, annotations map[string]string) []*testConfig {
+	return mustCreateTestConfigs(mustCreateTestSpecs(namespace, configCount, nodeCount, replicaCount, true, annotations)...)
 }
 
-func newMachineSetTestObjs(namespace string, id, nodeCount int, replicaCount int32, annotations map[string]string) *clusterTestConfig {
-	spec := &clusterTestSpec{
-		id:                      id,
-		annotations:             annotations,
-		machineSetPrefix:        fmt.Sprintf("machineset-%s-", namespace),
-		namespace:               namespace,
-		nodeCount:               nodeCount,
-		replicaCount:            replicaCount,
-		rootIsMachineDeployment: false,
+func mustCreateTestSpecs(namespace string, scalableResourceCount, nodeCount int, replicaCount int32, isMachineDeployment bool, annotations map[string]string) []testSpec {
+	var specs []testSpec
+
+	for i := 0; i < scalableResourceCount; i++ {
+		specs = append(specs, testSpec{
+			annotations:             annotations,
+			machineDeploymentName:   fmt.Sprintf("machinedeployment-%d", i),
+			machineSetName:          fmt.Sprintf("machineset-%d", i),
+			namespace:               strings.ToLower(namespace),
+			nodeCount:               nodeCount,
+			replicaCount:            replicaCount,
+			rootIsMachineDeployment: isMachineDeployment,
+		})
 	}
 
-	return makeClusterObjs(spec)
+	return specs
 }
 
-func newMachineDeploymentTestObjs(namespace string, id, nodeCount int, replicaCount int32, annotations map[string]string) *clusterTestConfig {
-	spec := &clusterTestSpec{
-		id:                      id,
-		annotations:             annotations,
-		machineDeploymentPrefix: fmt.Sprintf("machinedeployment-%s-", namespace),
-		machineSetPrefix:        fmt.Sprintf("machineset-%s-", namespace),
-		namespace:               strings.ToLower(namespace),
-		nodeCount:               nodeCount,
-		replicaCount:            replicaCount,
-		rootIsMachineDeployment: true,
-	}
+func mustCreateTestConfigs(specs ...testSpec) []*testConfig {
+	var result []*testConfig
 
-	return makeClusterObjs(spec)
-}
+	for i, spec := range specs {
+		config := &testConfig{
+			spec:     &specs[i],
+			nodes:    make([]*apiv1.Node, spec.nodeCount),
+			machines: make([]*v1beta1.Machine, spec.nodeCount),
+		}
 
-func makeClusterObjs(spec *clusterTestSpec) *clusterTestConfig {
-	objs := clusterTestConfig{
-		spec:     spec,
-		nodes:    make([]*apiv1.Node, spec.nodeCount),
-		machines: make([]*v1beta1.Machine, spec.nodeCount),
-	}
-
-	objs.machineSet = &v1beta1.MachineSet{
-		TypeMeta: v1.TypeMeta{
-			Kind: "MachineSet",
-		},
-		ObjectMeta: v1.ObjectMeta{
-			Name:      fmt.Sprintf("%s%d", spec.machineSetPrefix, spec.id),
-			Namespace: spec.namespace,
-			UID:       types.UID(fmt.Sprintf("%s%d", spec.machineSetPrefix, spec.id)),
-		},
-	}
-
-	if !spec.rootIsMachineDeployment {
-		objs.machineSet.ObjectMeta.Annotations = spec.annotations
-		objs.machineSet.Spec.Replicas = int32ptr(spec.replicaCount)
-	} else {
-		objs.machineDeployment = &v1beta1.MachineDeployment{
+		config.machineSet = &v1beta1.MachineSet{
 			TypeMeta: v1.TypeMeta{
-				Kind: "MachineDeployment",
+				Kind: "MachineSet",
 			},
 			ObjectMeta: v1.ObjectMeta{
-				Name:        fmt.Sprintf("%s%d", spec.machineDeploymentPrefix, spec.id),
-				Namespace:   spec.namespace,
-				UID:         types.UID(fmt.Sprintf("%s%d", spec.machineDeploymentPrefix, spec.id)),
-				Annotations: spec.annotations,
-			},
-			Spec: v1beta1.MachineDeploymentSpec{
-				Replicas: int32ptr(spec.replicaCount),
+				Name:      spec.machineSetName,
+				Namespace: spec.namespace,
+				UID:       types.UID(spec.machineSetName),
 			},
 		}
 
-		objs.machineSet.OwnerReferences = make([]v1.OwnerReference, 1)
-		objs.machineSet.OwnerReferences[0] = v1.OwnerReference{
-			Name: objs.machineDeployment.Name,
-			Kind: objs.machineDeployment.Kind,
-			UID:  objs.machineDeployment.UID,
+		if !spec.rootIsMachineDeployment {
+			config.machineSet.ObjectMeta.Annotations = spec.annotations
+			config.machineSet.Spec.Replicas = int32ptr(spec.replicaCount)
+		} else {
+			config.machineDeployment = &v1beta1.MachineDeployment{
+				TypeMeta: v1.TypeMeta{
+					Kind: "MachineDeployment",
+				},
+				ObjectMeta: v1.ObjectMeta{
+					Name:        spec.machineDeploymentName,
+					Namespace:   spec.namespace,
+					UID:         types.UID(spec.machineDeploymentName),
+					Annotations: spec.annotations,
+				},
+				Spec: v1beta1.MachineDeploymentSpec{
+					Replicas: int32ptr(spec.replicaCount),
+				},
+			}
+
+			config.machineSet.OwnerReferences = make([]v1.OwnerReference, 1)
+			config.machineSet.OwnerReferences[0] = v1.OwnerReference{
+				Name: config.machineDeployment.Name,
+				Kind: config.machineDeployment.Kind,
+				UID:  config.machineDeployment.UID,
+			}
 		}
+
+		machineOwner := v1.OwnerReference{
+			Name: config.machineSet.Name,
+			Kind: config.machineSet.Kind,
+			UID:  config.machineSet.UID,
+		}
+
+		for j := 0; j < spec.nodeCount; j++ {
+			config.nodes[j], config.machines[j] = makeLinkedNodeAndMachine(j, spec.namespace, machineOwner)
+		}
+
+		result = append(result, config)
 	}
 
-	machineOwner := v1.OwnerReference{
-		Name: objs.machineSet.Name,
-		Kind: objs.machineSet.Kind,
-		UID:  objs.machineSet.UID,
-	}
-
-	for i := 0; i < spec.nodeCount; i++ {
-		objs.nodes[i], objs.machines[i] = makeLinkedNodeAndMachine(i, spec.namespace, machineOwner)
-	}
-
-	return &objs
-}
-
-func int32ptr(v int32) *int32 {
-	return &v
-}
-
-func makeMachineSet(i int, replicaCount int, annotations map[string]string) *v1beta1.MachineSet {
-	return &v1beta1.MachineSet{
-		TypeMeta: v1.TypeMeta{
-			Kind: "MachineSet",
-		},
-		ObjectMeta: v1.ObjectMeta{
-			Name:        fmt.Sprintf("machineset-%d", i),
-			Namespace:   "test-namespace",
-			UID:         types.UID(fmt.Sprintf("machineset-%d", i)),
-			Annotations: annotations,
-		},
-		Spec: v1beta1.MachineSetSpec{
-			Replicas: int32ptr(int32(replicaCount)),
-		},
-	}
+	return result
 }
 
 // makeLinkedNodeAndMachine creates a node and machine. The machine
@@ -229,13 +199,13 @@ func makeLinkedNodeAndMachine(i int, namespace string, owner v1.OwnerReference) 
 			Kind: "Node",
 		},
 		ObjectMeta: v1.ObjectMeta{
-			Name: fmt.Sprintf("node-%d", i),
+			Name: fmt.Sprintf("%s-%s-node-%d", namespace, owner.Name, i),
 			Annotations: map[string]string{
-				machineAnnotationKey: fmt.Sprintf("%s/machine-%d", namespace, i),
+				machineAnnotationKey: fmt.Sprintf("%s/%s-%s-machine-%d", namespace, namespace, owner.Name, i),
 			},
 		},
 		Spec: apiv1.NodeSpec{
-			ProviderID: fmt.Sprintf("nodeid-%d", i),
+			ProviderID: fmt.Sprintf("%s-%s-nodeid-%d", namespace, owner.Name, i),
 		},
 	}
 
@@ -244,7 +214,7 @@ func makeLinkedNodeAndMachine(i int, namespace string, owner v1.OwnerReference) 
 			Kind: "Machine",
 		},
 		ObjectMeta: v1.ObjectMeta{
-			Name:      fmt.Sprintf("machine-%d", i),
+			Name:      fmt.Sprintf("%s-%s-machine-%d", namespace, owner.Name, i),
 			Namespace: namespace,
 			OwnerReferences: []v1.OwnerReference{{
 				Name: owner.Name,
@@ -261,6 +231,62 @@ func makeLinkedNodeAndMachine(i int, namespace string, owner v1.OwnerReference) 
 	}
 
 	return node, machine
+}
+
+func int32ptr(v int32) *int32 {
+	return &v
+}
+
+func addTestConfigs(t *testing.T, controller *machineController, testConfigs ...*testConfig) error {
+	t.Helper()
+
+	for _, config := range testConfigs {
+		if config.machineDeployment != nil {
+			if err := controller.machineDeploymentInformer.Informer().GetStore().Add(config.machineDeployment); err != nil {
+				return err
+			}
+		}
+		if err := controller.machineSetInformer.Informer().GetStore().Add(config.machineSet); err != nil {
+			return err
+		}
+		for i := range config.machines {
+			if err := controller.machineInformer.Informer().GetStore().Add(config.machines[i]); err != nil {
+				return err
+			}
+		}
+		for i := range config.nodes {
+			if err := controller.nodeInformer.GetStore().Add(config.nodes[i]); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func deleteTestConfigs(t *testing.T, controller *machineController, testConfigs ...*testConfig) error {
+	t.Helper()
+
+	for _, config := range testConfigs {
+		for i := range config.nodes {
+			if err := controller.nodeInformer.GetStore().Delete(config.nodes[i]); err != nil {
+				return err
+			}
+		}
+		for i := range config.machines {
+			if err := controller.machineInformer.Informer().GetStore().Delete(config.machines[i]); err != nil {
+				return err
+			}
+		}
+		if err := controller.machineSetInformer.Informer().GetStore().Delete(config.machineSet); err != nil {
+			return err
+		}
+		if config.machineDeployment != nil {
+			if err := controller.machineDeploymentInformer.Informer().GetStore().Delete(config.machineDeployment); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func TestControllerFindMachineByID(t *testing.T) {
