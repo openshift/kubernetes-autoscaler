@@ -30,6 +30,7 @@ import (
 const (
 	machineDeleteAnnotationKey = "machine.openshift.io/cluster-api-delete-machine"
 	machineAnnotationKey       = "machine.openshift.io/machine"
+	debugFormat                = "%s (min: %d, max: %d, replicas: %d)"
 )
 
 type nodegroup struct {
@@ -159,7 +160,7 @@ func (ng *nodegroup) Id() string {
 
 // Debug returns a string containing all information regarding this node group.
 func (ng *nodegroup) Debug() string {
-	return fmt.Sprintf("%s (min: %d, max: %d, replicas: %d)", ng.Id(), ng.MinSize(), ng.MaxSize(), ng.scalableResource.Replicas())
+	return fmt.Sprintf(debugFormat, ng.Id(), ng.MinSize(), ng.MaxSize(), ng.scalableResource.Replicas())
 }
 
 // Nodes returns a list of all nodes that belong to this node group.
