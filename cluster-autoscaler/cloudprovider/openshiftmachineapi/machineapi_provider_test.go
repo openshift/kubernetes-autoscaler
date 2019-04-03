@@ -28,7 +28,7 @@ import (
 func TestProviderConstructorProperties(t *testing.T) {
 	resourceLimits := cloudprovider.ResourceLimiter{}
 
-	controller, stop := mustCreateTestController(t, testControllerConfig{})
+	controller, stop := mustCreateTestController(t)
 	defer stop()
 
 	provider, err := newProvider(ProviderName, &resourceLimits, controller)
