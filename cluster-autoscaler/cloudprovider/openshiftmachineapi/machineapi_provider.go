@@ -18,6 +18,7 @@ package openshiftmachineapi
 
 import (
 	"os"
+	"reflect"
 
 	clusterclientset "github.com/openshift/cluster-api/pkg/client/clientset_generated/clientset"
 	apiv1 "k8s.io/api/core/v1"
@@ -53,6 +54,7 @@ func (p *provider) GetResourceLimiter() (*cloudprovider.ResourceLimiter, error) 
 }
 
 func (p *provider) NodeGroups() []cloudprovider.NodeGroup {
+	var result []cloudprovider.NodeGroup
 	nodegroups, err := p.controller.nodeGroups()
 	if err != nil {
 		klog.Errorf("error getting node groups: %v", err)
@@ -60,12 +62,20 @@ func (p *provider) NodeGroups() []cloudprovider.NodeGroup {
 	}
 	for _, ng := range nodegroups {
 		klog.V(4).Infof("discovered node group: %s", ng.Debug())
+		result = append(result, ng)
 	}
-	return nodegroups
+	return result
 }
 
 func (p *provider) NodeGroupForNode(node *apiv1.Node) (cloudprovider.NodeGroup, error) {
-	return p.controller.nodeGroupForNode(node)
+	ng, err := p.controller.nodeGroupForNode(node)
+	if err != nil {
+		return nil, err
+	}
+	if ng == nil || reflect.ValueOf(ng).IsNil() {
+		return nil, nil
+	}
+	return ng, nil
 }
 
 func (*provider) Pricing() (cloudprovider.PricingModel, errors.AutoscalerError) {

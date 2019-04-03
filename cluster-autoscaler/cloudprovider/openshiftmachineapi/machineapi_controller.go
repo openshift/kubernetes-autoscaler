@@ -26,7 +26,6 @@ import (
 	apiv1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
-	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	kubeinformers "k8s.io/client-go/informers"
 	kubeclient "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
@@ -308,8 +307,8 @@ func (c *machineController) filterMachineSets(namespace string, f machineSetFilt
 	return nil
 }
 
-func (c *machineController) machineSetNodeGroups() ([]cloudprovider.NodeGroup, error) {
-	var nodegroups []cloudprovider.NodeGroup
+func (c *machineController) machineSetNodeGroups() ([]*nodegroup, error) {
+	var nodegroups []*nodegroup
 
 	if err := c.filterAllMachineSets(func(machineSet *v1beta1.MachineSet) error {
 		if machineSetHasMachineDeploymentOwnerRef(machineSet) {
@@ -330,7 +329,7 @@ func (c *machineController) machineSetNodeGroups() ([]cloudprovider.NodeGroup, e
 	return nodegroups, nil
 }
 
-func (c *machineController) machineDeploymentNodeGroups() ([]cloudprovider.NodeGroup, error) {
+func (c *machineController) machineDeploymentNodeGroups() ([]*nodegroup, error) {
 	if !c.enableMachineDeployments {
 		return nil, nil
 	}
@@ -340,7 +339,7 @@ func (c *machineController) machineDeploymentNodeGroups() ([]cloudprovider.NodeG
 		return nil, err
 	}
 
-	var nodegroups []cloudprovider.NodeGroup
+	var nodegroups []*nodegroup
 
 	for _, md := range machineDeployments {
 		ng, err := newNodegroupFromMachineDeployment(c, md.DeepCopy())
@@ -356,7 +355,7 @@ func (c *machineController) machineDeploymentNodeGroups() ([]cloudprovider.NodeG
 	return nodegroups, nil
 }
 
-func (c *machineController) nodeGroups() ([]cloudprovider.NodeGroup, error) {
+func (c *machineController) nodeGroups() ([]*nodegroup, error) {
 	machineSets, err := c.machineSetNodeGroups()
 	if err != nil {
 		return nil, err
@@ -369,7 +368,7 @@ func (c *machineController) nodeGroups() ([]cloudprovider.NodeGroup, error) {
 	return append(machineSets, machineDeployments...), nil
 }
 
-func (c *machineController) nodeGroupForNode(node *apiv1.Node) (cloudprovider.NodeGroup, error) {
+func (c *machineController) nodeGroupForNode(node *apiv1.Node) (*nodegroup, error) {
 	machine, err := c.findMachineByNodeProviderID(node)
 	if err != nil {
 		return nil, err
