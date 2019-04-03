@@ -311,8 +311,8 @@ func TestControllerFindMachineByID(t *testing.T) {
 		lookupSucceeds: true,
 	}}
 
-	test := func(t *testing.T, tc testCase, testObjs *clusterTestConfig) {
-		controller, stop := testObjs.newMachineController(t)
+	test := func(t *testing.T, tc testCase, testConfig *testConfig) {
+		controller, stop := mustCreateTestController(t, testConfig)
 		defer stop()
 
 		machine, err := controller.findMachine(path.Join(tc.namespace, tc.name))
@@ -336,45 +336,44 @@ func TestControllerFindMachineByID(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.description, func(t *testing.T) {
-			testObjs := newMachineSetTestObjs(t.Name(), 0, 1, 1, map[string]string{
+			testConfig := mustCreateMachineSetTestConfig(testNamespace, 1, 1, map[string]string{
 				nodeGroupMinSizeAnnotationKey: "1",
 				nodeGroupMaxSizeAnnotationKey: "10",
 			})
 			if tc.name == "" {
-				tc.name = testObjs.machines[0].Name
+				tc.name = testConfig.machines[0].Name
 			}
 			if tc.namespace == "" {
-				tc.namespace = testObjs.machines[0].Namespace
+				tc.namespace = testConfig.machines[0].Namespace
 			}
-			test(t, tc, testObjs)
+			test(t, tc, testConfig)
 		})
 	}
 }
 
 func TestControllerFindMachineOwner(t *testing.T) {
-	testObjs := newMachineSetTestObjs(t.Name(), 0, 1, 1, map[string]string{
+	testConfig := mustCreateMachineSetTestConfig(testNamespace, 1, 1, map[string]string{
 		nodeGroupMinSizeAnnotationKey: "1",
 		nodeGroupMaxSizeAnnotationKey: "10",
 	})
 
-	controller, stop := testObjs.newMachineController(t)
+	controller, stop := mustCreateTestController(t, testConfig)
 	defer stop()
 
 	// Test #1: Lookup succeeds
-	testResult1, err := controller.findMachineOwner(testObjs.machines[0].DeepCopy())
+	testResult1, err := controller.findMachineOwner(testConfig.machines[0].DeepCopy())
 	if err != nil {
 		t.Fatalf("unexpected error, got %v", err)
 	}
 	if testResult1 == nil {
 		t.Fatal("expected non-nil result")
 	}
-	expected := fmt.Sprintf("%s%d", testObjs.spec.machineSetPrefix, 0)
-	if expected != testResult1.Name {
-		t.Errorf("expected %q, got %q", expected, testResult1.Name)
+	if testConfig.spec.machineSetName != testResult1.Name {
+		t.Errorf("expected %q, got %q", testConfig.spec.machineSetName, testResult1.Name)
 	}
 
 	// Test #2: Lookup fails as the machine UUID != machineset UUID
-	testMachine2 := testObjs.machines[0].DeepCopy()
+	testMachine2 := testConfig.machines[0].DeepCopy()
 	testMachine2.OwnerReferences[0].UID = "does-not-match-machineset"
 	testResult2, err := controller.findMachineOwner(testMachine2)
 	if err != nil {
@@ -388,7 +387,7 @@ func TestControllerFindMachineOwner(t *testing.T) {
 	if err := controller.machineSetInformer.Informer().GetStore().Delete(testResult1); err != nil {
 		t.Fatalf("unexpected error, got %v", err)
 	}
-	testResult3, err := controller.findMachineOwner(testObjs.machines[0].DeepCopy())
+	testResult3, err := controller.findMachineOwner(testConfig.machines[0].DeepCopy())
 	if err != nil {
 		t.Fatalf("unexpected error, got %v", err)
 	}
@@ -398,29 +397,29 @@ func TestControllerFindMachineOwner(t *testing.T) {
 }
 
 func TestControllerFindMachineByNodeProviderID(t *testing.T) {
-	testObjs := newMachineSetTestObjs(t.Name(), 0, 1, 1, map[string]string{
+	testConfig := mustCreateMachineSetTestConfig(testNamespace, 1, 1, map[string]string{
 		nodeGroupMinSizeAnnotationKey: "1",
 		nodeGroupMaxSizeAnnotationKey: "10",
 	})
 
-	controller, stop := testObjs.newMachineController(t)
+	controller, stop := mustCreateTestController(t, testConfig)
 	defer stop()
 
 	// Test #1: Verify node can be found because it has a
 	// ProviderID value and a machine annotation.
-	machine, err := controller.findMachineByNodeProviderID(testObjs.nodes[0])
+	machine, err := controller.findMachineByNodeProviderID(testConfig.nodes[0])
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if machine == nil {
 		t.Fatal("expected to find machine")
 	}
-	if !reflect.DeepEqual(machine, testObjs.machines[0]) {
-		t.Fatalf("expected machines to be equal - expected %+v, got %+v", testObjs.machines[0], machine)
+	if !reflect.DeepEqual(machine, testConfig.machines[0]) {
+		t.Fatalf("expected machines to be equal - expected %+v, got %+v", testConfig.machines[0], machine)
 	}
 
 	// Test #2: Verify node is not found if it has a non-existent ProviderID
-	node := testObjs.nodes[0].DeepCopy()
+	node := testConfig.nodes[0].DeepCopy()
 	node.Spec.ProviderID = ""
 	nonExistentMachine, err := controller.findMachineByNodeProviderID(node)
 	if err != nil {
@@ -432,12 +431,12 @@ func TestControllerFindMachineByNodeProviderID(t *testing.T) {
 
 	// Test #3: Verify node is not found if the stored object has
 	// no "machine" annotation
-	node = testObjs.nodes[0].DeepCopy()
+	node = testConfig.nodes[0].DeepCopy()
 	delete(node.Annotations, machineAnnotationKey)
 	if err := controller.nodeInformer.GetStore().Update(node); err != nil {
 		t.Fatalf("unexpected error updating node, got %v", err)
 	}
-	nonExistentMachine, err = controller.findMachineByNodeProviderID(testObjs.nodes[0])
+	nonExistentMachine, err = controller.findMachineByNodeProviderID(testConfig.nodes[0])
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -447,16 +446,16 @@ func TestControllerFindMachineByNodeProviderID(t *testing.T) {
 }
 
 func TestControllerFindNodeByNodeName(t *testing.T) {
-	testObjs := newMachineSetTestObjs(t.Name(), 0, 1, 1, map[string]string{
+	testConfig := mustCreateMachineSetTestConfig(testNamespace, 1, 1, map[string]string{
 		nodeGroupMinSizeAnnotationKey: "1",
 		nodeGroupMaxSizeAnnotationKey: "10",
 	})
 
-	controller, stop := testObjs.newMachineController(t)
+	controller, stop := mustCreateTestController(t, testConfig)
 	defer stop()
 
 	// Test #1: Verify known node can be found
-	node, err := controller.findNodeByNodeName(testObjs.nodes[0].Name)
+	node, err := controller.findNodeByNodeName(testConfig.nodes[0].Name)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -465,7 +464,7 @@ func TestControllerFindNodeByNodeName(t *testing.T) {
 	}
 
 	// Test #2: Verify non-existent node cannot be found
-	node, err = controller.findNodeByNodeName(testObjs.nodes[0].Name + "non-existent")
+	node, err = controller.findNodeByNodeName(testConfig.nodes[0].Name + "non-existent")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -475,51 +474,39 @@ func TestControllerFindNodeByNodeName(t *testing.T) {
 }
 
 func TestControllerMachinesInMachineSet(t *testing.T) {
-	testObjs1 := newMachineSetTestObjs("testObjs1", 0, 5, 5, map[string]string{
+	testConfig1 := mustCreateMachineSetTestConfig("testConfig1", 5, 5, map[string]string{
 		nodeGroupMinSizeAnnotationKey: "1",
 		nodeGroupMaxSizeAnnotationKey: "10",
 	})
 
-	controller, stop := testObjs1.newMachineController(t)
+	controller, stop := mustCreateTestController(t, testConfig1)
 	defer stop()
 
 	// Construct a second set of objects and add the machines,
 	// nodes and the additional machineset to the existing set of
 	// test objects in the controller. This gives us two
 	// machinesets, each with their own machines and linked nodes.
-	testObjs2 := newMachineSetTestObjs("testObjs2", 1, 5, 5, map[string]string{
+	testConfig2 := mustCreateMachineSetTestConfig("testConfig2", 5, 5, map[string]string{
 		nodeGroupMinSizeAnnotationKey: "1",
 		nodeGroupMaxSizeAnnotationKey: "10",
 	})
 
-	for _, node := range testObjs2.nodes {
-		if err := controller.nodeInformer.GetStore().Add(node); err != nil {
-			t.Fatalf("error adding node, got %v", err)
-		}
+	if err := addTestConfigs(t, controller, testConfig2); err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 
-	for _, machine := range testObjs2.machines {
-		if err := controller.machineInformer.Informer().GetStore().Add(machine); err != nil {
-			t.Fatalf("error adding machine, got %v", err)
-		}
-	}
-
-	if err := controller.machineSetInformer.Informer().GetStore().Add(testObjs2.machineSet); err != nil {
-		t.Fatalf("error adding machineset, got %v", err)
-	}
-
-	machinesInTestObjs1, err := controller.machineInformer.Lister().Machines(testObjs1.spec.namespace).List(labels.Everything())
+	machinesInTestObjs1, err := controller.machineInformer.Lister().Machines(testConfig1.spec.namespace).List(labels.Everything())
 	if err != nil {
 		t.Fatalf("error listing machines: %v", err)
 	}
 
-	machinesInTestObjs2, err := controller.machineInformer.Lister().Machines(testObjs2.spec.namespace).List(labels.Everything())
+	machinesInTestObjs2, err := controller.machineInformer.Lister().Machines(testConfig2.spec.namespace).List(labels.Everything())
 	if err != nil {
 		t.Fatalf("error listing machines: %v", err)
 	}
 
 	actual := len(machinesInTestObjs1) + len(machinesInTestObjs2)
-	expected := len(testObjs1.machines) + len(testObjs2.machines)
+	expected := len(testConfig1.machines) + len(testConfig2.machines)
 	if actual != expected {
 		t.Fatalf("expected %d machines, got %d", expected, actual)
 	}
@@ -533,42 +520,42 @@ func TestControllerMachinesInMachineSet(t *testing.T) {
 	})
 
 	for i, m := range machinesInTestObjs1 {
-		if m.Name != testObjs1.machines[i].Name {
-			t.Errorf("expected %q, got %q", testObjs1.machines[i].Name, m.Name)
+		if m.Name != testConfig1.machines[i].Name {
+			t.Errorf("expected %q, got %q", testConfig1.machines[i].Name, m.Name)
 		}
-		if m.Namespace != testObjs1.machines[i].Namespace {
-			t.Errorf("expected %q, got %q", testObjs1.machines[i].Namespace, m.Namespace)
+		if m.Namespace != testConfig1.machines[i].Namespace {
+			t.Errorf("expected %q, got %q", testConfig1.machines[i].Namespace, m.Namespace)
 		}
 	}
 
 	for i, m := range machinesInTestObjs2 {
-		if m.Name != testObjs2.machines[i].Name {
-			t.Errorf("expected %q, got %q", testObjs2.machines[i].Name, m.Name)
+		if m.Name != testConfig2.machines[i].Name {
+			t.Errorf("expected %q, got %q", testConfig2.machines[i].Name, m.Name)
 		}
-		if m.Namespace != testObjs2.machines[i].Namespace {
-			t.Errorf("expected %q, got %q", testObjs2.machines[i].Namespace, m.Namespace)
+		if m.Namespace != testConfig2.machines[i].Namespace {
+			t.Errorf("expected %q, got %q", testConfig2.machines[i].Namespace, m.Namespace)
 		}
 	}
 
 	// Finally everything in the respective objects should be equal.
-	if !reflect.DeepEqual(testObjs1.machines, machinesInTestObjs1) {
-		t.Fatalf("expected %+v, got %+v", testObjs1.machines, machinesInTestObjs1)
+	if !reflect.DeepEqual(testConfig1.machines, machinesInTestObjs1) {
+		t.Fatalf("expected %+v, got %+v", testConfig1.machines, machinesInTestObjs1)
 	}
-	if !reflect.DeepEqual(testObjs2.machines, machinesInTestObjs2) {
-		t.Fatalf("expected %+v, got %+v", testObjs2.machines, machinesInTestObjs2)
+	if !reflect.DeepEqual(testConfig2.machines, machinesInTestObjs2) {
+		t.Fatalf("expected %+v, got %+v", testConfig2.machines, machinesInTestObjs2)
 	}
 }
 
 func TestControllerLookupNodeGroupForNonExistentNode(t *testing.T) {
-	testObjs := newMachineSetTestObjs(t.Name(), 0, 1, 1, map[string]string{
+	testConfig := mustCreateMachineSetTestConfig(testNamespace, 1, 1, map[string]string{
 		nodeGroupMinSizeAnnotationKey: "1",
 		nodeGroupMaxSizeAnnotationKey: "10",
 	})
 
-	controller, stop := testObjs.newMachineController(t)
+	controller, stop := mustCreateTestController(t, testConfig)
 	defer stop()
 
-	node := testObjs.nodes[0].DeepCopy()
+	node := testConfig.nodes[0].DeepCopy()
 	node.Spec.ProviderID = "does-not-exist"
 
 	ng, err := controller.nodeGroupForNode(node)
@@ -585,17 +572,17 @@ func TestControllerLookupNodeGroupForNonExistentNode(t *testing.T) {
 }
 
 func TestControllerNodeGroupForNodeWithMissingMachineOwner(t *testing.T) {
-	test := func(t *testing.T, testObjs *clusterTestConfig) {
-		controller, stop := testObjs.newMachineController(t)
+	test := func(t *testing.T, testConfig *testConfig) {
+		controller, stop := mustCreateTestController(t, testConfig)
 		defer stop()
 
-		machine := testObjs.machines[0].DeepCopy()
+		machine := testConfig.machines[0].DeepCopy()
 		machine.OwnerReferences = []v1.OwnerReference{}
 		if err := controller.machineInformer.Informer().GetStore().Update(machine); err != nil {
 			t.Fatalf("unexpected error updating machine, got %v", err)
 		}
 
-		ng, err := controller.nodeGroupForNode(testObjs.nodes[0])
+		ng, err := controller.nodeGroupForNode(testConfig.nodes[0])
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -606,28 +593,28 @@ func TestControllerNodeGroupForNodeWithMissingMachineOwner(t *testing.T) {
 	}
 
 	t.Run("MachineSet", func(t *testing.T) {
-		testObjs := newMachineSetTestObjs(t.Name(), 0, 1, 1, map[string]string{
+		testConfig := mustCreateMachineSetTestConfig(testNamespace, 1, 1, map[string]string{
 			nodeGroupMinSizeAnnotationKey: "1",
 			nodeGroupMaxSizeAnnotationKey: "10",
 		})
-		test(t, testObjs)
+		test(t, testConfig)
 	})
 
 	t.Run("MachineDeployment", func(t *testing.T) {
-		testObjs := newMachineDeploymentTestObjs(t.Name(), 0, 1, 1, map[string]string{
+		testConfig := mustCreateMachineDeploymentTestConfig(testNamespace, 1, 1, map[string]string{
 			nodeGroupMinSizeAnnotationKey: "1",
 			nodeGroupMaxSizeAnnotationKey: "10",
 		})
-		test(t, testObjs)
+		test(t, testConfig)
 	})
 }
 
 func TestControllerNodeGroupForNodeWithPositiveScalingBounds(t *testing.T) {
-	test := func(t *testing.T, testObjs *clusterTestConfig) {
-		controller, stop := testObjs.newMachineController(t)
+	test := func(t *testing.T, testConfig *testConfig) {
+		controller, stop := mustCreateTestController(t, testConfig)
 		defer stop()
 
-		ng, err := controller.nodeGroupForNode(testObjs.nodes[0])
+		ng, err := controller.nodeGroupForNode(testConfig.nodes[0])
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -639,168 +626,168 @@ func TestControllerNodeGroupForNodeWithPositiveScalingBounds(t *testing.T) {
 	}
 
 	t.Run("MachineSet", func(t *testing.T) {
-		testObjs := newMachineSetTestObjs(t.Name(), 0, 1, 1, map[string]string{
+		testConfig := mustCreateMachineSetTestConfig(testNamespace, 1, 1, map[string]string{
 			nodeGroupMinSizeAnnotationKey: "1",
 			nodeGroupMaxSizeAnnotationKey: "1",
 		})
-		test(t, testObjs)
+		test(t, testConfig)
 	})
 
 	t.Run("MachineDeployment", func(t *testing.T) {
-		testObjs := newMachineDeploymentTestObjs(t.Name(), 0, 1, 1, map[string]string{
+		testConfig := mustCreateMachineDeploymentTestConfig(testNamespace, 1, 1, map[string]string{
 			nodeGroupMinSizeAnnotationKey: "1",
 			nodeGroupMaxSizeAnnotationKey: "1",
 		})
-		test(t, testObjs)
+		test(t, testConfig)
 	})
 }
 
 func TestControllerNodeGroups(t *testing.T) {
-	type testCase struct {
-		description string
-		annotations map[string]string
-		errors      bool
-		nodegroups  int
-	}
-
-	var testCases = []testCase{{
-		description: "errors with bad annotations",
-		annotations: map[string]string{
-			nodeGroupMinSizeAnnotationKey: "-1",
-			nodeGroupMaxSizeAnnotationKey: "10",
-		},
-		nodegroups: 0,
-		errors:     true,
-	}, {
-		description: "success with zero bounds",
-		nodegroups:  0,
-		errors:      false,
-	}, {
-		description: "success with positive bounds",
-		annotations: map[string]string{
-			nodeGroupMinSizeAnnotationKey: "1",
-			nodeGroupMaxSizeAnnotationKey: "10",
-		},
-		nodegroups: 1,
-		errors:     false,
-	}}
-
-	test := func(t *testing.T, tc testCase, testObjs *clusterTestConfig) {
-		controller, stop := testObjs.newMachineController(t)
-		defer stop()
-
+	assertNodegroupLen := func(t *testing.T, controller *machineController, expected int) {
+		t.Helper()
 		nodegroups, err := controller.nodeGroups()
-		if tc.errors && err == nil {
-			t.Errorf("expected an error")
-		}
-
-		if !tc.errors && err != nil {
-			t.Errorf("unexpected error: %v", err)
-		}
-
-		if tc.errors && nodegroups != nil {
-			t.Fatalf("test case logic error")
-		}
-
-		if actual := len(nodegroups); actual != tc.nodegroups {
-			t.Errorf("expected %d, got %d", tc.nodegroups, actual)
-		}
-	}
-
-	t.Run("MachineSet", func(t *testing.T) {
-		for _, tc := range testCases {
-			t.Run(tc.description, func(t *testing.T) {
-				testObjs := newMachineSetTestObjs(t.Name(), 0, 1, 1, tc.annotations)
-				test(t, tc, testObjs)
-			})
-		}
-	})
-
-	t.Run("MachineDeployment", func(t *testing.T) {
-		for _, tc := range testCases {
-			t.Run(tc.description, func(t *testing.T) {
-				test(t, tc, newMachineDeploymentTestObjs(t.Name(), 0, 1, 1, tc.annotations))
-			})
-		}
-	})
-}
-
-func TestControllerNodeGroupForNodeLookup(t *testing.T) {
-	type testCase struct {
-		description    string
-		annotations    map[string]string
-		lookupSucceeds bool
-	}
-
-	var testCases = []testCase{{
-		description:    "lookup is nil because no annotations",
-		annotations:    map[string]string{},
-		lookupSucceeds: false,
-	}, {
-		description: "lookup is nil because scaling range == 0",
-		annotations: map[string]string{
-			nodeGroupMinSizeAnnotationKey: "1",
-			nodeGroupMaxSizeAnnotationKey: "1",
-		},
-		lookupSucceeds: false,
-	}, {
-		description: "lookup is successful because scaling range >= 1",
-		annotations: map[string]string{
-			nodeGroupMinSizeAnnotationKey: "1",
-			nodeGroupMaxSizeAnnotationKey: "2",
-		},
-		lookupSucceeds: true,
-	}}
-
-	test := func(t *testing.T, tc testCase, testObjs *clusterTestConfig, node *apiv1.Node) {
-		controller, stop := testObjs.newMachineController(t)
-		defer stop()
-
-		ng, err := controller.nodeGroupForNode(node)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
+		if got := len(nodegroups); got != expected {
+			t.Fatalf("expected %d, got %d", expected, got)
+		}
+	}
 
-		if ng == nil && tc.lookupSucceeds {
-			t.Fatalf("expected non-nil from lookup")
+	annotations := map[string]string{
+		nodeGroupMinSizeAnnotationKey: "1",
+		nodeGroupMaxSizeAnnotationKey: "2",
+	}
+
+	controller, stop := mustCreateTestController(t)
+	defer stop()
+
+	// Test #1: zero nodegroups
+	assertNodegroupLen(t, controller, 0)
+
+	// Test #2: add 5 machineset-based nodegroups
+	machineSetConfigs := mustCreateMachineSetTestConfigs("MachineSet", 5, 1, 1, annotations)
+	if err := addTestConfigs(t, controller, machineSetConfigs...); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertNodegroupLen(t, controller, 5)
+
+	// Test #2: add 2 machinedeployment-based nodegroups
+	machineDeploymentConfigs := mustCreateMachineDeploymentTestConfigs("MachineDeployment", 2, 1, 1, annotations)
+	if err := addTestConfigs(t, controller, machineDeploymentConfigs...); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertNodegroupLen(t, controller, 7)
+
+	// Test #3: delete 5 machineset-backed objects
+	if err := deleteTestConfigs(t, controller, machineSetConfigs...); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertNodegroupLen(t, controller, 2)
+
+	// Test #4: delete 2 machinedeployment-backed objects
+	if err := deleteTestConfigs(t, controller, machineDeploymentConfigs...); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertNodegroupLen(t, controller, 0)
+
+	annotations = map[string]string{
+		nodeGroupMinSizeAnnotationKey: "1",
+		nodeGroupMaxSizeAnnotationKey: "1",
+	}
+
+	// Test #5: machineset with no scaling bounds results in no nodegroups
+	machineSetConfigs = mustCreateMachineSetTestConfigs("MachineSet", 5, 1, 1, annotations)
+	if err := addTestConfigs(t, controller, machineSetConfigs...); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertNodegroupLen(t, controller, 0)
+
+	// Test #6: machinedeployment with no scaling bounds results in no nodegroups
+	machineDeploymentConfigs = mustCreateMachineDeploymentTestConfigs("MachineDeployment", 2, 1, 1, annotations)
+	if err := addTestConfigs(t, controller, machineDeploymentConfigs...); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertNodegroupLen(t, controller, 0)
+
+	annotations = map[string]string{
+		nodeGroupMinSizeAnnotationKey: "-1",
+		nodeGroupMaxSizeAnnotationKey: "1",
+	}
+
+	// Test #7: machineset with bad scaling bounds results in an error and no nodegroups
+	machineSetConfigs = mustCreateMachineSetTestConfigs("MachineSet", 5, 1, 1, annotations)
+	if err := addTestConfigs(t, controller, machineSetConfigs...); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, err := controller.nodeGroups(); err == nil {
+		t.Fatalf("expected an error")
+	}
+
+	// Test #8: machinedeployment with bad scaling bounds results in an error and no nodegroups
+	machineDeploymentConfigs = mustCreateMachineDeploymentTestConfigs("MachineDeployment", 2, 1, 1, annotations)
+	if err := addTestConfigs(t, controller, machineDeploymentConfigs...); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, err := controller.nodeGroups(); err == nil {
+		t.Fatalf("expected an error")
+	}
+}
+
+func TestControllerNodeGroupsNodeCount(t *testing.T) {
+	type testCase struct {
+		nodeGroups    int
+		nodesPerGroup int
+	}
+
+	var testCases = []testCase{{
+		nodeGroups:    0,
+		nodesPerGroup: 0,
+	}, {
+		nodeGroups:    1,
+		nodesPerGroup: 0,
+	}, {
+		nodeGroups:    2,
+		nodesPerGroup: 10,
+	}}
+
+	test := func(t *testing.T, tc testCase, testConfigs []*testConfig) {
+		controller, stop := mustCreateTestController(t, testConfigs...)
+		defer stop()
+
+		nodegroups, err := controller.nodeGroups()
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got := len(nodegroups); got != tc.nodeGroups {
+			t.Fatalf("expected %d, got %d", tc.nodeGroups, got)
 		}
 
-		if ng != nil && !tc.lookupSucceeds {
-			t.Fatalf("expected nil from lookup")
+		for i := range nodegroups {
+			nodes, err := nodegroups[i].Nodes()
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got := len(nodes); got != tc.nodesPerGroup {
+				t.Fatalf("expected %d, got %d", tc.nodesPerGroup, got)
+			}
 		}
+	}
 
-		if !tc.lookupSucceeds {
-			return
-		}
-
-		var expected string
-
-		if testObjs.machineDeployment != nil {
-			expected = path.Join(testObjs.machineDeployment.Namespace, testObjs.machineDeployment.Name)
-		} else {
-			expected = path.Join(testObjs.machineSet.Namespace, testObjs.machineSet.Name)
-		}
-
-		if actual := ng.Id(); actual != expected {
-			t.Errorf("expected %q, got %q", expected, actual)
-		}
+	annotations := map[string]string{
+		nodeGroupMinSizeAnnotationKey: "1",
+		nodeGroupMaxSizeAnnotationKey: "10",
 	}
 
 	t.Run("MachineSet", func(t *testing.T) {
 		for _, tc := range testCases {
-			t.Run(tc.description, func(t *testing.T) {
-				testObjs := newMachineSetTestObjs(t.Name(), 0, 1, 1, tc.annotations)
-				test(t, tc, testObjs, testObjs.nodes[0].DeepCopy())
-			})
+			test(t, tc, mustCreateMachineSetTestConfigs(testNamespace, tc.nodeGroups, tc.nodesPerGroup, int32(tc.nodesPerGroup), annotations))
 		}
 	})
 
 	t.Run("MachineDeployment", func(t *testing.T) {
 		for _, tc := range testCases {
-			t.Run(tc.description, func(t *testing.T) {
-				testObjs := newMachineDeploymentTestObjs(t.Name(), 0, 1, 1, tc.annotations)
-				test(t, tc, testObjs, testObjs.nodes[0].DeepCopy())
-			})
+			test(t, tc, mustCreateMachineDeploymentTestConfigs(testNamespace, tc.nodeGroups, tc.nodesPerGroup, int32(tc.nodesPerGroup), annotations))
 		}
 	})
 }
