@@ -22,7 +22,9 @@ import (
 
 	"github.com/openshift/cluster-api/pkg/apis/machine/v1beta1"
 	machinev1beta1 "github.com/openshift/cluster-api/pkg/client/clientset_generated/clientset/typed/machine/v1beta1"
+	apiv1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	"k8s.io/utils/pointer"
 )
 
@@ -72,6 +74,8 @@ func (r machineSetScalableResource) SetSize(nreplicas int32) error {
 
 	machineSet = machineSet.DeepCopy()
 	machineSet.Spec.Replicas = &nreplicas
+	// undo our hack for TemplateNodeInfo when updating
+	machineSet.Spec.Template.Spec.ProviderSpec.ValueFrom = nil
 
 	_, err = r.machineapiClient.MachineSets(r.Namespace()).Update(machineSet)
 	if err != nil {
@@ -80,10 +84,34 @@ func (r machineSetScalableResource) SetSize(nreplicas int32) error {
 	return nil
 }
 
+func (r machineSetScalableResource) Labels() map[string]string {
+	return cloudprovider.JoinStringMaps(r.machineSet.Labels, r.machineSet.Spec.Template.Labels, r.machineSet.Spec.Template.Spec.Labels)
+}
+
+func (r machineSetScalableResource) MachineClass() (*v1beta1.MachineClass, error) {
+	return r.controller.findMachineClass(r.machineSet.Spec.Template.Spec.ProviderSpec.ValueFrom.MachineClass.ObjectReference)
+}
+
+func (r machineSetScalableResource) Taints() []apiv1.Taint {
+	return r.machineSet.Spec.Template.Spec.Taints
+}
+
 func newMachineSetScalableResource(controller *machineController, machineSet *v1beta1.MachineSet) (*machineSetScalableResource, error) {
 	minSize, maxSize, err := parseScalingBounds(machineSet.Annotations)
 	if err != nil {
 		return nil, fmt.Errorf("error validating min/max annotations: %v", err)
+	}
+
+	// HACK: This would have already been set.
+	machineSet.Spec.Template.Spec.ProviderSpec.ValueFrom = &v1beta1.ProviderSpecSource{
+		MachineClass: &v1beta1.MachineClassRef{
+			ObjectReference: &apiv1.ObjectReference{
+				Kind:      "MachineClass",
+				Namespace: machineSet.Namespace,
+				Name:      "this-is-a-hack",
+				UID:       "1234-5678-0000-4321",
+			},
+		},
 	}
 
 	return &machineSetScalableResource{

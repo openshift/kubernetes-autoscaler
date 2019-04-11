@@ -24,8 +24,10 @@ import (
 	clusterinformers "github.com/openshift/cluster-api/pkg/client/informers_generated/externalversions"
 	machinev1beta1 "github.com/openshift/cluster-api/pkg/client/informers_generated/externalversions/machine/v1beta1"
 	apiv1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/autoscaler/cluster-autoscaler/utils/gpu"
 	kubeinformers "k8s.io/client-go/informers"
 	kubeclient "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
@@ -410,12 +412,6 @@ func (c *machineController) nodeGroupForNode(node *apiv1.Node) (*nodegroup, erro
 			if err != nil {
 				return nil, fmt.Errorf("failed to build nodegroup for node %q: %v", node.Name, err)
 			}
-			// We don't scale from 0 so nodes must belong
-			// to a nodegroup that has a scale size of at
-			// least 1.
-			if nodegroup.MaxSize()-nodegroup.MinSize() < 1 {
-				return nil, nil
-			}
 			return nodegroup, nil
 		}
 	}
@@ -425,12 +421,28 @@ func (c *machineController) nodeGroupForNode(node *apiv1.Node) (*nodegroup, erro
 		return nil, fmt.Errorf("failed to build nodegroup for node %q: %v", node.Name, err)
 	}
 
-	// We don't scale from 0 so nodes must belong to a nodegroup
-	// that has a scale size of at least 1.
-	if nodegroup.MaxSize()-nodegroup.MinSize() < 1 {
+	klog.V(1).Infof("node %q is in nodegroup %q", node.Name, machineSet.Name)
+	return nodegroup, nil
+}
+
+func (c *machineController) findMachineClass(ref *apiv1.ObjectReference) (*v1beta1.MachineClass, error) {
+	if ref.Name != "this-is-a-hack" {
 		return nil, nil
 	}
 
-	klog.V(4).Infof("node %q is in nodegroup %q", node.Name, machineSet.Name)
-	return nodegroup, nil
+	return &v1beta1.MachineClass{
+		TypeMeta: metav1.TypeMeta{
+			Kind: "MachineClass",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      ref.Name,
+			Namespace: ref.Namespace,
+		},
+		Capacity: map[apiv1.ResourceName]resource.Quantity{
+			apiv1.ResourcePods:    *resource.NewQuantity(110, resource.DecimalSI),
+			apiv1.ResourceCPU:     *resource.NewQuantity(2, resource.DecimalSI),
+			gpu.ResourceNvidiaGPU: *resource.NewQuantity(0, resource.DecimalSI),
+			apiv1.ResourceMemory:  *resource.NewQuantity(4096*1024*1024, resource.DecimalSI),
+		},
+	}, nil
 }

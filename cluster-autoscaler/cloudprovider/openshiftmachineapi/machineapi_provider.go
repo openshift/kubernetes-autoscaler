@@ -60,7 +60,7 @@ func (p *provider) NodeGroups() []cloudprovider.NodeGroup {
 		return nil
 	}
 	for _, ng := range nodegroups {
-		klog.V(4).Infof("discovered node group: %s", ng.Debug())
+		// klog.Infof("discovered node group: %s", ng.Debug())
 		result = append(result, ng)
 	}
 	return result
@@ -79,6 +79,7 @@ func (p *provider) NodeGroupForNode(node *apiv1.Node) (cloudprovider.NodeGroup, 
 
 func (*provider) Pricing() (cloudprovider.PricingModel, errors.AutoscalerError) {
 	return nil, cloudprovider.ErrNotImplemented
+
 }
 
 func (*provider) GetAvailableMachineTypes() ([]string, error) {

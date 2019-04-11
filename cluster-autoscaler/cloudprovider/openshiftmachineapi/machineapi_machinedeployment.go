@@ -22,7 +22,9 @@ import (
 
 	"github.com/openshift/cluster-api/pkg/apis/machine/v1beta1"
 	machinev1beta1 "github.com/openshift/cluster-api/pkg/client/clientset_generated/clientset/typed/machine/v1beta1"
+	apiv1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	"k8s.io/utils/pointer"
 )
 
@@ -56,6 +58,14 @@ func (r machineDeploymentScalableResource) Namespace() string {
 	return r.machineDeployment.Namespace
 }
 
+func (r machineDeploymentScalableResource) MachineClass() (*v1beta1.MachineClass, error) {
+	return r.controller.findMachineClass(r.machineDeployment.Spec.Template.Spec.ProviderSpec.ValueFrom.MachineClass.ObjectReference)
+}
+
+func (r machineDeploymentScalableResource) Taints() []apiv1.Taint {
+	return r.machineDeployment.Spec.Template.Spec.Taints
+}
+
 func (r machineDeploymentScalableResource) Nodes() ([]string, error) {
 	result := []string{}
 
@@ -87,6 +97,8 @@ func (r machineDeploymentScalableResource) SetSize(nreplicas int32) error {
 
 	machineDeployment = machineDeployment.DeepCopy()
 	machineDeployment.Spec.Replicas = &nreplicas
+	// undo our hack for TemplateNodeInfo when updating
+	machineDeployment.Spec.Template.Spec.ProviderSpec.ValueFrom = nil
 
 	_, err = r.machineapiClient.MachineDeployments(r.Namespace()).Update(machineDeployment)
 	if err != nil {
@@ -95,10 +107,26 @@ func (r machineDeploymentScalableResource) SetSize(nreplicas int32) error {
 	return nil
 }
 
+func (r machineDeploymentScalableResource) Labels() map[string]string {
+	return cloudprovider.JoinStringMaps(r.machineDeployment.Labels, r.machineDeployment.Spec.Template.Labels, r.machineDeployment.Spec.Template.Spec.Labels)
+}
+
 func newMachineDeploymentScalableResource(controller *machineController, machineDeployment *v1beta1.MachineDeployment) (*machineDeploymentScalableResource, error) {
 	minSize, maxSize, err := parseScalingBounds(machineDeployment.Annotations)
 	if err != nil {
 		return nil, fmt.Errorf("error validating min/max annotations: %v", err)
+	}
+
+	// HACK: This would have already been set.
+	machineDeployment.Spec.Template.Spec.ProviderSpec.ValueFrom = &v1beta1.ProviderSpecSource{
+		MachineClass: &v1beta1.MachineClassRef{
+			ObjectReference: &apiv1.ObjectReference{
+				Kind:      "MachineClass",
+				Namespace: machineDeployment.Namespace,
+				Name:      "this-is-a-hack",
+				UID:       "1234-5678-0000-4321",
+			},
+		},
 	}
 
 	return &machineDeploymentScalableResource{
