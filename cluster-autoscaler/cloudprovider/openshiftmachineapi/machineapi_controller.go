@@ -132,12 +132,18 @@ func (c *machineController) run(stopCh <-chan struct{}) error {
 	c.kubeInformerFactory.Start(stopCh)
 	c.clusterInformerFactory.Start(stopCh)
 
-	klog.V(4).Infof("waiting for caches to sync")
-	if !cache.WaitForCacheSync(stopCh,
+	syncFuncs := []cache.InformerSynced{
 		c.nodeInformer.HasSynced,
 		c.machineInformer.Informer().HasSynced,
 		c.machineSetInformer.Informer().HasSynced,
-		c.machineDeploymentInformer.Informer().HasSynced) {
+	}
+
+	if c.enableMachineDeployments {
+		syncFuncs = append(syncFuncs, c.machineDeploymentInformer.Informer().HasSynced)
+	}
+
+	klog.V(4).Infof("waiting for caches to sync")
+	if !cache.WaitForCacheSync(stopCh, syncFuncs...) {
 		return fmt.Errorf("syncing caches failed")
 	}
 
@@ -226,11 +232,15 @@ func newMachineController(
 	kubeInformerFactory := kubeinformers.NewSharedInformerFactory(kubeclient, 0)
 	clusterInformerFactory := clusterinformers.NewSharedInformerFactory(clusterclient, 0)
 
+	var machineDeploymentInformer machinev1beta1.MachineDeploymentInformer
+	if enableMachineDeployments {
+		machineDeploymentInformer = clusterInformerFactory.Machine().V1beta1().MachineDeployments()
+		machineDeploymentInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{})
+	}
+
 	machineInformer := clusterInformerFactory.Machine().V1beta1().Machines()
 	machineSetInformer := clusterInformerFactory.Machine().V1beta1().MachineSets()
-	machineDeploymentInformer := clusterInformerFactory.Machine().V1beta1().MachineDeployments()
 
-	machineDeploymentInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{})
 	machineInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{})
 	machineSetInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{})
 
