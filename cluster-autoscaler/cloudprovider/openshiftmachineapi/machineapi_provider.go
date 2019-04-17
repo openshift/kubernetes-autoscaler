@@ -17,7 +17,6 @@ limitations under the License.
 package openshiftmachineapi
 
 import (
-	"os"
 	"reflect"
 
 	clusterclientset "github.com/openshift/cluster-api/pkg/client/clientset_generated/clientset"
@@ -148,7 +147,7 @@ func BuildOpenShiftMachineAPI(opts config.AutoscalingOptions, do cloudprovider.N
 		klog.Fatalf("create cluster clientset failed: %v", err)
 	}
 
-	enableMachineDeployments := os.Getenv("OPENSHIFT_MACHINE_API_CLOUDPROVIDER_ENABLE_MACHINE_DEPLOYMENTS") != ""
+	enableMachineDeployments := false
 	controller, err := newMachineController(kubeclient, clusterclient, enableMachineDeployments)
 
 	if err != nil {
