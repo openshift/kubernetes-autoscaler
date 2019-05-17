@@ -1,0 +1,12 @@
+FROM registry.svc.ci.openshift.org/openshift/release:golang-1.11 AS builder
+WORKDIR /go/src/k8s.io/autoscaler
+COPY . .
+RUN go build -o vertical-pod-autoscaler/admission-controller ./vertical-pod-autoscaler/pkg/admission-controller
+RUN go build -o vertical-pod-autoscaler/updater ./vertical-pod-autoscaler/pkg/updater
+RUN go build -o vertical-pod-autoscaler/recommender ./vertical-pod-autoscaler/pkg/recommender
+
+FROM registry.svc.ci.openshift.org/openshift/origin-v4.0:base
+COPY --from=builder /go/src/k8s.io/autoscaler/vertical-pod-autoscaler/admission-controller /usr/bin/
+COPY --from=builder /go/src/k8s.io/autoscaler/vertical-pod-autoscaler/updater /usr/bin/
+COPY --from=builder /go/src/k8s.io/autoscaler/vertical-pod-autoscaler/recommender /usr/bin/
+LABEL summary="Vertical Pod Autoscaler for OpenShift and Kubernetes"
