@@ -152,30 +152,17 @@ func (c *machineController) run(stopCh <-chan struct{}) error {
 
 // findMachineByNodeProviderID find associated machine using
 // node.Spec.ProviderID as the key. Returns nil if either the Node by
-// node.Spec.ProviderID cannot be found or if the node has no machine
-// annotation. A DeepCopy() of the object is returned on success.
+// node.Spec.ProviderID cannot be found or if there is no machine which has matching machine.Spec.ProviderID
 func (c *machineController) findMachineByNodeProviderID(node *apiv1.Node) (*v1beta1.Machine, error) {
-	objs, err := c.nodeInformer.GetIndexer().ByIndex(nodeProviderIDIndex, node.Spec.ProviderID)
+	machines, err := c.machineInformer.Lister().Machines("").List(labels.Everything())
 	if err != nil {
 		return nil, err
 	}
-
-	switch n := len(objs); {
-	case n == 0:
-		return nil, nil
-	case n > 1:
-		return nil, fmt.Errorf("internal error; expected len==1, got %v", n)
+	for _, m := range machines {
+		if m.Spec.ProviderID != nil && *m.Spec.ProviderID == node.Spec.ProviderID {
+			return m, nil
+		}
 	}
-
-	node, ok := objs[0].(*apiv1.Node)
-	if !ok {
-		return nil, fmt.Errorf("internal error; unexpected type %T", node)
-	}
-
-	if machineName, found := node.Annotations[machineAnnotationKey]; found {
-		return c.findMachine(machineName)
-	}
-
 	return nil, nil
 }
 
