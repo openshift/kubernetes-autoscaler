@@ -34,6 +34,7 @@ import (
 
 const (
 	machineProviderIDIndex = "openshiftmachineapi-machineProviderIDIndex"
+	nodeProviderIDIndex    = "openshiftmachineapi-nodeProviderIDIndex"
 )
 
 // machineController watches for Nodes, Machines, MachineSets and
@@ -57,6 +58,16 @@ func indexMachineByProviderID(obj interface{}) ([]string, error) {
 	if machine, ok := obj.(*v1beta1.Machine); ok {
 		if machine.Spec.ProviderID != nil {
 			return []string{*machine.Spec.ProviderID}, nil
+		}
+		return []string{}, nil
+	}
+	return []string{}, nil
+}
+
+func indexNodeByProviderID(obj interface{}) ([]string, error) {
+	if node, ok := obj.(*apiv1.Node); ok {
+		if node.Spec.ProviderID != "" {
+			return []string{node.Spec.ProviderID}, nil
 		}
 		return []string{}, nil
 	}
@@ -178,20 +189,23 @@ func (c *machineController) findMachineByNodeProviderID(node *apiv1.Node) (*v1be
 	return machine.DeepCopy(), nil
 }
 
-// findNodeByNodeName find the Node object keyed by node.Name. Returns
-// nil if it cannot be found. A DeepCopy() of the object is returned
-// on success.
-func (c *machineController) findNodeByNodeName(name string) (*apiv1.Node, error) {
-	item, exists, err := c.nodeInformer.GetIndexer().GetByKey(name)
+// findNodeByProviderID find the Node object keyed by provideID.
+// Returns nil if it cannot be found. A DeepCopy() of the object is
+// returned on success.
+func (c *machineController) findNodeByProviderID(providerID string) (*apiv1.Node, error) {
+	objs, err := c.nodeInformer.GetIndexer().ByIndex(nodeProviderIDIndex, providerID)
 	if err != nil {
 		return nil, err
 	}
 
-	if !exists {
+	switch n := len(objs); {
+	case n == 0:
 		return nil, nil
+	case n > 1:
+		return nil, fmt.Errorf("internal error; expected len==1, got %v", n)
 	}
 
-	node, ok := item.(*apiv1.Node)
+	node, ok := objs[0].(*apiv1.Node)
 	if !ok {
 		return nil, fmt.Errorf("internal error; unexpected type %T", node)
 	}
@@ -252,6 +266,12 @@ func newMachineController(
 		return nil, fmt.Errorf("cannot add machine indexer: %v", err)
 	}
 
+	if err := nodeInformer.GetIndexer().AddIndexers(cache.Indexers{
+		nodeProviderIDIndex: indexNodeByProviderID,
+	}); err != nil {
+		return nil, fmt.Errorf("cannot add node indexer: %v", err)
+	}
+
 	return &machineController{
 		clusterClientset:          clusterclient,
 		clusterInformerFactory:    clusterInformerFactory,
@@ -273,18 +293,13 @@ func (c *machineController) machineSetNodeNames(machineSet *v1beta1.MachineSet) 
 	var nodes []string
 
 	for _, machine := range machines {
-		if machine.Status.NodeRef == nil {
-			klog.V(4).Infof("Status.NodeRef of machine %q is currently nil", machine.Name)
-			continue
-		}
-		if machine.Status.NodeRef.Kind != "Node" {
-			klog.Errorf("Status.NodeRef of machine %q does not reference a node (rather %q)", machine.Name, machine.Status.NodeRef.Kind)
+		if machine.Spec.ProviderID == nil || *machine.Spec.ProviderID == "" {
 			continue
 		}
 
-		node, err := c.findNodeByNodeName(machine.Status.NodeRef.Name)
+		node, err := c.findNodeByProviderID(*machine.Spec.ProviderID)
 		if err != nil {
-			return nil, fmt.Errorf("unknown node %q", machine.Status.NodeRef.Name)
+			return nil, err
 		}
 
 		if node != nil {

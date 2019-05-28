@@ -447,7 +447,7 @@ func TestControllerFindMachineByNodeProviderID(t *testing.T) {
 	}
 }
 
-func TestControllerFindNodeByNodeName(t *testing.T) {
+func TestControllerFindNodeByProviderID(t *testing.T) {
 	testConfig := createMachineSetTestConfig(testNamespace, 1, 1, map[string]string{
 		nodeGroupMinSizeAnnotationKey: "1",
 		nodeGroupMaxSizeAnnotationKey: "10",
@@ -457,7 +457,7 @@ func TestControllerFindNodeByNodeName(t *testing.T) {
 	defer stop()
 
 	// Test #1: Verify known node can be found
-	node, err := controller.findNodeByNodeName(testConfig.nodes[0].Name)
+	node, err := controller.findNodeByProviderID(testConfig.nodes[0].Spec.ProviderID)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -466,7 +466,7 @@ func TestControllerFindNodeByNodeName(t *testing.T) {
 	}
 
 	// Test #2: Verify non-existent node cannot be found
-	node, err = controller.findNodeByNodeName(testConfig.nodes[0].Name + "non-existent")
+	node, err = controller.findNodeByProviderID(testConfig.nodes[0].Spec.ProviderID + "non-existent")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
