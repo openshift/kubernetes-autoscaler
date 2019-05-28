@@ -26,7 +26,6 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/config"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/errors"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/klog"
 )
@@ -122,19 +121,9 @@ func newProvider(
 
 // BuildOpenShiftMachineAPI builds CloudProvider implementation for machine api.
 func BuildOpenShiftMachineAPI(opts config.AutoscalingOptions, do cloudprovider.NodeGroupDiscoveryOptions, rl *cloudprovider.ResourceLimiter) cloudprovider.CloudProvider {
-	var err error
-	var externalConfig *rest.Config
-
-	externalConfig, err = rest.InClusterConfig()
-	if err != nil && err != rest.ErrNotInCluster {
-		klog.Fatal(err)
-	}
-
-	if opts.KubeConfigPath != "" {
-		externalConfig, err = clientcmd.BuildConfigFromFlags("", opts.KubeConfigPath)
-		if err != nil {
-			klog.Fatalf("cannot build config: %v", err)
-		}
+	externalConfig, err := clientcmd.BuildConfigFromFlags("", opts.KubeConfigPath)
+	if err != nil {
+		klog.Fatalf("cannot build config: %v", err)
 	}
 
 	kubeclient, err := kubernetes.NewForConfig(externalConfig)
