@@ -452,3 +452,27 @@ func (c *machineController) nodeGroupForNode(node *apiv1.Node) (*nodegroup, erro
 	klog.V(4).Infof("node %q is in nodegroup %q", node.Name, machineSet.Name)
 	return nodegroup, nil
 }
+
+// findNodeByProviderID find the Node object keyed by provideID.
+// Returns nil if it cannot be found. A DeepCopy() of the object is
+// returned on success.
+func (c *machineController) findNodeByProviderID(providerID string) (*apiv1.Node, error) {
+	objs, err := c.nodeInformer.GetIndexer().ByIndex(nodeProviderIDIndex, providerID)
+	if err != nil {
+		return nil, err
+	}
+
+	switch n := len(objs); {
+	case n == 0:
+		return nil, nil
+	case n > 1:
+		return nil, fmt.Errorf("internal error; expected len==1, got %v", n)
+	}
+
+	node, ok := objs[0].(*apiv1.Node)
+	if !ok {
+		return nil, fmt.Errorf("internal error; unexpected type %T", node)
+	}
+
+	return node.DeepCopy(), nil
+}
