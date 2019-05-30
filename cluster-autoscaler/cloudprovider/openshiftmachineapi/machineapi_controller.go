@@ -33,7 +33,8 @@ import (
 )
 
 const (
-	nodeProviderIDIndex = "openshiftmachineapi-nodeProviderIDIndex"
+	machineProviderIDIndex = "openshiftmachineapi-machineProviderIDIndex"
+	nodeProviderIDIndex    = "openshiftmachineapi-nodeProviderIDIndex"
 )
 
 // machineController watches for Nodes, Machines, MachineSets and
@@ -53,9 +54,22 @@ type machineController struct {
 
 type machineSetFilterFunc func(machineSet *v1beta1.MachineSet) error
 
-func indexNodeByNodeProviderID(obj interface{}) ([]string, error) {
+func indexMachineByProviderID(obj interface{}) ([]string, error) {
+	if machine, ok := obj.(*v1beta1.Machine); ok {
+		if machine.Spec.ProviderID != nil && *machine.Spec.ProviderID != "" {
+			return []string{*machine.Spec.ProviderID}, nil
+		}
+		return []string{}, nil
+	}
+	return []string{}, nil
+}
+
+func indexNodeByProviderID(obj interface{}) ([]string, error) {
 	if node, ok := obj.(*apiv1.Node); ok {
-		return []string{node.Spec.ProviderID}, nil
+		if node.Spec.ProviderID != "" {
+			return []string{node.Spec.ProviderID}, nil
+		}
+		return []string{}, nil
 	}
 	return []string{}, nil
 }
@@ -247,12 +261,16 @@ func newMachineController(
 	nodeInformer := kubeInformerFactory.Core().V1().Nodes().Informer()
 	nodeInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{})
 
-	indexerFuncs := cache.Indexers{
-		nodeProviderIDIndex: indexNodeByNodeProviderID,
+	if err := machineInformer.Informer().GetIndexer().AddIndexers(cache.Indexers{
+		machineProviderIDIndex: indexMachineByProviderID,
+	}); err != nil {
+		return nil, fmt.Errorf("cannot add machine indexer: %v", err)
 	}
 
-	if err := nodeInformer.GetIndexer().AddIndexers(indexerFuncs); err != nil {
-		return nil, fmt.Errorf("cannot add indexers: %v", err)
+	if err := nodeInformer.GetIndexer().AddIndexers(cache.Indexers{
+		nodeProviderIDIndex: indexNodeByProviderID,
+	}); err != nil {
+		return nil, fmt.Errorf("cannot add node indexer: %v", err)
 	}
 
 	return &machineController{
