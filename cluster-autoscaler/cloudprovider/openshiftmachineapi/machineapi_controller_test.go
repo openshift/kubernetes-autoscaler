@@ -840,3 +840,144 @@ func TestControllerFindMachineFromNodeAnnotation(t *testing.T) {
 		t.Fatal("expected find to fail")
 	}
 }
+
+func TestControllerMachineSetNodeNamesWithoutLinkage(t *testing.T) {
+	testConfig := createMachineSetTestConfig(testNamespace, 1, 3, map[string]string{
+		nodeGroupMinSizeAnnotationKey: "1",
+		nodeGroupMaxSizeAnnotationKey: "10",
+	})
+
+	controller, stop := mustCreateTestController(t, testConfig)
+	defer stop()
+
+	// Remove all linkage between node and machine.
+	for _, machine := range testConfig.machines {
+		machine.Spec.ProviderID = nil
+		if err := controller.machineInformer.Informer().GetStore().Update(machine); err != nil {
+			t.Fatalf("unexpected error updating machine, got %v", err)
+		}
+	}
+	for _, machine := range testConfig.machines {
+		machine.Status.NodeRef = nil
+		if err := controller.machineInformer.Informer().GetStore().Update(machine); err != nil {
+			t.Fatalf("unexpected error updating machine, got %v", err)
+		}
+	}
+
+	nodegroups, err := controller.nodeGroups()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if l := len(nodegroups); l != 1 {
+		t.Fatalf("expected 1 nodegroup, got %d", l)
+	}
+
+	ng := nodegroups[0]
+	nodeNames, err := ng.Nodes()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// We removed all linkage - so we should get 0 nodes back.
+	if len(nodeNames) != 0 {
+		t.Fatalf("expected len=0, got len=%v", len(nodeNames))
+	}
+}
+
+func TestControllerMachineSetNodeNamesUsingProviderID(t *testing.T) {
+	testConfig := createMachineSetTestConfig(testNamespace, 3, 3, map[string]string{
+		nodeGroupMinSizeAnnotationKey: "1",
+		nodeGroupMaxSizeAnnotationKey: "10",
+	})
+
+	controller, stop := mustCreateTestController(t, testConfig)
+	defer stop()
+
+	// Remove Status.NodeRef.Name on all the machines. We want to
+	// force machineSetNodeNames() to only consider the provider
+	// ID for lookups.
+	for _, machine := range testConfig.machines {
+		machine.Status.NodeRef = nil
+		if err := controller.machineInformer.Informer().GetStore().Update(machine); err != nil {
+			t.Fatalf("unexpected error updating machine, got %v", err)
+		}
+	}
+
+	nodegroups, err := controller.nodeGroups()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if l := len(nodegroups); l != 1 {
+		t.Fatalf("expected 1 nodegroup, got %d", l)
+	}
+
+	ng := nodegroups[0]
+	nodeNames, err := ng.Nodes()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(nodeNames) != len(testConfig.nodes) {
+		t.Fatalf("expected len=%v, got len=%v", len(testConfig.nodes), len(nodeNames))
+	}
+
+	sort.Slice(nodeNames, func(i, j int) bool {
+		return nodeNames[i].Id < nodeNames[j].Id
+	})
+
+	for i := range testConfig.nodes {
+		if nodeNames[i].Id != testConfig.nodes[i].Spec.ProviderID {
+			t.Fatalf("expected %q, got %q", testConfig.nodes[i].Spec.ProviderID, nodeNames[i].Id)
+		}
+	}
+}
+
+func TestControllerMachineSetNodeNamesUsingStatusNodeRefName(t *testing.T) {
+	testConfig := createMachineSetTestConfig(testNamespace, 3, 3, map[string]string{
+		nodeGroupMinSizeAnnotationKey: "1",
+		nodeGroupMaxSizeAnnotationKey: "10",
+	})
+
+	controller, stop := mustCreateTestController(t, testConfig)
+	defer stop()
+
+	// Remove all the provider ID values on all the machines. We
+	// want to force machineSetNodeNames() to fallback to
+	// searching using Status.NodeRef.Name.
+	for _, machine := range testConfig.machines {
+		machine.Spec.ProviderID = nil
+		if err := controller.machineInformer.Informer().GetStore().Update(machine); err != nil {
+			t.Fatalf("unexpected error updating machine, got %v", err)
+		}
+	}
+
+	nodegroups, err := controller.nodeGroups()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if l := len(nodegroups); l != 1 {
+		t.Fatalf("expected 1 nodegroup, got %d", l)
+	}
+
+	nodeNames, err := nodegroups[0].Nodes()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(nodeNames) != len(testConfig.nodes) {
+		t.Fatalf("expected len=%v, got len=%v", len(testConfig.nodes), len(nodeNames))
+	}
+
+	sort.Slice(nodeNames, func(i, j int) bool {
+		return nodeNames[i].Id < nodeNames[j].Id
+	})
+
+	for i := range testConfig.nodes {
+		if nodeNames[i].Id != testConfig.nodes[i].Spec.ProviderID {
+			t.Fatalf("expected %q, got %q", testConfig.nodes[i].Spec.ProviderID, nodeNames[i].Id)
+		}
+	}
+}
