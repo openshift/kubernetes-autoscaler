@@ -793,3 +793,50 @@ func TestControllerNodeGroupsNodeCount(t *testing.T) {
 		}
 	})
 }
+
+func TestControllerFindMachineFromNodeAnnotation(t *testing.T) {
+	testConfig := createMachineSetTestConfig(testNamespace, 1, 1, map[string]string{
+		nodeGroupMinSizeAnnotationKey: "1",
+		nodeGroupMaxSizeAnnotationKey: "10",
+	})
+
+	controller, stop := mustCreateTestController(t, testConfig)
+	defer stop()
+
+	// Remove all the provider ID values on all the machines. We
+	// want to force findMachineByProviderID() to fallback to
+	// searching using the annotation on the node object.
+	for _, machine := range testConfig.machines {
+		machine.Spec.ProviderID = nil
+		if err := controller.machineInformer.Informer().GetStore().Update(machine); err != nil {
+			t.Fatalf("unexpected error updating machine, got %v", err)
+		}
+	}
+
+	// Test #1: Verify machine can be found from node annotation
+	machine, err := controller.findMachineByProviderID(testConfig.nodes[0].Spec.ProviderID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if machine == nil {
+		t.Fatal("expected to find machine")
+	}
+	if !reflect.DeepEqual(machine, testConfig.machines[0]) {
+		t.Fatalf("expected machines to be equal - expected %+v, got %+v", testConfig.machines[0], machine)
+	}
+
+	// Test #2: Verify machine is not found if it has no
+	// corresponding machine annotation.
+	node := testConfig.nodes[0].DeepCopy()
+	delete(node.Annotations, machineAnnotationKey)
+	if err := controller.nodeInformer.GetStore().Update(node); err != nil {
+		t.Fatalf("unexpected error updating node, got %v", err)
+	}
+	machine, err = controller.findMachineByProviderID(testConfig.nodes[0].Spec.ProviderID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if machine != nil {
+		t.Fatal("expected find to fail")
+	}
+}
