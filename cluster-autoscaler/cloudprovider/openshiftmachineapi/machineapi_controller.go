@@ -164,36 +164,43 @@ func (c *machineController) run(stopCh <-chan struct{}) error {
 	return nil
 }
 
-// findMachineByNodeProviderID find associated machine using
-// node.Spec.ProviderID as the key. Returns nil if either the Node by
-// node.Spec.ProviderID cannot be found or if the node has no machine
-// annotation. A DeepCopy() of the object is returned on success.
-func (c *machineController) findMachineByNodeProviderID(node *apiv1.Node) (*v1beta1.Machine, error) {
-	objs, err := c.nodeInformer.GetIndexer().ByIndex(nodeProviderIDIndex, node.Spec.ProviderID)
+// findMachineByProviderID finds machine matching providerID. A
+// DeepCopy() of the object is returned on success.
+func (c *machineController) findMachineByProviderID(providerID string) (*v1beta1.Machine, error) {
+	objs, err := c.machineInformer.Informer().GetIndexer().ByIndex(machineProviderIDIndex, providerID)
 	if err != nil {
 		return nil, err
 	}
 
 	switch n := len(objs); {
-	case n == 0:
-		return nil, nil
 	case n > 1:
 		return nil, fmt.Errorf("internal error; expected len==1, got %v", n)
+	case n == 1:
+		machine, ok := objs[0].(*v1beta1.Machine)
+		if !ok {
+			return nil, fmt.Errorf("internal error; unexpected type %T", machine)
+		}
+		if machine != nil {
+			return machine.DeepCopy(), nil
+		}
 	}
 
-	node, ok := objs[0].(*apiv1.Node)
-	if !ok {
-		return nil, fmt.Errorf("internal error; unexpected type %T", node)
+	// If the machine object has no providerID--maybe actuator
+	// does not set this value (e.g., OpenStack)--then first
+	// lookup the node using ProviderID. If that is successful
+	// then the machine can be found using the annotation (should
+	// it exist).
+	node, err := c.findNodeByProviderID(providerID)
+	if err != nil {
+		return nil, err
 	}
-
-	if machineName, found := node.Annotations[machineAnnotationKey]; found {
-		return c.findMachine(machineName)
+	if node == nil {
+		return nil, nil
 	}
-
-	return nil, nil
+	return c.findMachine(node.Annotations[machineAnnotationKey])
 }
 
-// findNodeByNodeName find the Node object keyed by node.Name. Returns
+// findNodeByNodeName finds the Node object keyed by name.. Returns
 // nil if it cannot be found. A DeepCopy() of the object is returned
 // on success.
 func (c *machineController) findNodeByNodeName(name string) (*apiv1.Node, error) {
@@ -397,7 +404,7 @@ func (c *machineController) nodeGroups() ([]*nodegroup, error) {
 }
 
 func (c *machineController) nodeGroupForNode(node *apiv1.Node) (*nodegroup, error) {
-	machine, err := c.findMachineByNodeProviderID(node)
+	machine, err := c.findMachineByProviderID(node.Spec.ProviderID)
 	if err != nil {
 		return nil, err
 	}

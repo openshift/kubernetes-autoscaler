@@ -32,6 +32,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	fakekube "k8s.io/client-go/kubernetes/fake"
+	"k8s.io/utils/pointer"
 )
 
 type testControllerShutdownFunc func()
@@ -222,6 +223,9 @@ func makeLinkedNodeAndMachine(i int, namespace string, owner v1.OwnerReference) 
 				UID:  owner.UID,
 			}},
 		},
+		Spec: v1beta1.MachineSpec{
+			ProviderID: pointer.StringPtr(fmt.Sprintf("%s-%s-nodeid-%d", namespace, owner.Name, i)),
+		},
 		Status: v1beta1.MachineStatus{
 			NodeRef: &apiv1.ObjectReference{
 				Kind: node.Kind,
@@ -396,7 +400,7 @@ func TestControllerFindMachineOwner(t *testing.T) {
 	}
 }
 
-func TestControllerFindMachineByNodeProviderID(t *testing.T) {
+func TestControllerFindMachineByProviderID(t *testing.T) {
 	testConfig := createMachineSetTestConfig(testNamespace, 1, 1, map[string]string{
 		nodeGroupMinSizeAnnotationKey: "1",
 		nodeGroupMaxSizeAnnotationKey: "10",
@@ -405,9 +409,18 @@ func TestControllerFindMachineByNodeProviderID(t *testing.T) {
 	controller, stop := mustCreateTestController(t, testConfig)
 	defer stop()
 
-	// Test #1: Verify node can be found because it has a
-	// ProviderID value and a machine annotation.
-	machine, err := controller.findMachineByNodeProviderID(testConfig.nodes[0])
+	// Remove all the "machine" annotation values on all the
+	// nodes. We want to force findMachineByProviderID() to only
+	// be successful by searching on provider ID.
+	for _, node := range testConfig.nodes {
+		delete(node.Annotations, machineAnnotationKey)
+		if err := controller.nodeInformer.GetStore().Update(node); err != nil {
+			t.Fatalf("unexpected error updating node, got %v", err)
+		}
+	}
+
+	// Test #1: Verify underlying machine provider ID matches
+	machine, err := controller.findMachineByProviderID(testConfig.nodes[0].Spec.ProviderID)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -418,29 +431,18 @@ func TestControllerFindMachineByNodeProviderID(t *testing.T) {
 		t.Fatalf("expected machines to be equal - expected %+v, got %+v", testConfig.machines[0], machine)
 	}
 
-	// Test #2: Verify node is not found if it has a non-existent ProviderID
-	node := testConfig.nodes[0].DeepCopy()
-	node.Spec.ProviderID = ""
-	nonExistentMachine, err := controller.findMachineByNodeProviderID(node)
+	// Test #2: Verify machine is not found if it has a
+	// non-existent or different provider ID.
+	machine = testConfig.machines[0].DeepCopy()
+	machine.Spec.ProviderID = pointer.StringPtr("does-not-match")
+	if err := controller.machineInformer.Informer().GetStore().Update(machine); err != nil {
+		t.Fatalf("unexpected error updating machine, got %v", err)
+	}
+	machine, err = controller.findMachineByProviderID(testConfig.nodes[0].Spec.ProviderID)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if nonExistentMachine != nil {
-		t.Fatal("expected find to fail")
-	}
-
-	// Test #3: Verify node is not found if the stored object has
-	// no "machine" annotation
-	node = testConfig.nodes[0].DeepCopy()
-	delete(node.Annotations, machineAnnotationKey)
-	if err := controller.nodeInformer.GetStore().Update(node); err != nil {
-		t.Fatalf("unexpected error updating node, got %v", err)
-	}
-	nonExistentMachine, err = controller.findMachineByNodeProviderID(testConfig.nodes[0])
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if nonExistentMachine != nil {
+	if machine != nil {
 		t.Fatal("expected find to fail")
 	}
 }
