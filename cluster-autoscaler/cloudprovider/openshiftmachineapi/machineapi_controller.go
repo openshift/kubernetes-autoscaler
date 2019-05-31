@@ -301,6 +301,18 @@ func (c *machineController) machineSetNodeNames(machineSet *v1beta1.MachineSet) 
 	var nodes []string
 
 	for _, machine := range machines {
+		if machine.Spec.ProviderID != nil && *machine.Spec.ProviderID != "" {
+			// Prefer machine<=>node mapping using ProviderID
+			node, err := c.findNodeByProviderID(*machine.Spec.ProviderID)
+			if err != nil {
+				return nil, err
+			}
+			if node != nil {
+				nodes = append(nodes, node.Spec.ProviderID)
+				continue
+			}
+		}
+
 		if machine.Status.NodeRef == nil {
 			klog.V(4).Infof("Status.NodeRef of machine %q is currently nil", machine.Name)
 			continue
