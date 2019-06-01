@@ -33,7 +33,8 @@ import (
 )
 
 const (
-	nodeProviderIDIndex = "openshiftmachineapi-nodeProviderIDIndex"
+	machineProviderIDIndex = "openshiftmachineapi-machineProviderIDIndex"
+	nodeProviderIDIndex    = "openshiftmachineapi-nodeProviderIDIndex"
 )
 
 // machineController watches for Nodes, Machines, MachineSets and
@@ -53,9 +54,22 @@ type machineController struct {
 
 type machineSetFilterFunc func(machineSet *v1beta1.MachineSet) error
 
-func indexNodeByNodeProviderID(obj interface{}) ([]string, error) {
+func indexMachineByProviderID(obj interface{}) ([]string, error) {
+	if machine, ok := obj.(*v1beta1.Machine); ok {
+		if machine.Spec.ProviderID != nil && *machine.Spec.ProviderID != "" {
+			return []string{*machine.Spec.ProviderID}, nil
+		}
+		return []string{}, nil
+	}
+	return []string{}, nil
+}
+
+func indexNodeByProviderID(obj interface{}) ([]string, error) {
 	if node, ok := obj.(*apiv1.Node); ok {
-		return []string{node.Spec.ProviderID}, nil
+		if node.Spec.ProviderID != "" {
+			return []string{node.Spec.ProviderID}, nil
+		}
+		return []string{}, nil
 	}
 	return []string{}, nil
 }
@@ -150,36 +164,43 @@ func (c *machineController) run(stopCh <-chan struct{}) error {
 	return nil
 }
 
-// findMachineByNodeProviderID find associated machine using
-// node.Spec.ProviderID as the key. Returns nil if either the Node by
-// node.Spec.ProviderID cannot be found or if the node has no machine
-// annotation. A DeepCopy() of the object is returned on success.
-func (c *machineController) findMachineByNodeProviderID(node *apiv1.Node) (*v1beta1.Machine, error) {
-	objs, err := c.nodeInformer.GetIndexer().ByIndex(nodeProviderIDIndex, node.Spec.ProviderID)
+// findMachineByProviderID finds machine matching providerID. A
+// DeepCopy() of the object is returned on success.
+func (c *machineController) findMachineByProviderID(providerID string) (*v1beta1.Machine, error) {
+	objs, err := c.machineInformer.Informer().GetIndexer().ByIndex(machineProviderIDIndex, providerID)
 	if err != nil {
 		return nil, err
 	}
 
 	switch n := len(objs); {
-	case n == 0:
-		return nil, nil
 	case n > 1:
 		return nil, fmt.Errorf("internal error; expected len==1, got %v", n)
+	case n == 1:
+		machine, ok := objs[0].(*v1beta1.Machine)
+		if !ok {
+			return nil, fmt.Errorf("internal error; unexpected type %T", machine)
+		}
+		if machine != nil {
+			return machine.DeepCopy(), nil
+		}
 	}
 
-	node, ok := objs[0].(*apiv1.Node)
-	if !ok {
-		return nil, fmt.Errorf("internal error; unexpected type %T", node)
+	// If the machine object has no providerID--maybe actuator
+	// does not set this value (e.g., OpenStack)--then first
+	// lookup the node using ProviderID. If that is successful
+	// then the machine can be found using the annotation (should
+	// it exist).
+	node, err := c.findNodeByProviderID(providerID)
+	if err != nil {
+		return nil, err
 	}
-
-	if machineName, found := node.Annotations[machineAnnotationKey]; found {
-		return c.findMachine(machineName)
+	if node == nil {
+		return nil, nil
 	}
-
-	return nil, nil
+	return c.findMachine(node.Annotations[machineAnnotationKey])
 }
 
-// findNodeByNodeName find the Node object keyed by node.Name. Returns
+// findNodeByNodeName finds the Node object keyed by name.. Returns
 // nil if it cannot be found. A DeepCopy() of the object is returned
 // on success.
 func (c *machineController) findNodeByNodeName(name string) (*apiv1.Node, error) {
@@ -247,12 +268,16 @@ func newMachineController(
 	nodeInformer := kubeInformerFactory.Core().V1().Nodes().Informer()
 	nodeInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{})
 
-	indexerFuncs := cache.Indexers{
-		nodeProviderIDIndex: indexNodeByNodeProviderID,
+	if err := machineInformer.Informer().GetIndexer().AddIndexers(cache.Indexers{
+		machineProviderIDIndex: indexMachineByProviderID,
+	}); err != nil {
+		return nil, fmt.Errorf("cannot add machine indexer: %v", err)
 	}
 
-	if err := nodeInformer.GetIndexer().AddIndexers(indexerFuncs); err != nil {
-		return nil, fmt.Errorf("cannot add indexers: %v", err)
+	if err := nodeInformer.GetIndexer().AddIndexers(cache.Indexers{
+		nodeProviderIDIndex: indexNodeByProviderID,
+	}); err != nil {
+		return nil, fmt.Errorf("cannot add node indexer: %v", err)
 	}
 
 	return &machineController{
@@ -276,6 +301,18 @@ func (c *machineController) machineSetNodeNames(machineSet *v1beta1.MachineSet) 
 	var nodes []string
 
 	for _, machine := range machines {
+		if machine.Spec.ProviderID != nil && *machine.Spec.ProviderID != "" {
+			// Prefer machine<=>node mapping using ProviderID
+			node, err := c.findNodeByProviderID(*machine.Spec.ProviderID)
+			if err != nil {
+				return nil, err
+			}
+			if node != nil {
+				nodes = append(nodes, node.Spec.ProviderID)
+				continue
+			}
+		}
+
 		if machine.Status.NodeRef == nil {
 			klog.V(4).Infof("Status.NodeRef of machine %q is currently nil", machine.Name)
 			continue
@@ -379,7 +416,7 @@ func (c *machineController) nodeGroups() ([]*nodegroup, error) {
 }
 
 func (c *machineController) nodeGroupForNode(node *apiv1.Node) (*nodegroup, error) {
-	machine, err := c.findMachineByNodeProviderID(node)
+	machine, err := c.findMachineByProviderID(node.Spec.ProviderID)
 	if err != nil {
 		return nil, err
 	}
@@ -433,4 +470,28 @@ func (c *machineController) nodeGroupForNode(node *apiv1.Node) (*nodegroup, erro
 
 	klog.V(4).Infof("node %q is in nodegroup %q", node.Name, machineSet.Name)
 	return nodegroup, nil
+}
+
+// findNodeByProviderID find the Node object keyed by provideID.
+// Returns nil if it cannot be found. A DeepCopy() of the object is
+// returned on success.
+func (c *machineController) findNodeByProviderID(providerID string) (*apiv1.Node, error) {
+	objs, err := c.nodeInformer.GetIndexer().ByIndex(nodeProviderIDIndex, providerID)
+	if err != nil {
+		return nil, err
+	}
+
+	switch n := len(objs); {
+	case n == 0:
+		return nil, nil
+	case n > 1:
+		return nil, fmt.Errorf("internal error; expected len==1, got %v", n)
+	}
+
+	node, ok := objs[0].(*apiv1.Node)
+	if !ok {
+		return nil, fmt.Errorf("internal error; unexpected type %T", node)
+	}
+
+	return node.DeepCopy(), nil
 }
