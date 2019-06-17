@@ -30,6 +30,7 @@ import (
 	kubeclient "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/klog"
+	"k8s.io/utils/pointer"
 )
 
 const (
@@ -365,7 +366,7 @@ func (c *machineController) machineSetNodeGroups() ([]*nodegroup, error) {
 		if err != nil {
 			return err
 		}
-		if ng.MaxSize()-ng.MinSize() > 0 {
+		if ng.MaxSize()-ng.MinSize() > 0 && pointer.Int32PtrDerefOr(machineSet.Spec.Replicas, 0) > 0 {
 			nodegroups = append(nodegroups, ng)
 		}
 		return nil
@@ -394,7 +395,7 @@ func (c *machineController) machineDeploymentNodeGroups() ([]*nodegroup, error) 
 			return nil, err
 		}
 		// add nodegroup iff it has the capacity to scale
-		if ng.MaxSize()-ng.MinSize() > 0 {
+		if ng.MaxSize()-ng.MinSize() > 0 && pointer.Int32PtrDerefOr(md.Spec.Replicas, 0) > 0 {
 			nodegroups = append(nodegroups, ng)
 		}
 	}
