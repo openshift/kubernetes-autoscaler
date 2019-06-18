@@ -193,7 +193,7 @@ func TestNodeGroupNewNodeGroupConstructor(t *testing.T) {
 	t.Run("MachineSet", func(t *testing.T) {
 		for _, tc := range testCases {
 			t.Run(tc.description, func(t *testing.T) {
-				test(t, tc, createMachineSetTestConfig(testNamespace, tc.nodeCount, tc.replicas, tc.annotations))
+				test(t, tc, createMachineSetTestConfig(testNamespace, tc.nodeCount, tc.annotations))
 			})
 		}
 	})
@@ -201,7 +201,7 @@ func TestNodeGroupNewNodeGroupConstructor(t *testing.T) {
 	t.Run("MachineDeployment", func(t *testing.T) {
 		for _, tc := range testCases {
 			t.Run(tc.description, func(t *testing.T) {
-				test(t, tc, createMachineDeploymentTestConfig(testNamespace, tc.nodeCount, tc.replicas, tc.annotations))
+				test(t, tc, createMachineDeploymentTestConfig(testNamespace, tc.nodeCount, tc.annotations))
 			})
 		}
 	})
@@ -296,7 +296,7 @@ func TestNodeGroupIncreaseSizeErrors(t *testing.T) {
 					nodeGroupMinSizeAnnotationKey: "1",
 					nodeGroupMaxSizeAnnotationKey: "10",
 				}
-				test(t, &tc, createMachineSetTestConfig(testNamespace, int(tc.initial), tc.initial, annotations))
+				test(t, &tc, createMachineSetTestConfig(testNamespace, int(tc.initial), annotations))
 			})
 		}
 	})
@@ -308,7 +308,7 @@ func TestNodeGroupIncreaseSizeErrors(t *testing.T) {
 					nodeGroupMinSizeAnnotationKey: "1",
 					nodeGroupMaxSizeAnnotationKey: "10",
 				}
-				test(t, &tc, createMachineDeploymentTestConfig(testNamespace, int(tc.initial), tc.initial, annotations))
+				test(t, &tc, createMachineDeploymentTestConfig(testNamespace, int(tc.initial), annotations))
 			})
 		}
 	})
@@ -385,7 +385,7 @@ func TestNodeGroupIncreaseSize(t *testing.T) {
 			expected:    4,
 			delta:       1,
 		}
-		test(t, &tc, createMachineSetTestConfig(testNamespace, int(tc.initial), tc.initial, annotations))
+		test(t, &tc, createMachineSetTestConfig(testNamespace, int(tc.initial), annotations))
 	})
 
 	t.Run("MachineDeployment", func(t *testing.T) {
@@ -395,7 +395,7 @@ func TestNodeGroupIncreaseSize(t *testing.T) {
 			expected:    4,
 			delta:       1,
 		}
-		test(t, &tc, createMachineDeploymentTestConfig(testNamespace, int(tc.initial), tc.initial, annotations))
+		test(t, &tc, createMachineDeploymentTestConfig(testNamespace, int(tc.initial), annotations))
 	})
 }
 
@@ -477,7 +477,7 @@ func TestNodeGroupDecreaseTargetSize(t *testing.T) {
 			expected:    2,
 			delta:       -1,
 		}
-		test(t, &tc, createMachineSetTestConfig(testNamespace, int(tc.initial), tc.initial, annotations))
+		test(t, &tc, createMachineSetTestConfig(testNamespace, int(tc.initial), annotations))
 	})
 
 	t.Run("MachineDeployment", func(t *testing.T) {
@@ -487,7 +487,7 @@ func TestNodeGroupDecreaseTargetSize(t *testing.T) {
 			expected:    2,
 			delta:       -1,
 		}
-		test(t, &tc, createMachineDeploymentTestConfig(testNamespace, int(tc.initial), tc.initial, annotations))
+		test(t, &tc, createMachineDeploymentTestConfig(testNamespace, int(tc.initial), annotations))
 	})
 }
 
@@ -580,7 +580,7 @@ func TestNodeGroupDecreaseSizeErrors(t *testing.T) {
 					nodeGroupMinSizeAnnotationKey: "1",
 					nodeGroupMaxSizeAnnotationKey: "10",
 				}
-				test(t, &tc, createMachineSetTestConfig(testNamespace, int(tc.initial), tc.initial, annotations))
+				test(t, &tc, createMachineSetTestConfig(testNamespace, int(tc.initial), annotations))
 			})
 		}
 	})
@@ -592,7 +592,7 @@ func TestNodeGroupDecreaseSizeErrors(t *testing.T) {
 					nodeGroupMinSizeAnnotationKey: "1",
 					nodeGroupMaxSizeAnnotationKey: "10",
 				}
-				test(t, &tc, createMachineDeploymentTestConfig(testNamespace, int(tc.initial), tc.initial, annotations))
+				test(t, &tc, createMachineDeploymentTestConfig(testNamespace, int(tc.initial), annotations))
 			})
 		}
 	})
@@ -674,14 +674,14 @@ func TestNodeGroupDeleteNodes(t *testing.T) {
 	// sorting and the expected semantics in test() will fail.
 
 	t.Run("MachineSet", func(t *testing.T) {
-		test(t, createMachineSetTestConfig(testNamespace, 10, 10, map[string]string{
+		test(t, createMachineSetTestConfig(testNamespace, 10, map[string]string{
 			nodeGroupMinSizeAnnotationKey: "1",
 			nodeGroupMaxSizeAnnotationKey: "10",
 		}))
 	})
 
 	t.Run("MachineDeployment", func(t *testing.T) {
-		test(t, createMachineDeploymentTestConfig(testNamespace, 10, 10, map[string]string{
+		test(t, createMachineDeploymentTestConfig(testNamespace, 10, map[string]string{
 			nodeGroupMinSizeAnnotationKey: "1",
 			nodeGroupMaxSizeAnnotationKey: "10",
 		}))
@@ -762,14 +762,14 @@ func TestNodeGroupMachineSetDeleteNodesWithMismatchedNodes(t *testing.T) {
 	}
 
 	t.Run("MachineSet", func(t *testing.T) {
-		testConfig0 := createMachineSetTestConfigs(testNamespace+"0", 1, 2, 2, annotations)
-		testConfig1 := createMachineSetTestConfigs(testNamespace+"1", 1, 2, 2, annotations)
+		testConfig0 := createMachineSetTestConfigs(testNamespace+"0", 1, 2, annotations)
+		testConfig1 := createMachineSetTestConfigs(testNamespace+"1", 1, 2, annotations)
 		test(t, 2, append(testConfig0, testConfig1...))
 	})
 
 	t.Run("MachineDeployment", func(t *testing.T) {
-		testConfig0 := createMachineDeploymentTestConfigs(testNamespace+"0", 1, 2, 2, annotations)
-		testConfig1 := createMachineDeploymentTestConfigs(testNamespace+"1", 1, 2, 2, annotations)
+		testConfig0 := createMachineDeploymentTestConfigs(testNamespace+"0", 1, 2, annotations)
+		testConfig1 := createMachineDeploymentTestConfigs(testNamespace+"1", 1, 2, annotations)
 		test(t, 2, append(testConfig0, testConfig1...))
 	})
 }
