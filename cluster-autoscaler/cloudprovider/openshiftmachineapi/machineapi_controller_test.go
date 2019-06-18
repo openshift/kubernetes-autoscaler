@@ -736,19 +736,27 @@ func TestControllerNodeGroups(t *testing.T) {
 
 func TestControllerNodeGroupsNodeCount(t *testing.T) {
 	type testCase struct {
-		nodeGroups    int
-		nodesPerGroup int
+		nodeGroups            int
+		nodesPerGroup         int
+		expectedNodeGroups    int
+		expectedNodesPerGroup int
 	}
 
 	var testCases = []testCase{{
-		nodeGroups:    0,
-		nodesPerGroup: 0,
+		nodeGroups:            0,
+		nodesPerGroup:         0,
+		expectedNodeGroups:    0,
+		expectedNodesPerGroup: 0,
 	}, {
-		nodeGroups:    1,
-		nodesPerGroup: 0,
+		nodeGroups:            1,
+		nodesPerGroup:         0,
+		expectedNodeGroups:    0,
+		expectedNodesPerGroup: 0,
 	}, {
-		nodeGroups:    2,
-		nodesPerGroup: 10,
+		nodeGroups:            2,
+		nodesPerGroup:         10,
+		expectedNodeGroups:    2,
+		expectedNodesPerGroup: 10,
 	}}
 
 	test := func(t *testing.T, tc testCase, testConfigs []*testConfig) {
@@ -759,8 +767,8 @@ func TestControllerNodeGroupsNodeCount(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if got := len(nodegroups); got != tc.nodeGroups {
-			t.Fatalf("expected %d, got %d", tc.nodeGroups, got)
+		if got := len(nodegroups); got != tc.expectedNodeGroups {
+			t.Fatalf("expected %d, got %d", tc.expectedNodeGroups, got)
 		}
 
 		for i := range nodegroups {
@@ -768,8 +776,8 @@ func TestControllerNodeGroupsNodeCount(t *testing.T) {
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			if got := len(nodes); got != tc.nodesPerGroup {
-				t.Fatalf("expected %d, got %d", tc.nodesPerGroup, got)
+			if got := len(nodes); got != tc.expectedNodesPerGroup {
+				t.Fatalf("expected %d, got %d", tc.expectedNodesPerGroup, got)
 			}
 		}
 	}
