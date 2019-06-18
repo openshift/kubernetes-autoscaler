@@ -51,7 +51,6 @@ type testSpec struct {
 	machineSetName          string
 	namespace               string
 	nodeCount               int
-	replicaCount            int32
 	rootIsMachineDeployment bool
 }
 
@@ -93,23 +92,23 @@ func mustCreateTestController(t *testing.T, testConfigs ...*testConfig) (*machin
 	}
 }
 
-func createMachineSetTestConfig(namespace string, nodeCount int, replicaCount int32, annotations map[string]string) *testConfig {
-	return createTestConfigs(createTestSpecs(namespace, 1, nodeCount, replicaCount, false, annotations)...)[0]
+func createMachineSetTestConfig(namespace string, nodeCount int, annotations map[string]string) *testConfig {
+	return createTestConfigs(createTestSpecs(namespace, 1, nodeCount, false, annotations)...)[0]
 }
 
-func createMachineSetTestConfigs(namespace string, configCount, nodeCount int, replicaCount int32, annotations map[string]string) []*testConfig {
-	return createTestConfigs(createTestSpecs(namespace, configCount, nodeCount, replicaCount, false, annotations)...)
+func createMachineSetTestConfigs(namespace string, configCount, nodeCount int, annotations map[string]string) []*testConfig {
+	return createTestConfigs(createTestSpecs(namespace, configCount, nodeCount, false, annotations)...)
 }
 
-func createMachineDeploymentTestConfig(namespace string, nodeCount int, replicaCount int32, annotations map[string]string) *testConfig {
-	return createTestConfigs(createTestSpecs(namespace, 1, nodeCount, replicaCount, true, annotations)...)[0]
+func createMachineDeploymentTestConfig(namespace string, nodeCount int, annotations map[string]string) *testConfig {
+	return createTestConfigs(createTestSpecs(namespace, 1, nodeCount, true, annotations)...)[0]
 }
 
-func createMachineDeploymentTestConfigs(namespace string, configCount, nodeCount int, replicaCount int32, annotations map[string]string) []*testConfig {
-	return createTestConfigs(createTestSpecs(namespace, configCount, nodeCount, replicaCount, true, annotations)...)
+func createMachineDeploymentTestConfigs(namespace string, configCount, nodeCount int, annotations map[string]string) []*testConfig {
+	return createTestConfigs(createTestSpecs(namespace, configCount, nodeCount, true, annotations)...)
 }
 
-func createTestSpecs(namespace string, scalableResourceCount, nodeCount int, replicaCount int32, isMachineDeployment bool, annotations map[string]string) []testSpec {
+func createTestSpecs(namespace string, scalableResourceCount, nodeCount int, isMachineDeployment bool, annotations map[string]string) []testSpec {
 	var specs []testSpec
 
 	for i := 0; i < scalableResourceCount; i++ {
@@ -119,7 +118,6 @@ func createTestSpecs(namespace string, scalableResourceCount, nodeCount int, rep
 			machineSetName:          fmt.Sprintf("machineset-%d", i),
 			namespace:               strings.ToLower(namespace),
 			nodeCount:               nodeCount,
-			replicaCount:            replicaCount,
 			rootIsMachineDeployment: isMachineDeployment,
 		})
 	}
@@ -150,7 +148,7 @@ func createTestConfigs(specs ...testSpec) []*testConfig {
 
 		if !spec.rootIsMachineDeployment {
 			config.machineSet.ObjectMeta.Annotations = spec.annotations
-			config.machineSet.Spec.Replicas = int32ptr(spec.replicaCount)
+			config.machineSet.Spec.Replicas = int32ptr(int32(spec.nodeCount))
 		} else {
 			config.machineDeployment = &v1beta1.MachineDeployment{
 				TypeMeta: v1.TypeMeta{
@@ -163,7 +161,7 @@ func createTestConfigs(specs ...testSpec) []*testConfig {
 					Annotations: spec.annotations,
 				},
 				Spec: v1beta1.MachineDeploymentSpec{
-					Replicas: int32ptr(spec.replicaCount),
+					Replicas: int32ptr(int32(spec.nodeCount)),
 				},
 			}
 
@@ -340,7 +338,7 @@ func TestControllerFindMachineByID(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.description, func(t *testing.T) {
-			testConfig := createMachineSetTestConfig(testNamespace, 1, 1, map[string]string{
+			testConfig := createMachineSetTestConfig(testNamespace, 1, map[string]string{
 				nodeGroupMinSizeAnnotationKey: "1",
 				nodeGroupMaxSizeAnnotationKey: "10",
 			})
@@ -356,7 +354,7 @@ func TestControllerFindMachineByID(t *testing.T) {
 }
 
 func TestControllerFindMachineOwner(t *testing.T) {
-	testConfig := createMachineSetTestConfig(testNamespace, 1, 1, map[string]string{
+	testConfig := createMachineSetTestConfig(testNamespace, 1, map[string]string{
 		nodeGroupMinSizeAnnotationKey: "1",
 		nodeGroupMaxSizeAnnotationKey: "10",
 	})
@@ -401,7 +399,7 @@ func TestControllerFindMachineOwner(t *testing.T) {
 }
 
 func TestControllerFindMachineByProviderID(t *testing.T) {
-	testConfig := createMachineSetTestConfig(testNamespace, 1, 1, map[string]string{
+	testConfig := createMachineSetTestConfig(testNamespace, 1, map[string]string{
 		nodeGroupMinSizeAnnotationKey: "1",
 		nodeGroupMaxSizeAnnotationKey: "10",
 	})
@@ -448,7 +446,7 @@ func TestControllerFindMachineByProviderID(t *testing.T) {
 }
 
 func TestControllerFindNodeByNodeName(t *testing.T) {
-	testConfig := createMachineSetTestConfig(testNamespace, 1, 1, map[string]string{
+	testConfig := createMachineSetTestConfig(testNamespace, 1, map[string]string{
 		nodeGroupMinSizeAnnotationKey: "1",
 		nodeGroupMaxSizeAnnotationKey: "10",
 	})
@@ -476,7 +474,7 @@ func TestControllerFindNodeByNodeName(t *testing.T) {
 }
 
 func TestControllerMachinesInMachineSet(t *testing.T) {
-	testConfig1 := createMachineSetTestConfig("testConfig1", 5, 5, map[string]string{
+	testConfig1 := createMachineSetTestConfig("testConfig1", 5, map[string]string{
 		nodeGroupMinSizeAnnotationKey: "1",
 		nodeGroupMaxSizeAnnotationKey: "10",
 	})
@@ -488,7 +486,7 @@ func TestControllerMachinesInMachineSet(t *testing.T) {
 	// nodes and the additional machineset to the existing set of
 	// test objects in the controller. This gives us two
 	// machinesets, each with their own machines and linked nodes.
-	testConfig2 := createMachineSetTestConfig("testConfig2", 5, 5, map[string]string{
+	testConfig2 := createMachineSetTestConfig("testConfig2", 5, map[string]string{
 		nodeGroupMinSizeAnnotationKey: "1",
 		nodeGroupMaxSizeAnnotationKey: "10",
 	})
@@ -549,7 +547,7 @@ func TestControllerMachinesInMachineSet(t *testing.T) {
 }
 
 func TestControllerLookupNodeGroupForNonExistentNode(t *testing.T) {
-	testConfig := createMachineSetTestConfig(testNamespace, 1, 1, map[string]string{
+	testConfig := createMachineSetTestConfig(testNamespace, 1, map[string]string{
 		nodeGroupMinSizeAnnotationKey: "1",
 		nodeGroupMaxSizeAnnotationKey: "10",
 	})
@@ -595,7 +593,7 @@ func TestControllerNodeGroupForNodeWithMissingMachineOwner(t *testing.T) {
 	}
 
 	t.Run("MachineSet", func(t *testing.T) {
-		testConfig := createMachineSetTestConfig(testNamespace, 1, 1, map[string]string{
+		testConfig := createMachineSetTestConfig(testNamespace, 1, map[string]string{
 			nodeGroupMinSizeAnnotationKey: "1",
 			nodeGroupMaxSizeAnnotationKey: "10",
 		})
@@ -603,7 +601,7 @@ func TestControllerNodeGroupForNodeWithMissingMachineOwner(t *testing.T) {
 	})
 
 	t.Run("MachineDeployment", func(t *testing.T) {
-		testConfig := createMachineDeploymentTestConfig(testNamespace, 1, 1, map[string]string{
+		testConfig := createMachineDeploymentTestConfig(testNamespace, 1, map[string]string{
 			nodeGroupMinSizeAnnotationKey: "1",
 			nodeGroupMaxSizeAnnotationKey: "10",
 		})
@@ -628,7 +626,7 @@ func TestControllerNodeGroupForNodeWithPositiveScalingBounds(t *testing.T) {
 	}
 
 	t.Run("MachineSet", func(t *testing.T) {
-		testConfig := createMachineSetTestConfig(testNamespace, 1, 1, map[string]string{
+		testConfig := createMachineSetTestConfig(testNamespace, 1, map[string]string{
 			nodeGroupMinSizeAnnotationKey: "1",
 			nodeGroupMaxSizeAnnotationKey: "1",
 		})
@@ -636,7 +634,7 @@ func TestControllerNodeGroupForNodeWithPositiveScalingBounds(t *testing.T) {
 	})
 
 	t.Run("MachineDeployment", func(t *testing.T) {
-		testConfig := createMachineDeploymentTestConfig(testNamespace, 1, 1, map[string]string{
+		testConfig := createMachineDeploymentTestConfig(testNamespace, 1, map[string]string{
 			nodeGroupMinSizeAnnotationKey: "1",
 			nodeGroupMaxSizeAnnotationKey: "1",
 		})
@@ -668,14 +666,14 @@ func TestControllerNodeGroups(t *testing.T) {
 	assertNodegroupLen(t, controller, 0)
 
 	// Test #2: add 5 machineset-based nodegroups
-	machineSetConfigs := createMachineSetTestConfigs("MachineSet", 5, 1, 1, annotations)
+	machineSetConfigs := createMachineSetTestConfigs("MachineSet", 5, 1, annotations)
 	if err := addTestConfigs(t, controller, machineSetConfigs...); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	assertNodegroupLen(t, controller, 5)
 
 	// Test #2: add 2 machinedeployment-based nodegroups
-	machineDeploymentConfigs := createMachineDeploymentTestConfigs("MachineDeployment", 2, 1, 1, annotations)
+	machineDeploymentConfigs := createMachineDeploymentTestConfigs("MachineDeployment", 2, 1, annotations)
 	if err := addTestConfigs(t, controller, machineDeploymentConfigs...); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -699,14 +697,14 @@ func TestControllerNodeGroups(t *testing.T) {
 	}
 
 	// Test #5: machineset with no scaling bounds results in no nodegroups
-	machineSetConfigs = createMachineSetTestConfigs("MachineSet", 5, 1, 1, annotations)
+	machineSetConfigs = createMachineSetTestConfigs("MachineSet", 5, 1, annotations)
 	if err := addTestConfigs(t, controller, machineSetConfigs...); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	assertNodegroupLen(t, controller, 0)
 
 	// Test #6: machinedeployment with no scaling bounds results in no nodegroups
-	machineDeploymentConfigs = createMachineDeploymentTestConfigs("MachineDeployment", 2, 1, 1, annotations)
+	machineDeploymentConfigs = createMachineDeploymentTestConfigs("MachineDeployment", 2, 1, annotations)
 	if err := addTestConfigs(t, controller, machineDeploymentConfigs...); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -718,7 +716,7 @@ func TestControllerNodeGroups(t *testing.T) {
 	}
 
 	// Test #7: machineset with bad scaling bounds results in an error and no nodegroups
-	machineSetConfigs = createMachineSetTestConfigs("MachineSet", 5, 1, 1, annotations)
+	machineSetConfigs = createMachineSetTestConfigs("MachineSet", 5, 1, annotations)
 	if err := addTestConfigs(t, controller, machineSetConfigs...); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -727,7 +725,7 @@ func TestControllerNodeGroups(t *testing.T) {
 	}
 
 	// Test #8: machinedeployment with bad scaling bounds results in an error and no nodegroups
-	machineDeploymentConfigs = createMachineDeploymentTestConfigs("MachineDeployment", 2, 1, 1, annotations)
+	machineDeploymentConfigs = createMachineDeploymentTestConfigs("MachineDeployment", 2, 1, annotations)
 	if err := addTestConfigs(t, controller, machineDeploymentConfigs...); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -783,19 +781,19 @@ func TestControllerNodeGroupsNodeCount(t *testing.T) {
 
 	t.Run("MachineSet", func(t *testing.T) {
 		for _, tc := range testCases {
-			test(t, tc, createMachineSetTestConfigs(testNamespace, tc.nodeGroups, tc.nodesPerGroup, int32(tc.nodesPerGroup), annotations))
+			test(t, tc, createMachineSetTestConfigs(testNamespace, tc.nodeGroups, tc.nodesPerGroup, annotations))
 		}
 	})
 
 	t.Run("MachineDeployment", func(t *testing.T) {
 		for _, tc := range testCases {
-			test(t, tc, createMachineDeploymentTestConfigs(testNamespace, tc.nodeGroups, tc.nodesPerGroup, int32(tc.nodesPerGroup), annotations))
+			test(t, tc, createMachineDeploymentTestConfigs(testNamespace, tc.nodeGroups, tc.nodesPerGroup, annotations))
 		}
 	})
 }
 
 func TestControllerFindMachineFromNodeAnnotation(t *testing.T) {
-	testConfig := createMachineSetTestConfig(testNamespace, 1, 1, map[string]string{
+	testConfig := createMachineSetTestConfig(testNamespace, 1, map[string]string{
 		nodeGroupMinSizeAnnotationKey: "1",
 		nodeGroupMaxSizeAnnotationKey: "10",
 	})
@@ -842,7 +840,7 @@ func TestControllerFindMachineFromNodeAnnotation(t *testing.T) {
 }
 
 func TestControllerMachineSetNodeNamesWithoutLinkage(t *testing.T) {
-	testConfig := createMachineSetTestConfig(testNamespace, 1, 3, map[string]string{
+	testConfig := createMachineSetTestConfig(testNamespace, 3, map[string]string{
 		nodeGroupMinSizeAnnotationKey: "1",
 		nodeGroupMaxSizeAnnotationKey: "10",
 	})
@@ -886,7 +884,7 @@ func TestControllerMachineSetNodeNamesWithoutLinkage(t *testing.T) {
 }
 
 func TestControllerMachineSetNodeNamesUsingProviderID(t *testing.T) {
-	testConfig := createMachineSetTestConfig(testNamespace, 3, 3, map[string]string{
+	testConfig := createMachineSetTestConfig(testNamespace, 3, map[string]string{
 		nodeGroupMinSizeAnnotationKey: "1",
 		nodeGroupMaxSizeAnnotationKey: "10",
 	})
@@ -935,7 +933,7 @@ func TestControllerMachineSetNodeNamesUsingProviderID(t *testing.T) {
 }
 
 func TestControllerMachineSetNodeNamesUsingStatusNodeRefName(t *testing.T) {
-	testConfig := createMachineSetTestConfig(testNamespace, 3, 3, map[string]string{
+	testConfig := createMachineSetTestConfig(testNamespace, 3, map[string]string{
 		nodeGroupMinSizeAnnotationKey: "1",
 		nodeGroupMaxSizeAnnotationKey: "10",
 	})
