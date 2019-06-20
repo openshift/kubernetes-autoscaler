@@ -75,7 +75,7 @@ Cluster Autoscaler decreases the size of the cluster when some nodes are consist
 * Pods with restrictive PodDisruptionBudget.
 * Kube-system pods that:
   * are not run on the node by default, *
-  * don't have PDB or their PDB is too restrictive (since CA 0.6).
+  * don't have a [pod disruption budget](https://kubernetes.io/docs/concepts/workloads/pods/disruptions/#how-disruption-budgets-work) set or their PDB is too restrictive (since CA 0.6).
 * Pods that are not backed by a controller object (so not created by deployment, replica set, job, stateful set etc). *
 * Pods with local storage. *
 * Pods that cannot be moved elsewhere due to various constraints (lack of resources, non-matching node selectors or affinity,
@@ -205,8 +205,8 @@ Pods with priority lower than this cutoff:
 
 Nothing changes for pods with priority greater or equal to cutoff, and pods without priority.
 
-Default priority cutoff is 0. It can be changed using `--expendable-pods-priority-cutoff` flag,
-but we discourage it.
+Default priority cutoff is -10 (since version 1.12, was 0 before that).
+It can be changed using `--expendable-pods-priority-cutoff` flag, but we discourage it.
 Cluster Autoscaler also doesn't trigger scale-up if an unschedulable pod is already waiting for a lower
 priority pod preemption.
 
@@ -317,12 +317,16 @@ number of replicas when cluster grows and decrease the number of replicas if clu
 
 Configuration of dynamic overprovisioning:
 
-1. (For 1.10, and below) Enable priority preemption in your cluster. It can be done by exporting following env
+1. (For 1.10, and below) Enable priority preemption in your cluster. 
+
+For GCE, it can be done by exporting following env
 variables before executing kube-up (more details [here](https://kubernetes.io/docs/concepts/configuration/pod-priority-preemption/)):
 ```sh
 export KUBE_RUNTIME_CONFIG=scheduling.k8s.io/v1alpha1=true
 export ENABLE_POD_PRIORITY=true
 ```
+
+For AWS using kops, see [this issue](https://github.com/kubernetes/autoscaler/issues/1410#issuecomment-439840945).
 
 2. Define priority class for overprovisioning pods. Priority -1 will be reserved for
 overprovisioning pods as it is the lowest priority that triggers scaling clusters. Other pods need
@@ -344,7 +348,7 @@ description: "Priority class used by overprovisioning."
 **For 1.11:**
 
 ```
-apiVersion: scheduling.k8s.io/v1beta
+apiVersion: scheduling.k8s.io/v1beta1
 kind: PriorityClass
 metadata:
   name: overprovisioning
@@ -472,7 +476,7 @@ needed, Cluster Autoscaler checks which nodes are unneeded. A node is considered
 * All pods running on the node (except these that run on all nodes by default, like manifest-run pods
 or pods created by daemonsets) can be moved to other nodes. See
 [What types of pods can prevent CA from removing a node?](#what-types-of-pods-can-prevent-ca-from-removing-a-node) section for more details on what pods don't fulfill this condition, even if there is space for them elsewhere.
-While checking this condition, the new locations of all moved pods are memorized.
+While checking this condition, the new locations of all movable pods are memorized.
 With that, Cluster Autoscaler knows where each pod can be moved, and which nodes
 depend on which other nodes in terms of pod migration. Of course, it may happen that eventually
 the scheduler will place the pods somewhere else.

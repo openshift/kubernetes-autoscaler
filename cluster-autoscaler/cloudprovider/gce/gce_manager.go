@@ -48,7 +48,7 @@ const (
 )
 
 var (
-	defaultOAuthScopes []string = []string{
+	defaultOAuthScopes = []string{
 		"https://www.googleapis.com/auth/compute",
 		"https://www.googleapis.com/auth/devstorage.read_only",
 		"https://www.googleapis.com/auth/service.management.readonly",
@@ -66,7 +66,7 @@ type GceManager interface {
 	// GetMigs returns list of registered MIGs.
 	GetMigs() []*MigInformation
 	// GetMigNodes returns mig nodes.
-	GetMigNodes(mig Mig) ([]string, error)
+	GetMigNodes(mig Mig) ([]cloudprovider.Instance, error)
 	// GetMigForInstance returns MIG to which the given instance belongs.
 	GetMigForInstance(instance *GceRef) (Mig, error)
 	// GetMigTemplateNode returns a template node for MIG.
@@ -206,16 +206,21 @@ func (m *gceManagerImpl) registerMig(mig Mig) bool {
 
 // GetMigSize gets MIG size.
 func (m *gceManagerImpl) GetMigSize(mig Mig) (int64, error) {
+	if migSize, found := m.cache.GetMigTargetSize(mig.GceRef()); found {
+		return migSize, nil
+	}
 	targetSize, err := m.GceService.FetchMigTargetSize(mig.GceRef())
 	if err != nil {
 		return -1, err
 	}
+	m.cache.SetMigTargetSize(mig.GceRef(), targetSize)
 	return targetSize, nil
 }
 
 // SetMigSize sets MIG size.
 func (m *gceManagerImpl) SetMigSize(mig Mig, size int64) error {
 	klog.V(0).Infof("Setting mig size %s to %d", mig.Id(), size)
+	m.cache.InvalidateTargetSizeCacheForMig(mig.GceRef())
 	return m.GceService.ResizeMig(mig.GceRef(), size)
 }
 
@@ -234,10 +239,10 @@ func (m *gceManagerImpl) DeleteInstances(instances []*GceRef) error {
 			return err
 		}
 		if mig != commonMig {
-			return fmt.Errorf("Cannot delete instances which don't belong to the same MIG.")
+			return fmt.Errorf("cannot delete instances which don't belong to the same MIG.")
 		}
 	}
-
+	m.cache.InvalidateTargetSizeCacheForMig(commonMig.GceRef())
 	return m.GceService.DeleteInstances(commonMig.GceRef(), instances)
 }
 
@@ -252,20 +257,13 @@ func (m *gceManagerImpl) GetMigForInstance(instance *GceRef) (Mig, error) {
 }
 
 // GetMigNodes returns mig nodes.
-func (m *gceManagerImpl) GetMigNodes(mig Mig) ([]string, error) {
-	instances, err := m.GceService.FetchMigInstances(mig.GceRef())
-	if err != nil {
-		return []string{}, err
-	}
-	result := make([]string, 0)
-	for _, ref := range instances {
-		result = append(result, fmt.Sprintf("gce://%s/%s/%s", ref.Project, ref.Zone, ref.Name))
-	}
-	return result, nil
+func (m *gceManagerImpl) GetMigNodes(mig Mig) ([]cloudprovider.Instance, error) {
+	return m.GceService.FetchMigInstances(mig.GceRef())
 }
 
 // Refresh triggers refresh of cached resources.
 func (m *gceManagerImpl) Refresh() error {
+	m.cache.InvalidateTargetSizeCache()
 	if m.lastRefresh.Add(refreshInterval).After(time.Now()) {
 		return nil
 	}

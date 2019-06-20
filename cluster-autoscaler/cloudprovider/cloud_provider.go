@@ -17,16 +17,12 @@ limitations under the License.
 package cloudprovider
 
 import (
-	"bytes"
-	"fmt"
-	"math"
 	"time"
 
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
-	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/errors"
-	schedulercache "k8s.io/kubernetes/pkg/scheduler/cache"
+	schedulernodeinfo "k8s.io/kubernetes/pkg/scheduler/nodeinfo"
 )
 
 // CloudProvider contains configuration info and functions for interacting with
@@ -60,9 +56,6 @@ type CloudProvider interface {
 	// GetResourceLimiter returns struct containing limits (max, min) for resources (cores, memory etc.).
 	GetResourceLimiter() (*ResourceLimiter, error)
 
-	// GetInstanceID gets the instance ID for the specified node.
-	GetInstanceID(node *apiv1.Node) string
-
 	// Cleanup cleans up open resources before the cloud provider is destroyed, i.e. go routines etc.
 	Cleanup() error
 
@@ -72,14 +65,14 @@ type CloudProvider interface {
 }
 
 // ErrNotImplemented is returned if a method is not implemented.
-var ErrNotImplemented errors.AutoscalerError = errors.NewAutoscalerError(errors.InternalError, "Not implemented")
+var ErrNotImplemented = errors.NewAutoscalerError(errors.InternalError, "Not implemented")
 
 // ErrAlreadyExist is returned if a method is not implemented.
-var ErrAlreadyExist errors.AutoscalerError = errors.NewAutoscalerError(errors.InternalError, "Already exist")
+var ErrAlreadyExist = errors.NewAutoscalerError(errors.InternalError, "Already exist")
 
 // ErrIllegalConfiguration is returned when trying to create NewNodeGroup with
 // configuration that is not supported by cloudprovider.
-var ErrIllegalConfiguration errors.AutoscalerError = errors.NewAutoscalerError(errors.InternalError, "Configuration not allowed by cloud provider")
+var ErrIllegalConfiguration = errors.NewAutoscalerError(errors.InternalError, "Configuration not allowed by cloud provider")
 
 // NodeGroup contains configuration info and functions to control a set
 // of nodes that have the same capacity and set of labels.
@@ -124,13 +117,13 @@ type NodeGroup interface {
 	// Other fields are optional.
 	Nodes() ([]Instance, error)
 
-	// TemplateNodeInfo returns a schedulercache.NodeInfo structure of an empty
+	// TemplateNodeInfo returns a schedulernodeinfo.NodeInfo structure of an empty
 	// (as if just started) node. This will be used in scale-up simulations to
 	// predict what would a new node look like if a node group was expanded. The returned
 	// NodeInfo is expected to have a fully populated Node object, with all of the labels,
 	// capacity and allocatable information as well as all pods that are started on
 	// the node by default, using manifest (most likely only kube-proxy). Implementation optional.
-	TemplateNodeInfo() (*schedulercache.NodeInfo, error)
+	TemplateNodeInfo() (*schedulernodeinfo.NodeInfo, error)
 
 	// Exist checks if the node group really exists on the cloud provider side. Allows to tell the
 	// theoretical node group from the real one. Implementation required.
@@ -172,12 +165,12 @@ type InstanceStatus struct {
 type InstanceState int
 
 const (
-	// STATE_RUNNING means instance is running
-	STATE_RUNNING InstanceState = 1
-	// STATE_BEING_CREATED means instance is being created
-	STATE_BEING_CREATED InstanceState = 2
-	// STATE_BEING_DELETED means instance is being deleted
-	STATE_BEING_DELETED InstanceState = 3
+	// InstanceRunning means instance is running
+	InstanceRunning InstanceState = 1
+	// InstanceCreating means instance is being created
+	InstanceCreating InstanceState = 2
+	// InstanceDeleting means instance is being deleted
+	InstanceDeleting InstanceState = 3
 )
 
 // InstanceErrorInfo provides information about error condition on instance
@@ -194,11 +187,11 @@ type InstanceErrorInfo struct {
 type InstanceErrorClass int
 
 const (
-	// ERROR_OUT_OF_RESOURCES means that error is related to lack of resources (e.g. due to
+	// OutOfResourcesErrorClass means that error is related to lack of resources (e.g. due to
 	// stockout or quota-exceeded situation)
-	ERROR_OUT_OF_RESOURCES InstanceErrorClass = 1
-	// ERROR_OTHER means some non-specific error situation occurred
-	ERROR_OTHER InstanceErrorClass = 99
+	OutOfResourcesErrorClass InstanceErrorClass = 1
+	// OtherErrorClass means some non-specific error situation occurred
+	OtherErrorClass InstanceErrorClass = 99
 )
 
 // PricingModel contains information about the node price and how it changes in time.
@@ -235,73 +228,4 @@ func ContainsGpuResources(resources []string) bool {
 		}
 	}
 	return false
-}
-
-// ResourceLimiter contains limits (max, min) for resources (cores, memory etc.).
-type ResourceLimiter struct {
-	minLimits map[string]int64
-	maxLimits map[string]int64
-}
-
-// NewResourceLimiter creates new ResourceLimiter for map. Maps are deep copied.
-func NewResourceLimiter(minLimits map[string]int64, maxLimits map[string]int64) *ResourceLimiter {
-	minLimitsCopy := make(map[string]int64)
-	maxLimitsCopy := make(map[string]int64)
-	for key, value := range minLimits {
-		if value > 0 {
-			minLimitsCopy[key] = value
-		}
-	}
-	for key, value := range maxLimits {
-		maxLimitsCopy[key] = value
-	}
-	return &ResourceLimiter{minLimitsCopy, maxLimitsCopy}
-}
-
-// GetMin returns minimal number of resources for a given resource type.
-func (r *ResourceLimiter) GetMin(resourceName string) int64 {
-	result, found := r.minLimits[resourceName]
-	if found {
-		return result
-	}
-	return 0
-}
-
-// GetMax returns maximal number of resources for a given resource type.
-func (r *ResourceLimiter) GetMax(resourceName string) int64 {
-	result, found := r.maxLimits[resourceName]
-	if found {
-		return result
-	}
-	return math.MaxInt64
-}
-
-// GetResources returns list of all resource names for which min or max limits are defined
-func (r *ResourceLimiter) GetResources() []string {
-	minResources := sets.StringKeySet(r.minLimits)
-	maxResources := sets.StringKeySet(r.maxLimits)
-	return minResources.Union(maxResources).List()
-}
-
-// HasMinLimitSet returns true iff minimal limit is set for given resource.
-func (r *ResourceLimiter) HasMinLimitSet(resourceName string) bool {
-	_, found := r.minLimits[resourceName]
-	return found
-}
-
-// HasMaxLimitSet returns true iff maximal limit is set for given resource.
-func (r *ResourceLimiter) HasMaxLimitSet(resourceName string) bool {
-	_, found := r.maxLimits[resourceName]
-	return found
-}
-
-func (r *ResourceLimiter) String() string {
-	var buffer bytes.Buffer
-	for _, name := range r.GetResources() {
-		if buffer.Len() > 0 {
-			buffer.WriteString(", ")
-		}
-		buffer.WriteString(fmt.Sprintf("{%s : %d - %d}", name, r.GetMin(name), r.GetMax(name)))
-	}
-	return buffer.String()
 }

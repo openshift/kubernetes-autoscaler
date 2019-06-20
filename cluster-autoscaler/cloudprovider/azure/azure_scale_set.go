@@ -29,9 +29,10 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	"k8s.io/autoscaler/cluster-autoscaler/config/dynamic"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/gpu"
+	cloudvolume "k8s.io/cloud-provider/volume"
 	"k8s.io/klog"
 	kubeletapis "k8s.io/kubernetes/pkg/kubelet/apis"
-	schedulercache "k8s.io/kubernetes/pkg/scheduler/cache"
+	schedulernodeinfo "k8s.io/kubernetes/pkg/scheduler/nodeinfo"
 
 	"github.com/Azure/azure-sdk-for-go/services/compute/mgmt/2018-10-01/compute"
 )
@@ -146,6 +147,7 @@ func (scaleSet *ScaleSet) SetScaleSetSize(size int64) error {
 	}
 
 	op.Sku.Capacity = &size
+	op.Identity = nil
 	op.VirtualMachineScaleSetProperties.ProvisioningState = nil
 	updateCtx, updateCancel := getContextWithCancel()
 	defer updateCancel()
@@ -209,7 +211,14 @@ func (scaleSet *ScaleSet) GetScaleSetVms() ([]string, error) {
 			continue
 		}
 
-		allVMs = append(allVMs, *vm.ID)
+		resourceID, err := convertResourceGroupNameToLower(*vm.ID)
+		if err != nil {
+			// This shouldn't happen. Log a waring message for tracking.
+			klog.Warningf("GetScaleSetVms.convertResourceGroupNameToLower failed with error: %v", err)
+			continue
+		}
+
+		allVMs = append(allVMs, resourceID)
 	}
 
 	return allVMs, nil
@@ -363,10 +372,21 @@ func buildGenericLabels(template compute.VirtualMachineScaleSet, nodeName string
 
 	result[kubeletapis.LabelArch] = cloudprovider.DefaultArch
 	result[kubeletapis.LabelOS] = buildInstanceOS(template)
-	result[kubeletapis.LabelInstanceType] = *template.Sku.Name
-	result[kubeletapis.LabelZoneRegion] = *template.Location
-	result[kubeletapis.LabelZoneFailureDomain] = "0"
-	result[kubeletapis.LabelHostname] = nodeName
+	result[apiv1.LabelInstanceType] = *template.Sku.Name
+	result[apiv1.LabelZoneRegion] = strings.ToLower(*template.Location)
+
+	if template.Zones != nil && len(*template.Zones) > 0 {
+		failureDomains := make([]string, len(*template.Zones))
+		for k, v := range *template.Zones {
+			failureDomains[k] = strings.ToLower(*template.Location) + "-" + v
+		}
+
+		result[apiv1.LabelZoneFailureDomain] = strings.Join(failureDomains[:], cloudvolume.LabelMultiZoneDelimiter)
+	} else {
+		result[apiv1.LabelZoneFailureDomain] = "0"
+	}
+
+	result[apiv1.LabelHostname] = nodeName
 	return result
 }
 
@@ -384,7 +404,13 @@ func (scaleSet *ScaleSet) buildNodeFromTemplate(template compute.VirtualMachineS
 		Capacity: apiv1.ResourceList{},
 	}
 
-	vmssType := InstanceTypes[*template.Sku.Name]
+	var vmssType *instanceType
+	for k := range InstanceTypes {
+		if strings.EqualFold(k, *template.Sku.Name) {
+			vmssType = InstanceTypes[k]
+			break
+		}
+	}
 	if vmssType == nil {
 		return nil, fmt.Errorf("instance type %q not supported", *template.Sku.Name)
 	}
@@ -415,7 +441,7 @@ func (scaleSet *ScaleSet) buildNodeFromTemplate(template compute.VirtualMachineS
 }
 
 // TemplateNodeInfo returns a node template for this scale set.
-func (scaleSet *ScaleSet) TemplateNodeInfo() (*schedulercache.NodeInfo, error) {
+func (scaleSet *ScaleSet) TemplateNodeInfo() (*schedulernodeinfo.NodeInfo, error) {
 	template, err := scaleSet.getVMSSInfo()
 	if err != nil {
 		return nil, err
@@ -426,7 +452,7 @@ func (scaleSet *ScaleSet) TemplateNodeInfo() (*schedulercache.NodeInfo, error) {
 		return nil, err
 	}
 
-	nodeInfo := schedulercache.NewNodeInfo(cloudprovider.BuildKubeProxy(scaleSet.Name))
+	nodeInfo := schedulernodeinfo.NewNodeInfo(cloudprovider.BuildKubeProxy(scaleSet.Name))
 	nodeInfo.SetNode(node)
 	return nodeInfo, nil
 }
@@ -443,7 +469,7 @@ func (scaleSet *ScaleSet) Nodes() ([]cloudprovider.Instance, error) {
 
 	instances := make([]cloudprovider.Instance, 0, len(vms))
 	for i := range vms {
-		name := "azure://" + strings.ToLower(vms[i])
+		name := "azure://" + vms[i]
 		instances = append(instances, cloudprovider.Instance{Id: name})
 	}
 

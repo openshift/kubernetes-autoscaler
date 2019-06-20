@@ -105,7 +105,7 @@ func (az *azVirtualMachineScaleSetsClient) CreateOrUpdate(ctx context.Context, r
 		return future.Response(), err
 	}
 
-	err = future.WaitForCompletion(ctx, az.client.Client)
+	err = future.WaitForCompletionRef(ctx, az.client.Client)
 	return future.Response(), err
 }
 
@@ -152,7 +152,7 @@ func (az *azVirtualMachineScaleSetsClient) DeleteInstances(ctx context.Context, 
 		return future.Response(), err
 	}
 
-	err = future.WaitForCompletion(ctx, az.client.Client)
+	err = future.WaitForCompletionRef(ctx, az.client.Client)
 	return future.Response(), err
 }
 
@@ -242,7 +242,7 @@ func (az *azVirtualMachinesClient) Delete(ctx context.Context, resourceGroupName
 		return future.Response(), err
 	}
 
-	err = future.WaitForCompletion(ctx, az.client.Client)
+	err = future.WaitForCompletionRef(ctx, az.client.Client)
 	return future.Response(), err
 }
 
@@ -296,7 +296,7 @@ func (az *azInterfacesClient) Delete(ctx context.Context, resourceGroupName stri
 		return future.Response(), err
 	}
 
-	err = future.WaitForCompletion(ctx, az.client.Client)
+	err = future.WaitForCompletionRef(ctx, az.client.Client)
 	return future.Response(), err
 }
 
@@ -345,7 +345,7 @@ func (az *azDeploymentsClient) CreateOrUpdate(ctx context.Context, resourceGroup
 		return future.Response(), err
 	}
 
-	err = future.WaitForCompletion(ctx, az.client.Client)
+	err = future.WaitForCompletionRef(ctx, az.client.Client)
 	return future.Response(), err
 }
 
@@ -376,7 +376,7 @@ func (az *azDisksClient) Delete(ctx context.Context, resourceGroupName string, d
 		return future.Response(), err
 	}
 
-	err = future.WaitForCompletion(ctx, az.client.Client)
+	err = future.WaitForCompletionRef(ctx, az.client.Client)
 	return future.Response(), err
 }
 
@@ -429,7 +429,7 @@ func newServicePrincipalTokenFromCredentials(config *Config, env *azure.Environm
 		klog.V(2).Infoln("azure: using managed identity extension to retrieve access token")
 		msiEndpoint, err := adal.GetMSIVMEndpoint()
 		if err != nil {
-			return nil, fmt.Errorf("Getting the managed service identity endpoint: %v", err)
+			return nil, fmt.Errorf("getting the managed service identity endpoint: %v", err)
 		}
 		return adal.NewServicePrincipalTokenFromMSI(
 			msiEndpoint,
@@ -463,7 +463,7 @@ func newServicePrincipalTokenFromCredentials(config *Config, env *azure.Environm
 			env.ServiceManagementEndpoint)
 	}
 
-	return nil, fmt.Errorf("No credentials provided for AAD application %s", config.AADClientID)
+	return nil, fmt.Errorf("no credentials provided for AAD application %s", config.AADClientID)
 }
 
 func newAzClient(cfg *Config, env *azure.Environment) (*azClient, error) {

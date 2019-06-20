@@ -30,7 +30,7 @@ import (
 )
 
 const (
-	fakeVirtualMachineScaleSetVMID = "/subscriptions/test-subscription-id/resourcegroups/test-asg/providers/microsoft.compute/virtualmachinescalesets/agents/virtualmachines/0"
+	fakeVirtualMachineScaleSetVMID = "/subscriptions/test-subscription-id/resourceGroups/test-asg/providers/Microsoft.Compute/virtualMachineScaleSets/agents/virtualMachines/0"
 )
 
 // VirtualMachineScaleSetsClientMock mocks for VirtualMachineScaleSetsClient.
@@ -43,12 +43,16 @@ type VirtualMachineScaleSetsClientMock struct {
 // Get gets the VirtualMachineScaleSet by vmScaleSetName.
 func (client *VirtualMachineScaleSetsClientMock) Get(ctx context.Context, resourceGroupName string, vmScaleSetName string) (result compute.VirtualMachineScaleSet, err error) {
 	capacity := int64(2)
+	name := "Standard_D8_V3" // typo to test case-insensitive lookup
+	location := "switzerlandwest"
 	properties := compute.VirtualMachineScaleSetProperties{}
 	return compute.VirtualMachineScaleSet{
 		Name: &vmScaleSetName,
 		Sku: &compute.Sku{
 			Capacity: &capacity,
+			Name:     &name,
 		},
+		Location:                         &location,
 		VirtualMachineScaleSetProperties: &properties,
 	}, nil
 }

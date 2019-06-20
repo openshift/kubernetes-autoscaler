@@ -20,15 +20,16 @@ import (
 	"fmt"
 	"time"
 
-	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/updater/eviction"
-	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/updater/priority"
-
+	"github.com/golang/glog"
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/labels"
-	vpa_types "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/apis/autoscaling.k8s.io/v1beta1"
+	vpa_types "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/apis/autoscaling.k8s.io/v1beta2"
 	vpa_clientset "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/client/clientset/versioned"
-	vpa_lister "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/client/listers/autoscaling.k8s.io/v1beta1"
+	vpa_lister "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/client/listers/autoscaling.k8s.io/v1beta2"
+	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/target"
+	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/updater/eviction"
+	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/updater/priority"
 	metrics_updater "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/metrics/updater"
 	vpa_api_util "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/vpa"
 	kube_client "k8s.io/client-go/kubernetes"
@@ -38,8 +39,7 @@ import (
 	v1lister "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/record"
-
-	"github.com/golang/glog"
+	"k8s.io/klog"
 )
 
 // Updater performs updates on pods if recommended by Vertical Pod Autoscaler
@@ -55,10 +55,11 @@ type updater struct {
 	evictionFactory         eviction.PodsEvictionRestrictionFactory
 	recommendationProcessor vpa_api_util.RecommendationProcessor
 	evictionAdmission       priority.PodEvictionAdmission
+	selectorFetcher         target.VpaTargetSelectorFetcher
 }
 
 // NewUpdater creates Updater with given configuration
-func NewUpdater(kubeClient kube_client.Interface, vpaClient *vpa_clientset.Clientset, minReplicasForEvicition int, evictionToleranceFraction float64, recommendationProcessor vpa_api_util.RecommendationProcessor, evictionAdmission priority.PodEvictionAdmission) (Updater, error) {
+func NewUpdater(kubeClient kube_client.Interface, vpaClient *vpa_clientset.Clientset, minReplicasForEvicition int, evictionToleranceFraction float64, recommendationProcessor vpa_api_util.RecommendationProcessor, evictionAdmission priority.PodEvictionAdmission, selectorFetcher target.VpaTargetSelectorFetcher) (Updater, error) {
 	factory, err := eviction.NewPodsEvictionRestrictionFactory(kubeClient, minReplicasForEvicition, evictionToleranceFraction)
 	if err != nil {
 		return nil, fmt.Errorf("Failed to create eviction restriction factory: %v", err)
@@ -70,6 +71,7 @@ func NewUpdater(kubeClient kube_client.Interface, vpaClient *vpa_clientset.Clien
 		evictionFactory:         factory,
 		recommendationProcessor: recommendationProcessor,
 		evictionAdmission:       evictionAdmission,
+		selectorFetcher:         selectorFetcher,
 	}, nil
 }
 
@@ -79,23 +81,32 @@ func (u *updater) RunOnce() {
 
 	vpaList, err := u.vpaLister.List(labels.Everything())
 	if err != nil {
-		glog.Fatalf("failed get VPA list: %v", err)
+		klog.Fatalf("failed get VPA list: %v", err)
 	}
 	timer.ObserveStep("ListVPAs")
 
-	vpas := make([]*vpa_types.VerticalPodAutoscaler, 0)
+	vpas := make([]*vpa_api_util.VpaWithSelector, 0)
 
 	for _, vpa := range vpaList {
 		if vpa_api_util.GetUpdateMode(vpa) != vpa_types.UpdateModeRecreate &&
 			vpa_api_util.GetUpdateMode(vpa) != vpa_types.UpdateModeAuto {
-			glog.V(3).Infof("skipping VPA object %v because its mode is not \"Recreate\" or \"Auto\"", vpa.Name)
+			klog.V(3).Infof("skipping VPA object %v because its mode is not \"Recreate\" or \"Auto\"", vpa.Name)
 			continue
 		}
-		vpas = append(vpas, vpa)
+		selector, err := u.selectorFetcher.Fetch(vpa)
+		if err != nil {
+			glog.V(3).Infof("skipping VPA object %v because we cannot fetch selector", vpa.Name)
+			continue
+		}
+
+		vpas = append(vpas, &vpa_api_util.VpaWithSelector{
+			Vpa:      vpa,
+			Selector: selector,
+		})
 	}
 
 	if len(vpas) == 0 {
-		glog.Warningf("no VPA objects to process")
+		klog.Warningf("no VPA objects to process")
 		if u.evictionAdmission != nil {
 			u.evictionAdmission.CleanUp()
 		}
@@ -105,7 +116,7 @@ func (u *updater) RunOnce() {
 
 	podsList, err := u.podLister.List(labels.Everything())
 	if err != nil {
-		glog.Errorf("failed to get pods list: %v", err)
+		klog.Errorf("failed to get pods list: %v", err)
 		timer.ObserveTotal()
 		return
 	}
@@ -116,7 +127,7 @@ func (u *updater) RunOnce() {
 	for _, pod := range allLivePods {
 		controllingVPA := vpa_api_util.GetControllingVPAForPod(pod, vpas)
 		if controllingVPA != nil {
-			controlledPods[controllingVPA] = append(controlledPods[controllingVPA], pod)
+			controlledPods[controllingVPA.Vpa] = append(controlledPods[controllingVPA.Vpa], pod)
 		}
 	}
 	timer.ObserveStep("FilterPods")
@@ -134,10 +145,10 @@ func (u *updater) RunOnce() {
 			if !evictionLimiter.CanEvict(pod) {
 				continue
 			}
-			glog.V(2).Infof("evicting pod %v", pod.Name)
+			klog.V(2).Infof("evicting pod %v", pod.Name)
 			evictErr := evictionLimiter.Evict(pod, u.eventRecorder)
 			if evictErr != nil {
-				glog.Warningf("evicting pod %v failed: %v", pod.Name, evictErr)
+				klog.Warningf("evicting pod %v failed: %v", pod.Name, evictErr)
 			}
 		}
 	}
@@ -192,7 +203,7 @@ func newPodLister(kubeClient kube_client.Interface) v1lister.PodLister {
 
 func newEventRecorder(kubeClient kube_client.Interface) record.EventRecorder {
 	eventBroadcaster := record.NewBroadcaster()
-	eventBroadcaster.StartLogging(glog.V(4).Infof)
+	eventBroadcaster.StartLogging(klog.V(4).Infof)
 	if _, isFake := kubeClient.(*fake.Clientset); !isFake {
 		eventBroadcaster.StartRecordingToSink(&clientv1.EventSinkImpl{Interface: clientv1.New(kubeClient.CoreV1().RESTClient()).Events("")})
 	}

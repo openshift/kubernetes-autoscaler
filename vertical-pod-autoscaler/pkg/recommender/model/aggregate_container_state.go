@@ -41,7 +41,7 @@ import (
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	vpa_types "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/apis/autoscaling.k8s.io/v1beta1"
+	vpa_types "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/apis/autoscaling.k8s.io/v1beta2"
 	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/recommender/util"
 )
 
@@ -175,7 +175,7 @@ func (a *AggregateContainerState) SaveToCheckpoint() (*vpa_types.VerticalPodAuto
 // into the AggregateContainerState.
 func (a *AggregateContainerState) LoadFromCheckpoint(checkpoint *vpa_types.VerticalPodAutoscalerCheckpointStatus) error {
 	if checkpoint.Version != SupportedCheckpointVersion {
-		return fmt.Errorf("Unsuported checkpoint version %s", checkpoint.Version)
+		return fmt.Errorf("unsuported checkpoint version %s", checkpoint.Version)
 	}
 	a.TotalSamplesCount = checkpoint.TotalSamplesCount
 	a.FirstSampleStart = checkpoint.FirstSampleStart.Time

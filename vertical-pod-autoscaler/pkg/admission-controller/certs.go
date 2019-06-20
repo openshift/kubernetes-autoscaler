@@ -18,36 +18,38 @@ package main
 
 import (
 	"os"
-	"path"
 
-	"github.com/golang/glog"
+	"k8s.io/klog"
 )
 
 type certsContainer struct {
-	caKey, caCert, serverKey, serverCert []byte
+	caCert, serverKey, serverCert []byte
+}
+
+type certsConfig struct {
+	clientCaFile, tlsCertFile, tlsPrivateKey *string
 }
 
 func readFile(filePath string) []byte {
 	file, err := os.Open(filePath)
 	if err != nil {
-		glog.Error(err)
+		klog.Error(err)
 		return nil
 	}
 	res := make([]byte, 5000)
 	count, err := file.Read(res)
 	if err != nil {
-		glog.Error(err)
+		klog.Error(err)
 		return nil
 	}
-	glog.Infof("Successfully read %d bytes from %v", count, filePath)
+	klog.Infof("Successfully read %d bytes from %v", count, filePath)
 	return res
 }
 
-func initCerts(certsDir string) certsContainer {
+func initCerts(config certsConfig) certsContainer {
 	res := certsContainer{}
-	res.caKey = readFile(path.Join(certsDir, "caKey.pem"))
-	res.caCert = readFile(path.Join(certsDir, "caCert.pem"))
-	res.serverKey = readFile(path.Join(certsDir, "serverKey.pem"))
-	res.serverCert = readFile(path.Join(certsDir, "serverCert.pem"))
+	res.caCert = readFile(*config.clientCaFile)
+	res.serverCert = readFile(*config.tlsCertFile)
+	res.serverKey = readFile(*config.tlsPrivateKey)
 	return res
 }

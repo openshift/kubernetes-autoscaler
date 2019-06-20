@@ -17,9 +17,10 @@ limitations under the License.
 package alicloud
 
 import (
-	"github.com/stretchr/testify/assert"
-	kubeletapis "k8s.io/kubernetes/pkg/kubelet/apis"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	apiv1 "k8s.io/api/core/v1"
 )
 
 func TestBuildGenericLabels(t *testing.T) {
@@ -35,5 +36,23 @@ func TestBuildGenericLabels(t *testing.T) {
 	}
 	nodeName := "virtual-node"
 	labels := buildGenericLabels(template, nodeName)
-	assert.Equal(t, labels[kubeletapis.LabelInstanceType], template.InstanceType.instanceTypeID)
+	assert.Equal(t, labels[apiv1.LabelInstanceType], template.InstanceType.instanceTypeID)
+}
+
+func TestExtractLabelsFromAsg(t *testing.T) {
+	template := &sgTemplate{
+		InstanceType: &instanceType{
+			instanceTypeID: "gn5-4c-8g",
+			vcpu:           4,
+			memoryInBytes:  8 * 1024 * 1024 * 1024,
+			gpu:            1,
+		},
+		Region: "cn-hangzhou",
+		Zone:   "cn-hangzhou-a",
+		Tags: map[string]string{
+			"workload_type": "cpu",
+		},
+	}
+	labels := template.Tags
+	assert.Equal(t, labels["workload_type"], "cpu")
 }

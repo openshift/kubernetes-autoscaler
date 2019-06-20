@@ -28,7 +28,7 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/config"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/errors"
 	"k8s.io/klog"
-	schedulercache "k8s.io/kubernetes/pkg/scheduler/cache"
+	schedulernodeinfo "k8s.io/kubernetes/pkg/scheduler/nodeinfo"
 )
 
 const (
@@ -114,11 +114,6 @@ func (gce *GceCloudProvider) Refresh() error {
 	return gce.gceManager.Refresh()
 }
 
-// GetInstanceID gets the instance ID for the specified node.
-func (gce *GceCloudProvider) GetInstanceID(node *apiv1.Node) string {
-	return node.Spec.ProviderID
-}
-
 // GceRef contains s reference to some entity in GCE world.
 type GceRef struct {
 	Project string
@@ -130,6 +125,11 @@ func (ref GceRef) String() string {
 	return fmt.Sprintf("%s/%s/%s", ref.Project, ref.Zone, ref.Name)
 }
 
+// ToProviderId converts GceRef to string in format used as ProviderId in Node object.
+func (ref GceRef) ToProviderId() string {
+	return fmt.Sprintf("gce://%s/%s/%s", ref.Project, ref.Zone, ref.Name)
+}
+
 // GceRefFromProviderId creates InstanceConfig object
 // from provider id which must be in format:
 // gce://<project-id>/<zone>/<name>
@@ -137,7 +137,7 @@ func (ref GceRef) String() string {
 func GceRefFromProviderId(id string) (*GceRef, error) {
 	splitted := strings.Split(id[6:], "/")
 	if len(splitted) != 3 {
-		return nil, fmt.Errorf("Wrong id: expected format gce://<project-id>/<zone>/<name>, got %v", id)
+		return nil, fmt.Errorf("wrong id: expected format gce://<project-id>/<zone>/<name>, got %v", id)
 	}
 	return &GceRef{
 		Project: splitted[0],
@@ -279,16 +279,7 @@ func (mig *gceMig) Debug() string {
 
 // Nodes returns a list of all nodes that belong to this node group.
 func (mig *gceMig) Nodes() ([]cloudprovider.Instance, error) {
-	instanceNames, err := mig.gceManager.GetMigNodes(mig)
-	if err != nil {
-		return nil, err
-	}
-	instances := make([]cloudprovider.Instance, 0, len(instanceNames))
-	for _, instanceName := range instanceNames {
-		instances = append(instances, cloudprovider.Instance{Id: instanceName})
-	}
-	return instances, nil
-
+	return mig.gceManager.GetMigNodes(mig)
 }
 
 // Exist checks if the node group really exists on the cloud provider side.
@@ -312,12 +303,12 @@ func (mig *gceMig) Autoprovisioned() bool {
 }
 
 // TemplateNodeInfo returns a node template for this node group.
-func (mig *gceMig) TemplateNodeInfo() (*schedulercache.NodeInfo, error) {
+func (mig *gceMig) TemplateNodeInfo() (*schedulernodeinfo.NodeInfo, error) {
 	node, err := mig.gceManager.GetMigTemplateNode(mig)
 	if err != nil {
 		return nil, err
 	}
-	nodeInfo := schedulercache.NewNodeInfo(cloudprovider.BuildKubeProxy(mig.Id()))
+	nodeInfo := schedulernodeinfo.NewNodeInfo(cloudprovider.BuildKubeProxy(mig.Id()))
 	nodeInfo.SetNode(node)
 	return nodeInfo, nil
 }
