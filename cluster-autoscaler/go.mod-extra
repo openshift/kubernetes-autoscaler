@@ -5,6 +5,11 @@ require (
   github.com/rancher/go-rancher v0.1.0
   github.com/google/go-querystring v1.0.0
   github.com/aws/aws-sdk-go v1.23.12
+  github.com/openshift/cluster-api v0.0.0-20191007125355-b2c5ded524d4
+  sigs.k8s.io/controller-runtime v0.3.1-0.20191016212439-2df793d02076
+  github.com/prometheus/client_golang v0.9.2
+  github.com/pkg/errors v0.8.1
+  github.com/matttproud/golang_protobuf_extensions v1.0.1
 )
 
 replace (

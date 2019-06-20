@@ -190,8 +190,13 @@ func (f *FieldManager) Apply(liveObj runtime.Object, patch []byte, fieldManager 
 	patchObj := &unstructured.Unstructured{Object: map[string]interface{}{}}
 
 	if err := yaml.Unmarshal(patch, &patchObj.Object); err != nil {
-		return nil, fmt.Errorf("error decoding YAML: %v", err)
+		return nil, errors.NewBadRequest(fmt.Sprintf("error decoding YAML: %v", err))
 	}
+
+	if patchObj.GetManagedFields() != nil {
+		return nil, errors.NewBadRequest(fmt.Sprintf("metadata.managedFields must be nil"))
+	}
+
 	if patchObj.GetAPIVersion() != f.groupVersion.String() {
 		return nil,
 			errors.NewBadRequest(
