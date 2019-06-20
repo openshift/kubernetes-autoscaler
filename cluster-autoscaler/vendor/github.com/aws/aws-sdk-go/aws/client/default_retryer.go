@@ -34,12 +34,10 @@ func (d DefaultRetryer) MaxRetries() int {
 func (d DefaultRetryer) RetryRules(r *request.Request) time.Duration {
 	// Set the upper limit of delay in retrying at ~five minutes
 	var minTime int64 = 30
-	var initialDelay time.Duration
-
 	isThrottle := r.IsErrorThrottle()
 	if isThrottle {
-		if delay, ok := getRetryAfterDelay(r); ok {
-			initialDelay = delay
+		if delay, ok := getRetryDelay(r); ok {
+			return delay
 		}
 
 		minTime = 500
@@ -48,13 +46,12 @@ func (d DefaultRetryer) RetryRules(r *request.Request) time.Duration {
 	retryCount := r.RetryCount
 	if isThrottle && retryCount > 8 {
 		retryCount = 8
-	} else if retryCount > 12 {
-		retryCount = 12
+	} else if retryCount > 13 {
+		retryCount = 13
 	}
 
 	delay := (1 << uint(retryCount)) * (sdkrand.SeededRand.Int63n(minTime) + minTime)
-	return (time.Duration(delay) * time.Millisecond) + initialDelay
-
+	return time.Duration(delay) * time.Millisecond
 }
 
 // ShouldRetry returns true if the request should be retried.
@@ -74,7 +71,7 @@ func (d DefaultRetryer) ShouldRetry(r *request.Request) bool {
 
 // This will look in the Retry-After header, RFC 7231, for how long
 // it will wait before attempting another request
-func getRetryAfterDelay(r *request.Request) (time.Duration, bool) {
+func getRetryDelay(r *request.Request) (time.Duration, bool) {
 	if !canUseRetryAfterHeader(r) {
 		return 0, false
 	}
