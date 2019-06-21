@@ -67,7 +67,7 @@ const (
 )
 
 var (
-	defaultOAuthScopes []string = []string{
+	defaultOAuthScopes = []string{
 		"https://www.googleapis.com/auth/compute",
 		"https://www.googleapis.com/auth/devstorage.read_only",
 		"https://www.googleapis.com/auth/service.management.readonly",
@@ -427,7 +427,7 @@ func (m *gkeManagerImpl) DeleteInstances(instances []*gce.GceRef) error {
 			return err
 		}
 		if mig != commonMig {
-			return fmt.Errorf("Cannot delete instances which don't belong to the same MIG.")
+			return fmt.Errorf("cannot delete instances which don't belong to the same MIG.")
 		}
 	}
 
@@ -450,8 +450,8 @@ func (m *gkeManagerImpl) GetMigNodes(mig gce.Mig) ([]string, error) {
 		return []string{}, err
 	}
 	result := make([]string, 0)
-	for _, ref := range instances {
-		result = append(result, fmt.Sprintf("gce://%s/%s/%s", ref.Project, ref.Zone, ref.Name))
+	for _, instance := range instances {
+		result = append(result, instance.Id)
 	}
 	return result, nil
 }

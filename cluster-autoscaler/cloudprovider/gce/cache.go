@@ -62,13 +62,14 @@ type MachineTypeKey struct {
 // RegenerateInstancesCache is required to sync it with registered migs.
 type GceCache struct {
 	// Cache content.
-	migs            []*MigInformation
-	instancesCache  map[GceRef]Mig
-	resourceLimiter *cloudprovider.ResourceLimiter
-	machinesCache   map[MachineTypeKey]*gce.MachineType
+	migs               []*MigInformation
+	instancesCache     map[GceRef]Mig
+	resourceLimiter    *cloudprovider.ResourceLimiter
+	machinesCache      map[MachineTypeKey]*gce.MachineType
+	migTargetSizeCache map[GceRef]int64
 	// Locks. Rules of locking:
 	// - migsMutex protects only migs.
-	// - cacheMutex protects instancesCache, resourceLimiter and machinesCache.
+	// - cacheMutex protects instancesCache, resourceLimiter, machinesCache and migTargetSizeCache.
 	// - if both locks are needed, cacheMutex must be obtained before migsMutex.
 	cacheMutex sync.Mutex
 	migsMutex  sync.Mutex
@@ -79,10 +80,11 @@ type GceCache struct {
 // NewGceCache creates empty GceCache.
 func NewGceCache(gceService AutoscalingGceClient) GceCache {
 	return GceCache{
-		migs:           []*MigInformation{},
-		instancesCache: map[GceRef]Mig{},
-		machinesCache:  map[MachineTypeKey]*gce.MachineType{},
-		GceService:     gceService,
+		migs:               []*MigInformation{},
+		instancesCache:     map[GceRef]Mig{},
+		machinesCache:      map[MachineTypeKey]*gce.MachineType{},
+		GceService:         gceService,
+		migTargetSizeCache: map[GceRef]int64{},
 	}
 }
 
@@ -176,12 +178,12 @@ func (gc *GceCache) GetMigForInstance(instance *GceRef) (Mig, error) {
 			mig.Config.GceRef().Zone == instance.Zone &&
 			strings.HasPrefix(instance.Name, mig.Basename) {
 			if err := gc.regenerateCache(); err != nil {
-				return nil, fmt.Errorf("Error while looking for MIG for instance %+v, error: %v", *instance, err)
+				return nil, fmt.Errorf("error while looking for MIG for instance %+v, error: %v", *instance, err)
 			}
 			if mig, found := gc.instancesCache[*instance]; found {
 				return mig, nil
 			}
-			return nil, fmt.Errorf("Instance %+v does not belong to any configured MIG", *instance)
+			return nil, fmt.Errorf("instance %+v does not belong to any configured MIG", *instance)
 		}
 	}
 	// Instance doesn't belong to any configured mig.
@@ -215,8 +217,12 @@ func (gc *GceCache) regenerateCache() error {
 			klog.V(4).Infof("Failed MIG info request for %s: %v", mig.GceRef().String(), err)
 			return err
 		}
-		for _, ref := range instances {
-			newInstancesCache[ref] = mig
+		for _, instance := range instances {
+			gceRef, err := GceRefFromProviderId(instance.Id)
+			if err != nil {
+				return err
+			}
+			newInstancesCache[*gceRef] = mig
 		}
 	}
 
@@ -238,6 +244,46 @@ func (gc *GceCache) GetResourceLimiter() (*cloudprovider.ResourceLimiter, error)
 	defer gc.cacheMutex.Unlock()
 
 	return gc.resourceLimiter, nil
+}
+
+// GetMigTargetSize returns the cached targetSize for a GceRef
+func (gc *GceCache) GetMigTargetSize(ref GceRef) (int64, bool) {
+	gc.cacheMutex.Lock()
+	defer gc.cacheMutex.Unlock()
+
+	size, found := gc.migTargetSizeCache[ref]
+	if found {
+		klog.V(5).Infof("target size cache hit for %s", ref)
+	}
+	return size, found
+}
+
+// SetMigTargetSize sets targetSize for a GceRef
+func (gc *GceCache) SetMigTargetSize(ref GceRef, size int64) {
+	gc.cacheMutex.Lock()
+	defer gc.cacheMutex.Unlock()
+
+	gc.migTargetSizeCache[ref] = size
+}
+
+// InvalidateTargetSizeCache clears the target size cache
+func (gc *GceCache) InvalidateTargetSizeCache() {
+	gc.cacheMutex.Lock()
+	defer gc.cacheMutex.Unlock()
+
+	klog.V(5).Infof("target size cache invalidated")
+	gc.migTargetSizeCache = map[GceRef]int64{}
+}
+
+// InvalidateTargetSizeCacheForMig clears the target size cache
+func (gc *GceCache) InvalidateTargetSizeCacheForMig(ref GceRef) {
+	gc.cacheMutex.Lock()
+	defer gc.cacheMutex.Unlock()
+
+	if _, found := gc.migTargetSizeCache[ref]; found {
+		klog.V(5).Infof("target size cache invalidated for %s", ref)
+		delete(gc.migTargetSizeCache, ref)
+	}
 }
 
 // GetMachineFromCache retrieves machine type from cache under lock.

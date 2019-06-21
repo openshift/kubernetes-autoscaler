@@ -34,30 +34,40 @@ const (
 	ProviderName = "kubemark"
 )
 
+// KubemarkCloudProvider implements CloudProvider interface.
 type KubemarkCloudProvider struct{}
 
+// BuildKubemarkCloudProvider builds a CloudProvider for kubemark. Builds
+// node groups from passed in specs.
 func BuildKubemarkCloudProvider(kubemarkController interface{}, specs []string, resourceLimiter *cloudprovider.ResourceLimiter) (*KubemarkCloudProvider, error) {
 	return nil, cloudprovider.ErrNotImplemented
 }
 
+// Name returns name of the cloud provider.
 func (kubemark *KubemarkCloudProvider) Name() string { return "" }
 
+// NodeGroups returns all node groups configured for this cloud provider.
 func (kubemark *KubemarkCloudProvider) NodeGroups() []cloudprovider.NodeGroup {
 	return []cloudprovider.NodeGroup{}
 }
 
+// Pricing returns pricing model for this cloud provider or error if not available.
 func (kubemark *KubemarkCloudProvider) Pricing() (cloudprovider.PricingModel, errors.AutoscalerError) {
 	return nil, cloudprovider.ErrNotImplemented
 }
 
+// NodeGroupForNode returns the node group for the given node.
 func (kubemark *KubemarkCloudProvider) NodeGroupForNode(node *apiv1.Node) (cloudprovider.NodeGroup, error) {
 	return nil, cloudprovider.ErrNotImplemented
 }
 
+// GetAvailableMachineTypes get all machine types that can be requested from the cloud provider.
+// Implementation optional.
 func (kubemark *KubemarkCloudProvider) GetAvailableMachineTypes() ([]string, error) {
 	return []string{}, cloudprovider.ErrNotImplemented
 }
 
+// NewNodeGroup builds a theoretical node group based on the node definition provided.
 func (kubemark *KubemarkCloudProvider) NewNodeGroup(machineType string, labels map[string]string, systemLabels map[string]string,
 	taints []apiv1.Taint,
 	extraResources map[string]resource.Quantity) (cloudprovider.NodeGroup, error) {
@@ -73,11 +83,6 @@ func (kubemark *KubemarkCloudProvider) GetResourceLimiter() (*cloudprovider.Reso
 // In particular the list of node groups returned by NodeGroups can change as a result of CloudProvider.Refresh().
 func (kubemark *KubemarkCloudProvider) Refresh() error {
 	return cloudprovider.ErrNotImplemented
-}
-
-// GetInstanceID gets the instance ID for the specified node.
-func (kubemark *KubemarkCloudProvider) GetInstanceID(node *apiv1.Node) string {
-	return ""
 }
 
 // Cleanup cleans up all resources before the cloud provider is removed

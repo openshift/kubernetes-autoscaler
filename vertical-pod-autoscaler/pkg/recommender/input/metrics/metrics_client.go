@@ -19,11 +19,10 @@ package metrics
 import (
 	"time"
 
-	"github.com/golang/glog"
 	k8sapiv1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/recommender/model"
-	api "k8s.io/kubernetes/pkg/apis/core"
+	"k8s.io/klog"
 	"k8s.io/metrics/pkg/apis/metrics/v1beta1"
 	resourceclient "k8s.io/metrics/pkg/client/clientset/versioned/typed/metrics/v1beta1"
 )
@@ -62,12 +61,12 @@ func NewMetricsClient(metricsGetter resourceclient.PodMetricsesGetter) MetricsCl
 func (c *metricsClient) GetContainersMetrics() ([]*ContainerMetricsSnapshot, error) {
 	var metricsSnapshots []*ContainerMetricsSnapshot
 
-	podMetricsInterface := c.metricsGetter.PodMetricses(api.NamespaceAll)
+	podMetricsInterface := c.metricsGetter.PodMetricses(k8sapiv1.NamespaceAll)
 	podMetricsList, err := podMetricsInterface.List(metav1.ListOptions{})
 	if err != nil {
 		return nil, err
 	}
-	glog.V(3).Infof("%v podMetrics retrieved for all namespaces", len(podMetricsList.Items))
+	klog.V(3).Infof("%v podMetrics retrieved for all namespaces", len(podMetricsList.Items))
 	for _, podMetrics := range podMetricsList.Items {
 		metricsSnapshotsForPod := createContainerMetricsSnapshots(podMetrics)
 		metricsSnapshots = append(metricsSnapshots, metricsSnapshotsForPod...)

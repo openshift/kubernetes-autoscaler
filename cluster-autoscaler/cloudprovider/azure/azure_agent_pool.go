@@ -33,7 +33,7 @@ import (
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	"k8s.io/autoscaler/cluster-autoscaler/config/dynamic"
-	schedulercache "k8s.io/kubernetes/pkg/scheduler/cache"
+	schedulernodeinfo "k8s.io/kubernetes/pkg/scheduler/nodeinfo"
 )
 
 // AgentPool implements NodeGroup interface for agent pools deployed by acs-engine.
@@ -133,7 +133,11 @@ func (as *AgentPool) GetVMIndexes() ([]int, map[int]string, error) {
 		}
 
 		indexes = append(indexes, index)
-		indexToVM[index] = "azure://" + strings.ToLower(*instance.ID)
+		resourceID, err := convertResourceGroupNameToLower("azure://" + *instance.ID)
+		if err != nil {
+			return nil, nil, err
+		}
+		indexToVM[index] = resourceID
 	}
 
 	sortedIndexes := sort.IntSlice(indexes)
@@ -381,7 +385,7 @@ func (as *AgentPool) Debug() string {
 }
 
 // TemplateNodeInfo returns a node template for this agent pool.
-func (as *AgentPool) TemplateNodeInfo() (*schedulercache.NodeInfo, error) {
+func (as *AgentPool) TemplateNodeInfo() (*schedulernodeinfo.NodeInfo, error) {
 	return nil, cloudprovider.ErrNotImplemented
 }
 
@@ -398,9 +402,13 @@ func (as *AgentPool) Nodes() ([]cloudprovider.Instance, error) {
 			continue
 		}
 
-		// To keep consistent with providerID from kubernetes cloud provider, do not convert ID to lower case.
-		name := "azure://" + strings.ToLower(*instance.ID)
-		nodes = append(nodes, cloudprovider.Instance{Id: name})
+		// To keep consistent with providerID from kubernetes cloud provider, convert
+		// resourceGroupName in the ID to lower case.
+		resourceID, err := convertResourceGroupNameToLower("azure://" + *instance.ID)
+		if err != nil {
+			return nil, err
+		}
+		nodes = append(nodes, cloudprovider.Instance{Id: resourceID})
 	}
 
 	return nodes, nil

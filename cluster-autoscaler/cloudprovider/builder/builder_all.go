@@ -23,6 +23,7 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/alicloud"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/aws"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/azure"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/baiducloud"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gke"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/openshiftmachineapi"
@@ -36,6 +37,7 @@ var AvailableCloudProviders = []string{
 	gce.ProviderNameGCE,
 	gke.ProviderNameGKE,
 	alicloud.ProviderName,
+	baiducloud.ProviderName,
 	openshiftmachineapi.ProviderName,
 }
 
@@ -54,6 +56,8 @@ func buildCloudProvider(opts config.AutoscalingOptions, do cloudprovider.NodeGro
 		return azure.BuildAzure(opts, do, rl)
 	case alicloud.ProviderName:
 		return alicloud.BuildAlicloud(opts, do, rl)
+	case baiducloud.ProviderName:
+		return baiducloud.BuildBaiducloud(opts, do, rl)
 	case openshiftmachineapi.ProviderName:
 		return openshiftmachineapi.BuildOpenShiftMachineAPI(opts, do, rl)
 	}

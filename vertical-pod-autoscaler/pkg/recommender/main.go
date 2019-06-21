@@ -20,7 +20,6 @@ import (
 	"flag"
 	"time"
 
-	"github.com/golang/glog"
 	kube_flag "k8s.io/apiserver/pkg/util/flag"
 	"k8s.io/autoscaler/vertical-pod-autoscaler/common"
 	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/recommender/input/history"
@@ -28,21 +27,33 @@ import (
 	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/metrics"
 	metrics_recommender "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/metrics/recommender"
 	"k8s.io/client-go/rest"
+	"k8s.io/klog"
 )
 
 var (
 	metricsFetcherInterval = flag.Duration("recommender-interval", 1*time.Minute, `How often metrics should be fetched`)
 	checkpointsGCInterval  = flag.Duration("checkpoints-gc-interval", 10*time.Minute, `How often orphaned checkpoints should be garbage collected`)
 	prometheusAddress      = flag.String("prometheus-address", "", `Where to reach for Prometheus metrics`)
-	storage                = flag.String("storage", "", `Specifies storage mode. Supported values: prometheus, checkpoint (default)`)
+	prometheusJobName      = flag.String("prometheus-cadvisor-job-name", "kubernetes-cadvisor", `Name of the prometheus job name which scrapes the cAdvisor metrics`)
 	address                = flag.String("address", ":8942", "The address to expose Prometheus metrics.")
 	kubeApiQps             = flag.Float64("kube-api-qps", 5.0, `QPS limit when making requests to Kubernetes apiserver`)
 	kubeApiBurst           = flag.Float64("kube-api-burst", 10.0, `QPS burst limit when making requests to Kubernetes apiserver`)
+
+	storage = flag.String("storage", "", `Specifies storage mode. Supported values: prometheus, checkpoint (default)`)
+	// prometheus history provider configs
+	historyLength       = flag.String("history-length", "8d", `How much time back prometheus have to be queried to get historical metrics`)
+	podLabelPrefix      = flag.String("pod-label-prefix", "pod_label_", `Which prefix to look for pod labels in metrics`)
+	podLabelsMetricName = flag.String("metric-for-pod-labels", "up{job=\"kubernetes-pods\"}", `Which metric to look for pod labels in metrics`)
+	podNamespaceLabel   = flag.String("pod-namespace-label", "kubernetes_namespace", `Label name to look for container names`)
+	podNameLabel        = flag.String("pod-name-label", "kubernetes_pod_name", `Label name to look for container names`)
+	ctrNamespaceLabel   = flag.String("container-namespace-label", "namespace", `Label name to look for container names`)
+	ctrPodNameLabel     = flag.String("container-pod-name-label", "pod_name", `Label name to look for container names`)
+	ctrNameLabel        = flag.String("container-name-label", "name", `Label name to look for container names`)
 )
 
 func main() {
 	kube_flag.InitFlags()
-	glog.V(1).Infof("Vertical Pod Autoscaler %s Recommender", common.VerticalPodAutoscalerVersion)
+	klog.V(1).Infof("Vertical Pod Autoscaler %s Recommender", common.VerticalPodAutoscalerVersion)
 
 	config := createKubeConfig(float32(*kubeApiQps), int(*kubeApiBurst))
 
@@ -55,7 +66,19 @@ func main() {
 	if useCheckpoints {
 		recommender.GetClusterStateFeeder().InitFromCheckpoints()
 	} else {
-		recommender.GetClusterStateFeeder().InitFromHistoryProvider(history.NewPrometheusHistoryProvider(*prometheusAddress))
+		config := history.PrometheusHistoryProviderConfig{
+			Address:                *prometheusAddress,
+			HistoryLength:          *historyLength,
+			PodLabelPrefix:         *podLabelPrefix,
+			PodLabelsMetricName:    *podLabelsMetricName,
+			PodNamespaceLabel:      *podNamespaceLabel,
+			PodNameLabel:           *podNameLabel,
+			CtrNamespaceLabel:      *ctrNamespaceLabel,
+			CtrPodNameLabel:        *ctrPodNameLabel,
+			CtrNameLabel:           *ctrNameLabel,
+			CadvisorMetricsJobName: *prometheusJobName,
+		}
+		recommender.GetClusterStateFeeder().InitFromHistoryProvider(history.NewPrometheusHistoryProvider(config))
 	}
 
 	ticker := time.Tick(*metricsFetcherInterval)
@@ -69,7 +92,7 @@ func main() {
 func createKubeConfig(kubeApiQps float32, kubeApiBurst int) *rest.Config {
 	config, err := rest.InClusterConfig()
 	if err != nil {
-		glog.Fatalf("Failed to create config: %v", err)
+		klog.Fatalf("Failed to create config: %v", err)
 	}
 	config.QPS = kubeApiQps
 	config.Burst = kubeApiBurst

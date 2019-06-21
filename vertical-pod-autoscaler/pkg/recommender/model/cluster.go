@@ -20,12 +20,10 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/golang/glog"
-
 	apiv1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	labels "k8s.io/apimachinery/pkg/labels"
-	vpa_types "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/apis/autoscaling.k8s.io/v1beta1"
+	vpa_types "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/apis/autoscaling.k8s.io/v1beta2"
+	"k8s.io/klog"
 )
 
 // ClusterState holds all runtime information about the cluster required for the
@@ -168,7 +166,7 @@ func (cluster *ClusterState) AddSample(sample *ContainerUsageSampleWithKey) erro
 		return NewKeyError(sample.Container)
 	}
 	if !containerState.AddSample(&sample.ContainerUsageSample) {
-		return fmt.Errorf("Sample discarded (invalid or out of order)")
+		return fmt.Errorf("sample discarded (invalid or out of order)")
 	}
 	return nil
 }
@@ -185,7 +183,7 @@ func (cluster *ClusterState) RecordOOM(containerID ContainerID, timestamp time.T
 	}
 	err := containerState.RecordOOM(timestamp, requestedMemory)
 	if err != nil {
-		return fmt.Errorf("Error while recording OOM for %v, Reason: %v", containerID, err)
+		return fmt.Errorf("error while recording OOM for %v, Reason: %v", containerID, err)
 	}
 	return nil
 }
@@ -194,7 +192,7 @@ func (cluster *ClusterState) RecordOOM(containerID ContainerID, timestamp time.T
 // didn't yet exist. If the VPA already existed but had a different pod
 // selector, the pod selector is updated. Updates the links between the VPA and
 // all aggregations it matches.
-func (cluster *ClusterState) AddOrUpdateVpa(apiObject *vpa_types.VerticalPodAutoscaler) error {
+func (cluster *ClusterState) AddOrUpdateVpa(apiObject *vpa_types.VerticalPodAutoscaler, selector labels.Selector) error {
 	vpaID := VpaID{Namespace: apiObject.Namespace, VpaName: apiObject.Name}
 	conditionsMap := make(vpaConditionsMap)
 	for _, condition := range apiObject.Status.Conditions {
@@ -204,13 +202,9 @@ func (cluster *ClusterState) AddOrUpdateVpa(apiObject *vpa_types.VerticalPodAuto
 	if conditionsMap[vpa_types.RecommendationProvided].Status == apiv1.ConditionTrue {
 		currentRecommendation = apiObject.Status.Recommendation
 	}
-	selector, err := metav1.LabelSelectorAsSelector(apiObject.Spec.Selector)
-	if err != nil {
-		return err
-	}
 
 	vpa, vpaExists := cluster.Vpas[vpaID]
-	if vpaExists && (err != nil || vpa.PodSelector.String() != selector.String()) {
+	if vpaExists && (vpa.PodSelector.String() != selector.String()) {
 		// Pod selector was changed. Delete the VPA object and recreate
 		// it with the new selector.
 		if err := cluster.DeleteVpa(vpaID); err != nil {
@@ -225,6 +219,7 @@ func (cluster *ClusterState) AddOrUpdateVpa(apiObject *vpa_types.VerticalPodAuto
 			vpa.UseAggregationIfMatching(aggregationKey, aggregation)
 		}
 	}
+	vpa.TargetRef = apiObject.Spec.TargetRef
 	vpa.Conditions = conditionsMap
 	vpa.Recommendation = currentRecommendation
 	vpa.ResourcePolicy = apiObject.Spec.ResourcePolicy
@@ -298,12 +293,12 @@ func (cluster *ClusterState) findOrCreateAggregateContainerState(containerID Con
 
 // GarbageCollectAggregateCollectionStates removes obsolete AggregateCollectionStates from the ClusterState.
 func (cluster *ClusterState) GarbageCollectAggregateCollectionStates(now time.Time) {
-	glog.V(1).Info("Garbage collection of AggregateCollectionStates triggered")
+	klog.V(1).Info("Garbage collection of AggregateCollectionStates triggered")
 	keysToDelete := make([]AggregateStateKey, 0)
 	for key, aggregateContainerState := range cluster.aggregateStateMap {
 		if aggregateContainerState.isExpired(now) {
 			keysToDelete = append(keysToDelete, key)
-			glog.V(1).Infof("Removing AggregateCollectionStates for %+v", key)
+			klog.V(1).Infof("Removing AggregateCollectionStates for %+v", key)
 		}
 	}
 	for _, key := range keysToDelete {

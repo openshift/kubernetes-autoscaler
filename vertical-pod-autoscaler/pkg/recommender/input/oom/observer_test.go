@@ -23,10 +23,17 @@ import (
 	"github.com/stretchr/testify/assert"
 	"k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
-	"k8s.io/kubernetes/pkg/api/legacyscheme"
-	_ "k8s.io/kubernetes/pkg/apis/core/install"       //to decode yaml
-	_ "k8s.io/kubernetes/pkg/apis/extensions/install" //to decode yaml
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/serializer"
+	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/recommender/model"
 )
+
+var scheme = runtime.NewScheme()
+var codecs = serializer.NewCodecFactory(scheme)
+
+func init() {
+	v1.AddToScheme(scheme)
+}
 
 const pod1Yaml = `
 apiVersion: v1
@@ -69,7 +76,7 @@ status:
 `
 
 func newPod(yaml string) (*v1.Pod, error) {
-	decode := legacyscheme.Codecs.UniversalDeserializer().Decode
+	decode := codecs.UniversalDeserializer().Decode
 	obj, _, err := decode([]byte(yaml), nil, nil)
 	if err != nil {
 		return nil, err
@@ -78,7 +85,7 @@ func newPod(yaml string) (*v1.Pod, error) {
 }
 
 func newEvent(yaml string) (*v1.Event, error) {
-	decode := legacyscheme.Codecs.UniversalDeserializer().Decode
+	decode := codecs.UniversalDeserializer().Decode
 	obj, _, err := decode([]byte(yaml), nil, nil)
 	if err != nil {
 		return nil, err
@@ -94,14 +101,30 @@ func TestOOMReceived(t *testing.T) {
 	observer := NewObserver()
 	go observer.OnUpdate(p1, p2)
 
-	info := <-observer.ObservedOomsChannel
-	assert.Equal(t, "mockNamespace", info.Namespace)
-	assert.Equal(t, "Pod1", info.Pod)
-	assert.Equal(t, "Name11", info.Container)
-	assert.Equal(t, int64(1024), info.Memory.Value())
+	info := <-observer.observedOomsChannel
+	container := info.ContainerID
+	assert.Equal(t, "mockNamespace", container.PodID.Namespace)
+	assert.Equal(t, "Pod1", container.PodID.PodName)
+	assert.Equal(t, "Name11", container.ContainerName)
+	assert.Equal(t, model.ResourceAmount(int64(1024)), info.Memory)
 	timestamp, err := time.Parse(time.RFC3339, "2018-02-23T13:38:48Z")
 	assert.NoError(t, err)
 	assert.Equal(t, timestamp.Unix(), info.Timestamp.Unix())
+}
+
+func TestMalformedPodReceived(t *testing.T) {
+	p1, err := newPod(pod1Yaml)
+	assert.NoError(t, err)
+	p2, err := newPod(pod2Yaml)
+	assert.NoError(t, err)
+
+	// Malformed pod: restart count > 0, but last termination status is nil
+	p2.Status.ContainerStatuses[0].RestartCount = 1
+	p2.Status.ContainerStatuses[0].LastTerminationState.Terminated = nil
+
+	observer := NewObserver()
+	observer.OnUpdate(p1, p2)
+	assert.Empty(t, observer.observedOomsChannel)
 }
 
 func TestParseEvictionEvent(t *testing.T) {
@@ -110,10 +133,20 @@ func TestParseEvictionEvent(t *testing.T) {
 		assert.NoError(t, err)
 		return timestamp.UTC()
 	}
-	parseResources := func(str string) resource.Quantity {
+	parseResources := func(str string) model.ResourceAmount {
 		memory, err := resource.ParseQuantity(str)
 		assert.NoError(t, err)
-		return memory
+		return model.ResourceAmount(memory.Value())
+	}
+
+	toContainerID := func(namespace, pod, container string) model.ContainerID {
+		return model.ContainerID{
+			PodID: model.PodID{
+				PodName:   pod,
+				Namespace: namespace,
+			},
+			ContainerName: container,
+		}
 	}
 
 	testCases := []struct {
@@ -139,11 +172,9 @@ reason: Evicted
 `,
 			oomInfo: []OomInfo{
 				{
-					Timestamp: parseTimestamp("2018-02-23T13:38:48Z "),
-					Memory:    parseResources("1024Ki"),
-					Pod:       "pod1",
-					Container: "test-container",
-					Namespace: "test-namespace",
+					Timestamp:   parseTimestamp("2018-02-23T13:38:48Z "),
+					Memory:      parseResources("1024Ki"),
+					ContainerID: toContainerID("test-namespace", "pod1", "test-container"),
 				},
 			},
 		},
@@ -166,18 +197,14 @@ reason: Evicted
 `,
 			oomInfo: []OomInfo{
 				{
-					Timestamp: parseTimestamp("2018-02-23T13:38:48Z "),
-					Memory:    parseResources("1024Ki"),
-					Pod:       "pod1",
-					Container: "test-container",
-					Namespace: "test-namespace",
+					Timestamp:   parseTimestamp("2018-02-23T13:38:48Z "),
+					Memory:      parseResources("1024Ki"),
+					ContainerID: toContainerID("test-namespace", "pod1", "test-container"),
 				},
 				{
-					Timestamp: parseTimestamp("2018-02-23T13:38:48Z "),
-					Memory:    parseResources("2048Ki"),
-					Pod:       "pod1",
-					Container: "other-container",
-					Namespace: "test-namespace",
+					Timestamp:   parseTimestamp("2018-02-23T13:38:48Z "),
+					Memory:      parseResources("2048Ki"),
+					ContainerID: toContainerID("test-namespace", "pod1", "other-container"),
 				},
 			},
 		},
@@ -200,11 +227,9 @@ reason: Evicted
 `,
 			oomInfo: []OomInfo{
 				{
-					Timestamp: parseTimestamp("2018-02-23T13:38:48Z "),
-					Memory:    parseResources("1024Ki"),
-					Pod:       "pod1",
-					Container: "test-container",
-					Namespace: "test-namespace",
+					Timestamp:   parseTimestamp("2018-02-23T13:38:48Z "),
+					Memory:      parseResources("1024Ki"),
+					ContainerID: toContainerID("test-namespace", "pod1", "test-container"),
 				},
 			},
 		},

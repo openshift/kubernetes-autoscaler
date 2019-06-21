@@ -1,5 +1,19 @@
 # Vertical Pod Autoscaler
 
+## Contents
+- [Intro](#intro)
+- [Installation](#intallation)
+  - [Prerequisites](#prerequisites)
+  - [Install command](#install-command)
+  - [Quick start](#quick-start)
+  - [Test your installation](#test-your-installation)
+  - [Example VPA configuration](#example-vpa-configuration)
+  - [Troubleshooting](#troubleshooting)
+  - [Components of VPA](#component-of-vpa)
+  - [Tear down](#tear-down)
+- [Known limitations](#known-limitation)
+  - [Limitations of beta version](#limitations-of-beta-version)
+
 # Intro
 
 Vertical Pod Autoscaler (VPA) frees the users from necessity of setting
@@ -12,29 +26,119 @@ It can both down-scale pods that are over-requesting resources, and also up-scal
 
 Autoscaling is configured with a
 [Custom Resource Definition object](https://kubernetes.io/docs/concepts/api-extension/custom-resources/)
-called [VerticalPodAutoscaler](https://github.com/kubernetes/autoscaler/blob/master/vertical-pod-autoscaler/pkg/apis/poc.autoscaling.k8s.io/v1alpha1/types.go).
-It allows to specify which pods should be under vertically autoscaled as well as if/how the
+called [VerticalPodAutoscaler](https://github.com/kubernetes/autoscaler/blob/master/vertical-pod-autoscaler/pkg/apis/autoscaling.k8s.io/v1beta2/types.go).
+It allows to specify which pods should be vertically autoscaled as well as if/how the
 resource recommendations are applied.
 
 To enable vertical pod autoscaling on your cluster please follow the installation
 procedure described below.
 
-
 # Installation
 
-### Notice on the backwards compatibility
+The current default version is Vertical Pod Autoscaler 0.4.0
 
-During alpha the VPA CRD object may evolve in a way that is not compatible between releases.
-If you install a new release of VPA it is safest to delete the existing VPA CRD objects.
-Note that this will happen automatically if you just use the `vpa-down.sh` script to tear down
-the old installation of VPA.
+**NOTE:** version 0.4 requires at least Kubernetes 1.11 to work (needs certain
+Custom Resource Definition capabilities). With older Kubernetes versions we
+suggest using the [latest 0.3 version](https://github.com/kubernetes/autoscaler/blob/vpa-release-0.3/vertical-pod-autoscaler/README.md) 
+
+### Notice on switching to v1beta2 version (0.3.X to >=0.4.0)
+
+In 0.4.0 we introduced a new version of the API - `autoscaling.k8s.io/v1beta2`.
+Full API is accessible [here](https://github.com/kubernetes/autoscaler/blob/master/vertical-pod-autoscaler/pkg/apis/autoscaling.k8s.io/v1beta2/types.go).
+
+The change introduced is in the way you express which pods should be scaled by a
+given Vertical Pod Autoscaler. In short we are moving from label selectors to
+controller references. This change is introduced due to two main reasons:
+* Use of selectors is prone to misconfigurations - e.g. VPA objects targeting
+all pods, overlapping VPA objects
+* This change aligns VPA with [Horizontal Pod Autoscaler
+  API](https://github.com/kubernetes/api/blob/master/autoscaling/v1/types.go)
+
+Let's see an example ilustrating the change:
+
+**[DEPRECATED]** In `v1beta1` pods to scale by VPA are specified by a
+[kubernetes label selector](https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#label-selectors).
+
+```yaml
+apiVersion: "autoscaling.k8s.io/v1beta1"
+kind: VerticalPodAutoscaler
+metadata:
+  name: hamster-vpa-deprecated
+spec:
+  selector: # selector is the deprecated way
+    matchLabels:
+      app: hamster
+```
+
+**[RECOMMENDED]** In `v1beta2` pods to scale by VPA are specified by a
+target reference. This target will usually be a Deployment, as configured in the
+example below.
+
+```yaml
+apiVersion: "autoscaling.k8s.io/v1beta2"
+kind: VerticalPodAutoscaler
+metadata:
+  name: hamster-vpa
+spec:
+  targetRef:
+    apiVersion: "extensions/v1beta1"
+    kind:       Deployment
+    name:       hamster
+```
+
+The target object can be a well known controller (Deployment, ReplicaSet, DaemonSet, StatefulSet etc.)
+or any object that implements the scale subresource. VPA uses ScaleStatus to
+retrieve the pod set controlled by this object.
+If VerticalPodAutoscaler cannot use specified target it will report
+ConfigUnsupported condition.
+
+Note that VerticalPodAutoscaler does not require full implementation
+of scale subresource - it will not use it to modify the replica count.
+The only thing retrieved is a label selector matching pods grouped by this controller.
+
+See complete examples:
+* [v1beta2](./examples/hamster.yaml)
+* [v1beta1](./examples/hamster-deprecated.yaml)
+
+You can perform a 0.3 to 0.4 upgrade without losing your VPA objects.
+The recommended way is as follows:
+
+1. Run `./hack/vpa-apply-upgrade.sh` - this will restart your VPA installation with
+a new version, add the new API and keep all your VPA objects.
+1. Your `v1beta1` objects will be marked as deprecated but still work
+1. Switch your VPA definition to
+`apiVersion: "autoscaling.k8s.io/v1beta2"`
+1. Modify the VPA spec to:
+```yaml
+spec:
+  # Note the empty selector field - this is needed to remove previously defined selector
+  selector:
+  targetRef:
+    apiVersion: "extensions/v1beta1"
+    kind:       "Deployment"
+    name:       "<deployment_name>" # This matches the deployment name
+```
+5. Kubectl apply -f the above
+
+You can also first try the new API in the `"Off"` mode.
+
+### Notice on switching from alpha to beta (<0.3.0 to 0.4.0+)
+
+**NOTE:** We highly recommend switching to the 0.4.X version. However,
+for instructions on switching to 0.3.X see the [0.3 version README](https://github.com/kubernetes/autoscaler/blob/vpa-release-0.3/vertical-pod-autoscaler/README.md)
+
+Between versions 0.2.x and 0.4.x there is an alpha to beta switch which includes
+a change of VPA apiVersion. The safest way to switch is to use `vpa-down.sh`
+script to tear down the old installation of VPA first. This will delete your old
+VPA objects that have been defined with `poc.autoscaling.k8s.io/v1alpha1`
+apiVersion. Then use `vpa-up.sh` to bring up the new version of VPA and create
+your VPA objects from the scratch, passing apiVersion
+`autoscaling.k8s.io/v1beta2` and switching from selector to targetRef, as
+described in the prevous section.
 
 ### Prerequisites
 
-* It is strongly recommended to use Kubernetes 1.9 or greater.
-  Your cluster must support MutatingAdmissionWebhooks, which are enabled by default
-  since 1.9 ([#58255](https://github.com/kubernetes/kubernetes/pull/58255)).
-  Read more about [VPA Admission Webhook](./pkg/admission-controller/README.md#running).
+* VPA version 0.4+ requires Kubernetes 1.11. For older versions see [latest 0.3 version](https://github.com/kubernetes/autoscaler/blob/vpa-release-0.3/vertical-pod-autoscaler/README.md)
 * `kubectl` should be connected to the cluster you want to install VPA in.
 * The metrics server must be deployed in your cluster. Read more about [Metrics Server](https://github.com/kubernetes-incubator/metrics-server).
 * If you are using a GKE Kubernetes cluster, you will need to grant your current Google
@@ -77,22 +181,23 @@ with the API server.
 After [installation](#installation) the system is ready to recommend and set
 resource requests for your pods.
 In order to use it you need to insert a *Vertical Pod Autoscaler* resource for
-each logical group of pods that have similar resource requirements.
-We recommend to insert a *VPA* per each *Deployment* you want to control
-automatically and use the same label selector as the *Deployment* uses.
+each controller that you want to have automatically computed resource requirements.
+This will be most commonly a **Deployment**.
 There are three modes in which *VPAs* operate:
 
 * `"Auto"`: VPA assigns resource requests on pod creation as well as updates
   them on existing pods using the preferred update mechanism. Currently this is
   equivalent to `"Recreate"` (see below). Once restart free ("in-place") update
   of pod requests is available, it may be used as the preferred update mechanism by
-  the `"Auto"` mode.
+  the `"Auto"` mode. **NOTE:** This feature of VPA is experimental and may cause downtime
+  for your applications.
 * `"Recreate"`: VPA assigns resource requests on pod creation as well as updates
   them on existing pods by evicting them when the requested resources differ significantly
   from the new recommendation (respecting the Pod Disruption Budget, if defined).
   This mode should be used rarely, only if you need to ensure that the pods are restarted
   whenever the resource request changes. Otherwise prefer the `"Auto"` mode which may take
-  advantage of restart free updates once they are available.
+  advantage of restart free updates once they are available. **NOTE:** This feature of VPA
+  is experimental and may cause dowtime for your applications.
 * `"Initial"`: VPA only assigns resource requests on pod creation and never changes them
   later.
 * `"Off"`: VPA does not automatically change resource requirements of the pods.
@@ -108,7 +213,7 @@ kubectl create -f examples/hamster.yaml
 
 The above command creates a deployment with 2 pods, each running a single container
 that requests 100 millicores and tries to utilize slightly above 500 millicores.
-The command also creates a VPA config with selector that matches the pods in the deployment.
+The command also creates a VPA config pointing at the deployment.
 VPA will observe the behavior of the pods and after about 5 minutes they should get
 updated with a higher CPU request
 (note that VPA does not modify the template in the deployment, but the actual requests
@@ -124,14 +229,15 @@ You may need to add more nodes or adjust examples/hamster.yaml to use less CPU.*
 ### Example VPA configuration
 
 ```
-apiVersion: poc.autoscaling.k8s.io/v1alpha1
+apiVersion: autoscaling.k8s.io/v1beta2
 kind: VerticalPodAutoscaler
 metadata:
   name: my-app-vpa
 spec:
-  selector:
-    matchLabels:
-      app: my-app
+  targetRef:
+    apiVersion: "extensions/v1beta1"
+    kind:       Deployment
+    name:       my-app
   updatePolicy:
     updateMode: "Auto"
 ```
@@ -162,13 +268,13 @@ kubectl get customresourcedefinition|grep verticalpodautoscalers
 
 The project consists of 3 components:
 
-* Recommender - it monitors the current and past resource consumption and, based on it,
+* [Recommender](https://github.com/kubernetes/autoscaler/blob/master/vertical-pod-autoscaler/pkg/recommender/README.md) - it monitors the current and past resource consumption and, based on it,
 provides recommended values containers' cpu and memory requests.
 
-* Updater - it checks which of the managed pods have correct resources set and, if not,
+* [Updater](https://github.com/kubernetes/autoscaler/blob/master/vertical-pod-autoscaler/pkg/updater/README.md) - it checks which of the managed pods have correct resources set and, if not,
 kills them so that they can be recreated by their controllers with the updated requests.
 
-* Admission Plugin - it sets the correct resource requests on new pods (either just created
+* [Admission Plugin](https://github.com/kubernetes/autoscaler/blob/master/vertical-pod-autoscaler/pkg/admission-controller/README.md) - it sets the correct resource requests on new pods (either just created
 or recreated by their controller due to Updater's activity).
 
 More on the architecture can be found [HERE](https://github.com/kubernetes/community/blob/master/contributors/design-proposals/autoscaling/vertical-pod-autoscaler.md).
@@ -190,29 +296,34 @@ kubectl delete clusterrolebinding myname-cluster-admin-binding
 ./hack/vpa-down.sh
 ```
 
-# Known limitations of the alpha version
+# Known limitations
 
-* Whenever VPA updates the pod resources the pod is recreated, which causes all
-  running containers to be restarted. The pod may be recreated on a different node.
+## Limitations of beta version
+
+* Updating running pods is an experimental feature of VPA. Whenever VPA updates
+  the pod resources the pod is recreated, which causes all running containers to
+  be restarted. The pod may be recreated on a different node.
+* VPA does not evict pods which are not run under a controller. For such pods
+  `Auto` mode is currently equivalent to `Initial`.
 * Vertical Pod Autoscaler **should not be used with the [Horizontal Pod Autoscaler](https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale/) (HPA) on CPU or memory** at this moment. 
   However, you can use VPA with [HPA on custom and external metrics](https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale/#support-for-custom-metrics).
-* VPA in `Auto` mode can only be used on pods that run under a controller
-  (such as Deployment), which is responsible for restarting deleted pods.
-  **Using VPA in `Auto` mode with a pod not running under any controller will
-  cause the pod to be deleted and not recreated**.
 * The VPA admission controller is an admission webhook. If you add other admission webhooks
   to you cluster, it is important to analyze how they interact and whether they may conflict
   with each other. The order of admission controllers is defined by a flag on APIserver.
-* VPA reacts to some out-of-memory events, but not in all situations.
+* VPA reacts to most out-of-memory events, but not in all situations.
 * VPA performance has not been tested in large clusters.
 * VPA recommendation might exceed available resources (e.g. Node size, available
-  size, available quota) and cause **pods to go pending**. This can be addressed by
-  using VPA together with [Cluster Autoscaler](https://github.com/kubernetes/autoscaler/blob/master/cluster-autoscaler/FAQ.md#basics).
+  size, available quota) and cause **pods to go pending**. This can be partly 
+  addressed by using VPA together with [Cluster Autoscaler](https://github.com/kubernetes/autoscaler/blob/master/cluster-autoscaler/FAQ.md#basics).
 * Multiple VPA resources matching the same pod have undefined behavior.
+* VPA does not change resource limits. This implies that recommendations are
+  capped to limits during actuation.
+  **NOTE** This behaviour is likely to change so please don't rely on it.
 
 # Related links
 
+* [FAQ](FAQ.md)
 * [Design
   proposal](https://github.com/kubernetes/community/blob/master/contributors/design-proposals/autoscaling/vertical-pod-autoscaler.md)
 * [API
-  definition](https://github.com/kubernetes/autoscaler/blob/master/vertical-pod-autoscaler/pkg/apis/poc.autoscaling.k8s.io/v1alpha1/types.go)
+  definition](pkg/apis/autoscaling.k8s.io/v1beta2/types.go)

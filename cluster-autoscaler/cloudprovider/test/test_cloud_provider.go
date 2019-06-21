@@ -24,7 +24,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/errors"
-	schedulercache "k8s.io/kubernetes/pkg/scheduler/cache"
+	schedulernodeinfo "k8s.io/kubernetes/pkg/scheduler/nodeinfo"
 )
 
 // OnScaleUpFunc is a function called on node group increase in TestCloudProvider.
@@ -50,7 +50,7 @@ type TestCloudProvider struct {
 	onNodeGroupCreate func(string) error
 	onNodeGroupDelete func(string) error
 	machineTypes      []string
-	machineTemplates  map[string]*schedulercache.NodeInfo
+	machineTemplates  map[string]*schedulernodeinfo.NodeInfo
 	resourceLimiter   *cloudprovider.ResourceLimiter
 }
 
@@ -68,7 +68,7 @@ func NewTestCloudProvider(onScaleUp OnScaleUpFunc, onScaleDown OnScaleDownFunc) 
 // NewTestAutoprovisioningCloudProvider builds new TestCloudProvider with autoprovisioning support
 func NewTestAutoprovisioningCloudProvider(onScaleUp OnScaleUpFunc, onScaleDown OnScaleDownFunc,
 	onNodeGroupCreate OnNodeGroupCreateFunc, onNodeGroupDelete OnNodeGroupDeleteFunc,
-	machineTypes []string, machineTemplates map[string]*schedulercache.NodeInfo) *TestCloudProvider {
+	machineTypes []string, machineTemplates map[string]*schedulernodeinfo.NodeInfo) *TestCloudProvider {
 	return &TestCloudProvider{
 		nodes:             make(map[string]string),
 		groups:            make(map[string]cloudprovider.NodeGroup),
@@ -224,11 +224,6 @@ func (tcp *TestCloudProvider) Refresh() error {
 	return nil
 }
 
-// GetInstanceID gets the instance ID for the specified node.
-func (tcp *TestCloudProvider) GetInstanceID(node *apiv1.Node) string {
-	return node.Spec.ProviderID
-}
-
 // TestNodeGroup is a node group used by TestCloudProvider.
 type TestNodeGroup struct {
 	sync.Mutex
@@ -300,7 +295,7 @@ func (tng *TestNodeGroup) Exist() bool {
 // Create creates the node group on the cloud provider side.
 func (tng *TestNodeGroup) Create() (cloudprovider.NodeGroup, error) {
 	if tng.Exist() {
-		return nil, fmt.Errorf("Group already exist")
+		return nil, fmt.Errorf("group already exist")
 	}
 	newNodeGroup := tng.cloudProvider.AddAutoprovisionedNodeGroup(tng.id, tng.minSize, tng.maxSize, 0, tng.machineType)
 	return newNodeGroup, tng.cloudProvider.onNodeGroupCreate(tng.id)
@@ -380,20 +375,20 @@ func (tng *TestNodeGroup) Autoprovisioned() bool {
 }
 
 // TemplateNodeInfo returns a node template for this node group.
-func (tng *TestNodeGroup) TemplateNodeInfo() (*schedulercache.NodeInfo, error) {
+func (tng *TestNodeGroup) TemplateNodeInfo() (*schedulernodeinfo.NodeInfo, error) {
 	if tng.cloudProvider.machineTemplates == nil {
 		return nil, cloudprovider.ErrNotImplemented
 	}
 	if tng.autoprovisioned {
 		template, found := tng.cloudProvider.machineTemplates[tng.machineType]
 		if !found {
-			return nil, fmt.Errorf("No template declared for %s", tng.machineType)
+			return nil, fmt.Errorf("no template declared for %s", tng.machineType)
 		}
 		return template, nil
 	}
 	template, found := tng.cloudProvider.machineTemplates[tng.id]
 	if !found {
-		return nil, fmt.Errorf("No template declared for %s", tng.id)
+		return nil, fmt.Errorf("no template declared for %s", tng.id)
 	}
 	return template, nil
 }

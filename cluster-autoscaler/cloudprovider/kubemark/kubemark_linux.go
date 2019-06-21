@@ -35,7 +35,7 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/kubernetes/pkg/kubemark"
-	schedulercache "k8s.io/kubernetes/pkg/scheduler/cache"
+	schedulernodeinfo "k8s.io/kubernetes/pkg/scheduler/nodeinfo"
 
 	"k8s.io/klog"
 )
@@ -133,11 +133,6 @@ func (kubemark *KubemarkCloudProvider) GetResourceLimiter() (*cloudprovider.Reso
 // In particular the list of node groups returned by NodeGroups can change as a result of CloudProvider.Refresh().
 func (kubemark *KubemarkCloudProvider) Refresh() error {
 	return nil
-}
-
-// GetInstanceID gets the instance ID for the specified node.
-func (kubemark *KubemarkCloudProvider) GetInstanceID(node *apiv1.Node) string {
-	return node.Spec.ProviderID
 }
 
 // Cleanup cleans up all resources before the cloud provider is removed
@@ -250,7 +245,7 @@ func (nodeGroup *NodeGroup) DecreaseTargetSize(delta int) error {
 }
 
 // TemplateNodeInfo returns a node template for this node group.
-func (nodeGroup *NodeGroup) TemplateNodeInfo() (*schedulercache.NodeInfo, error) {
+func (nodeGroup *NodeGroup) TemplateNodeInfo() (*schedulernodeinfo.NodeInfo, error) {
 	return nil, cloudprovider.ErrNotImplemented
 }
 

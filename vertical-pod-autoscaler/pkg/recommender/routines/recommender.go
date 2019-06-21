@@ -21,10 +21,9 @@ import (
 	"flag"
 	"time"
 
-	"github.com/golang/glog"
-	vpa_types "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/apis/autoscaling.k8s.io/v1beta1"
+	vpa_types "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/apis/autoscaling.k8s.io/v1beta2"
 	vpa_clientset "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/client/clientset/versioned"
-	vpa_api "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/client/clientset/versioned/typed/autoscaling.k8s.io/v1beta1"
+	vpa_api "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/client/clientset/versioned/typed/autoscaling.k8s.io/v1beta2"
 	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/recommender/checkpoint"
 	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/recommender/input"
 	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/recommender/logic"
@@ -32,6 +31,7 @@ import (
 	metrics_recommender "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/metrics/recommender"
 	vpa_utils "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/vpa"
 	"k8s.io/client-go/rest"
+	"k8s.io/klog"
 )
 
 const (
@@ -105,13 +105,15 @@ func (r *recommender) UpdateVPAs() {
 			if !had {
 				metrics_recommender.ObserveRecommendationLatency(vpa.Created)
 			}
+		} else {
+			vpa.Conditions.Set(vpa_types.RecommendationProvided, false, "", "")
 		}
 		cnt.Add(vpa)
 
 		_, err := vpa_utils.UpdateVpaStatusIfNeeded(
 			r.vpaClient.VerticalPodAutoscalers(vpa.ID.Namespace), vpa, &observedVpa.Status)
 		if err != nil {
-			glog.Errorf(
+			klog.Errorf(
 				"Cannot update VPA %v object. Reason: %+v", vpa.ID.VpaName, err)
 		}
 	}
@@ -136,7 +138,7 @@ func getCappedRecommendation(vpaID model.VpaID, resources logic.RecommendedPodRe
 	recommendation := &vpa_types.RecommendedPodResources{containerResources}
 	cappedRecommendation, err := vpa_utils.ApplyVPAPolicy(recommendation, policy)
 	if err != nil {
-		glog.Errorf("Failed to apply policy for VPA %v/%v: %v", vpaID.Namespace, vpaID.VpaName, err)
+		klog.Errorf("Failed to apply policy for VPA %v/%v: %v", vpaID.Namespace, vpaID.VpaName, err)
 		return recommendation
 	}
 	return cappedRecommendation
@@ -170,7 +172,7 @@ func (r *recommender) RunOnce() {
 	ctx, cancelFunc := context.WithDeadline(ctx, time.Now().Add(*checkpointsWriteTimeout))
 	defer cancelFunc()
 
-	glog.V(3).Infof("Recommender Run")
+	klog.V(3).Infof("Recommender Run")
 
 	r.clusterStateFeeder.LoadVPAs()
 	timer.ObserveStep("LoadVPAs")
@@ -180,7 +182,7 @@ func (r *recommender) RunOnce() {
 
 	r.clusterStateFeeder.LoadRealTimeMetrics()
 	timer.ObserveStep("LoadMetrics")
-	glog.V(3).Infof("ClusterState is tracking %v PodStates and %v VPAs", len(r.clusterState.Pods), len(r.clusterState.Vpas))
+	klog.V(3).Infof("ClusterState is tracking %v PodStates and %v VPAs", len(r.clusterState.Pods), len(r.clusterState.Vpas))
 
 	r.UpdateVPAs()
 	timer.ObserveStep("UpdateVPAs")
@@ -219,7 +221,7 @@ func (c RecommenderFactory) Make() Recommender {
 		lastAggregateContainerStateGC: time.Now(),
 		lastCheckpointGC:              time.Now(),
 	}
-	glog.V(3).Infof("New Recommender created %+v", recommender)
+	klog.V(3).Infof("New Recommender created %+v", recommender)
 	return recommender
 }
 
@@ -231,8 +233,8 @@ func NewRecommender(config *rest.Config, checkpointsGCInterval time.Duration, us
 	return RecommenderFactory{
 		ClusterState:           clusterState,
 		ClusterStateFeeder:     input.NewClusterStateFeeder(config, clusterState),
-		CheckpointWriter:       checkpoint.NewCheckpointWriter(clusterState, vpa_clientset.NewForConfigOrDie(config).AutoscalingV1beta1()),
-		VpaClient:              vpa_clientset.NewForConfigOrDie(config).AutoscalingV1beta1(),
+		CheckpointWriter:       checkpoint.NewCheckpointWriter(clusterState, vpa_clientset.NewForConfigOrDie(config).AutoscalingV1beta2()),
+		VpaClient:              vpa_clientset.NewForConfigOrDie(config).AutoscalingV1beta2(),
 		PodResourceRecommender: logic.CreatePodResourceRecommender(),
 		CheckpointsGCInterval:  checkpointsGCInterval,
 		UseCheckpoints:         useCheckpoints,

@@ -22,7 +22,8 @@ import (
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator"
-	schedulercache "k8s.io/kubernetes/pkg/scheduler/cache"
+	schedulerUtils "k8s.io/autoscaler/cluster-autoscaler/utils/scheduler"
+	schedulernodeinfo "k8s.io/kubernetes/pkg/scheduler/nodeinfo"
 )
 
 // podInfo contains Pod and score that corresponds to how important it is to handle the pod first.
@@ -50,22 +51,13 @@ func NewBinpackingNodeEstimator(predicateChecker *simulator.PredicateChecker) *B
 // still be maintained.
 // It is assumed that all pods from the given list can fit to nodeTemplate.
 // Returns the number of nodes needed to accommodate all pods from the list.
-func (estimator *BinpackingNodeEstimator) Estimate(pods []*apiv1.Pod, nodeTemplate *schedulercache.NodeInfo,
-	upcomingNodes []*schedulercache.NodeInfo) int {
+func (estimator *BinpackingNodeEstimator) Estimate(pods []*apiv1.Pod, nodeTemplate *schedulernodeinfo.NodeInfo,
+	upcomingNodes []*schedulernodeinfo.NodeInfo) int {
 
 	podInfos := calculatePodScore(pods, nodeTemplate)
 	sort.Slice(podInfos, func(i, j int) bool { return podInfos[i].score > podInfos[j].score })
 
-	// nodeWithPod function returns NodeInfo, which is a copy of nodeInfo argument with an additional pod scheduled on it.
-	nodeWithPod := func(nodeInfo *schedulercache.NodeInfo, pod *apiv1.Pod) *schedulercache.NodeInfo {
-		podsOnNode := nodeInfo.Pods()
-		podsOnNode = append(podsOnNode, pod)
-		newNodeInfo := schedulercache.NewNodeInfo(podsOnNode...)
-		newNodeInfo.SetNode(nodeInfo.Node())
-		return newNodeInfo
-	}
-
-	newNodes := make([]*schedulercache.NodeInfo, 0)
+	newNodes := make([]*schedulernodeinfo.NodeInfo, 0)
 	newNodes = append(newNodes, upcomingNodes...)
 
 	for _, podInfo := range podInfos {
@@ -73,12 +65,12 @@ func (estimator *BinpackingNodeEstimator) Estimate(pods []*apiv1.Pod, nodeTempla
 		for i, nodeInfo := range newNodes {
 			if err := estimator.predicateChecker.CheckPredicates(podInfo.pod, nil, nodeInfo); err == nil {
 				found = true
-				newNodes[i] = nodeWithPod(nodeInfo, podInfo.pod)
+				newNodes[i] = schedulerUtils.NodeWithPod(nodeInfo, podInfo.pod)
 				break
 			}
 		}
 		if !found {
-			newNodes = append(newNodes, nodeWithPod(nodeTemplate, podInfo.pod))
+			newNodes = append(newNodes, schedulerUtils.NodeWithPod(nodeTemplate, podInfo.pod))
 		}
 	}
 	return len(newNodes) - len(upcomingNodes)
@@ -87,7 +79,7 @@ func (estimator *BinpackingNodeEstimator) Estimate(pods []*apiv1.Pod, nodeTempla
 // Calculates score for all pods and returns podInfo structure.
 // Score is defined as cpu_sum/node_capacity + mem_sum/node_capacity.
 // Pods that have bigger requirements should be processed first, thus have higher scores.
-func calculatePodScore(pods []*apiv1.Pod, nodeTemplate *schedulercache.NodeInfo) []*podInfo {
+func calculatePodScore(pods []*apiv1.Pod, nodeTemplate *schedulernodeinfo.NodeInfo) []*podInfo {
 	podInfos := make([]*podInfo, 0, len(pods))
 
 	for _, pod := range pods {

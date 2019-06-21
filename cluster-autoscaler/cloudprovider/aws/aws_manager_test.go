@@ -18,7 +18,7 @@ package aws
 
 import (
 	"fmt"
-
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -33,20 +33,25 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	apiv1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
+	provider_aws "k8s.io/kubernetes/pkg/cloudprovider/providers/aws"
 	kubeletapis "k8s.io/kubernetes/pkg/kubelet/apis"
 )
+
+// resetAWSRegion resets AWS_REGION environment variable key to its pre-test
+// value, but only if it was originally present among environment variables.
+func resetAWSRegion(value string, present bool) {
+	os.Unsetenv("AWS_REGION")
+	if present {
+		os.Setenv("AWS_REGION", value)
+	}
+}
 
 // TestGetRegion ensures correct source supplies AWS Region.
 func TestGetRegion(t *testing.T) {
 	key := "AWS_REGION"
-	originalRegion, originalPresent := os.LookupEnv(key)
-	defer func(region string, present bool) {
-		os.Unsetenv(key)
-		if present {
-			os.Setenv(key, region)
-		}
-	}(originalRegion, originalPresent)
+	defer resetAWSRegion(os.LookupEnv(key))
 	// Ensure environment variable retains precedence.
 	expected1 := "the-shire-1"
 	os.Setenv(key, expected1)
@@ -72,11 +77,36 @@ func TestBuildGenericLabels(t *testing.T) {
 		},
 		Region: "us-east-1",
 	}, "sillyname")
-	assert.Equal(t, "us-east-1", labels[kubeletapis.LabelZoneRegion])
-	assert.Equal(t, "sillyname", labels[kubeletapis.LabelHostname])
-	assert.Equal(t, "c4.large", labels[kubeletapis.LabelInstanceType])
+	assert.Equal(t, "us-east-1", labels[apiv1.LabelZoneRegion])
+	assert.Equal(t, "sillyname", labels[apiv1.LabelHostname])
+	assert.Equal(t, "c4.large", labels[apiv1.LabelInstanceType])
 	assert.Equal(t, cloudprovider.DefaultArch, labels[kubeletapis.LabelArch])
 	assert.Equal(t, cloudprovider.DefaultOS, labels[kubeletapis.LabelOS])
+}
+
+func TestExtractAllocatableResourcesFromAsg(t *testing.T) {
+	tags := []*autoscaling.TagDescription{
+		{
+			Key:   aws.String("k8s.io/cluster-autoscaler/node-template/resources/cpu"),
+			Value: aws.String("100m"),
+		},
+		{
+			Key:   aws.String("k8s.io/cluster-autoscaler/node-template/resources/memory"),
+			Value: aws.String("100M"),
+		},
+		{
+			Key:   aws.String("k8s.io/cluster-autoscaler/node-template/resources/ephemeral-storage"),
+			Value: aws.String("20G"),
+		},
+	}
+
+	labels := extractAllocatableResourcesFromAsg(tags)
+
+	assert.Equal(t, resource.NewMilliQuantity(100, resource.DecimalSI).String(), labels["cpu"].String())
+	expectedMemory := resource.MustParse("100M")
+	assert.Equal(t, (&expectedMemory).String(), labels["memory"].String())
+	expectedEphemeralStorage := resource.MustParse("20G")
+	assert.Equal(t, (&expectedEphemeralStorage).String(), labels["ephemeral-storage"].String())
 }
 
 func TestExtractLabelsFromAsg(t *testing.T) {
@@ -192,8 +222,11 @@ func TestFetchExplicitAsgs(t *testing.T) {
 			fmt.Sprintf("%d:%d:%s", min, max-1, groupname),
 		},
 	}
+	// #1449 Without AWS_REGION getRegion() lookup runs till timeout during tests.
+	defer resetAWSRegion(os.LookupEnv("AWS_REGION"))
+	os.Setenv("AWS_REGION", "fanghorn")
 	// fetchExplicitASGs is called at manager creation time.
-	m, err := createAWSManagerInternal(nil, do, &autoScalingWrapper{s}, nil)
+	m, err := createAWSManagerInternal(nil, do, &autoScalingWrapper{s, map[string]string{}}, nil)
 	assert.NoError(t, err)
 
 	asgs := m.asgCache.Get()
@@ -218,6 +251,9 @@ func TestBuildInstanceType(t *testing.T) {
 		},
 	})
 
+	// #1449 Without AWS_REGION getRegion() lookup runs till timeout during tests.
+	defer resetAWSRegion(os.LookupEnv("AWS_REGION"))
+	os.Setenv("AWS_REGION", "fanghorn")
 	m, err := createAWSManagerInternal(nil, cloudprovider.NodeGroupDiscoveryOptions{}, nil, &ec2Wrapper{s})
 	assert.NoError(t, err)
 
@@ -280,6 +316,9 @@ func TestGetASGTemplate(t *testing.T) {
 				},
 			})
 
+			// #1449 Without AWS_REGION getRegion() lookup runs till timeout during tests.
+			defer resetAWSRegion(os.LookupEnv("AWS_REGION"))
+			os.Setenv("AWS_REGION", "fanghorn")
 			m, err := createAWSManagerInternal(nil, cloudprovider.NodeGroupDiscoveryOptions{}, nil, &ec2Wrapper{s})
 			assert.NoError(t, err)
 
@@ -354,8 +393,11 @@ func TestFetchAutoAsgs(t *testing.T) {
 		NodeGroupAutoDiscoverySpecs: []string{fmt.Sprintf("asg:tag=%s", strings.Join(tags, ","))},
 	}
 
+	// #1449 Without AWS_REGION getRegion() lookup runs till timeout during tests.
+	defer resetAWSRegion(os.LookupEnv("AWS_REGION"))
+	os.Setenv("AWS_REGION", "fanghorn")
 	// fetchAutoASGs is called at manager creation time, via forceRefresh
-	m, err := createAWSManagerInternal(nil, do, &autoScalingWrapper{s}, nil)
+	m, err := createAWSManagerInternal(nil, do, &autoScalingWrapper{s, map[string]string{}}, nil)
 	assert.NoError(t, err)
 
 	asgs := m.asgCache.Get()
@@ -373,6 +415,278 @@ func TestFetchAutoAsgs(t *testing.T) {
 	err = m.asgCache.regenerate()
 	assert.NoError(t, err)
 	assert.Empty(t, m.asgCache.Get())
+}
+
+type ServiceDescriptor struct {
+	name                         string
+	region                       string
+	signingRegion, signingMethod string
+	signingName                  string
+}
+
+func TestOverridesActiveConfig(t *testing.T) {
+	tests := []struct {
+		name string
+
+		reader io.Reader
+		aws    provider_aws.Services
+
+		expectError        bool
+		active             bool
+		servicesOverridden []ServiceDescriptor
+	}{
+		{
+			"No overrides",
+			strings.NewReader(`
+				[global]
+				`),
+			nil,
+			false, false,
+			[]ServiceDescriptor{},
+		},
+		{
+			"Missing Service Name",
+			strings.NewReader(`
+				[global]
+				[ServiceOverride "1"]
+				Region=sregion
+				URL=https://s3.foo.bar
+				SigningRegion=sregion
+				SigningMethod = sign
+				`),
+			nil,
+			true, false,
+			[]ServiceDescriptor{},
+		},
+		{
+			"Missing Service Region",
+			strings.NewReader(`
+				[global]
+				[ServiceOverride "1"]
+				Service=s3
+				URL=https://s3.foo.bar
+				SigningRegion=sregion
+				SigningMethod = sign
+				`),
+			nil,
+			true, false,
+			[]ServiceDescriptor{},
+		},
+		{
+			"Missing URL",
+			strings.NewReader(`
+				[global]
+				[ServiceOverride "1"]
+				Service="s3"
+				Region=sregion
+				SigningRegion=sregion
+				SigningMethod = sign
+				`),
+			nil,
+			true, false,
+			[]ServiceDescriptor{},
+		},
+		{
+			"Missing Signing Region",
+			strings.NewReader(`
+				[global]
+				[ServiceOverride "1"]
+				Service=s3
+				Region=sregion
+				URL=https://s3.foo.bar
+				SigningMethod = sign
+				`),
+			nil,
+			true, false,
+			[]ServiceDescriptor{},
+		},
+		{
+			"Active Overrides",
+			strings.NewReader(`
+				[Global]
+				[ServiceOverride "1"]
+				Service = "s3      "
+				Region = sregion
+				URL = https://s3.foo.bar
+				SigningRegion = sregion
+				SigningMethod = v4
+				`),
+			nil,
+			false, true,
+			[]ServiceDescriptor{{name: "s3", region: "sregion", signingRegion: "sregion", signingMethod: "v4"}},
+		},
+		{
+			"Multiple Overridden Services",
+			strings.NewReader(`
+				[Global]
+				vpc = vpc-abc1234567
+				[ServiceOverride "1"]
+				Service=s3
+				Region=sregion1
+				URL=https://s3.foo.bar
+				SigningRegion=sregion1
+				SigningMethod = v4
+				[ServiceOverride "2"]
+				Service=ec2
+				Region=sregion2
+				URL=https://ec2.foo.bar
+				SigningRegion=sregion2
+				SigningMethod = v4
+				`),
+			nil,
+			false, true,
+			[]ServiceDescriptor{{name: "s3", region: "sregion1", signingRegion: "sregion1", signingMethod: "v4"},
+				{name: "ec2", region: "sregion2", signingRegion: "sregion2", signingMethod: "v4"}},
+		},
+		{
+			"Duplicate Services",
+			strings.NewReader(`
+				[Global]
+				vpc = vpc-abc1234567
+				[ServiceOverride "1"]
+				Service=s3
+				Region=sregion1
+				URL=https://s3.foo.bar
+				SigningRegion=sregion
+				SigningMethod = sign
+				[ServiceOverride "2"]
+				Service=s3
+				Region=sregion1
+				URL=https://s3.foo.bar
+				SigningRegion=sregion
+				SigningMethod = sign
+				`),
+			nil,
+			true, false,
+			[]ServiceDescriptor{},
+		},
+		{
+			"Multiple Overridden Services in Multiple regions",
+			strings.NewReader(`
+				[global]
+				[ServiceOverride "1"]
+			 	Service=s3
+				Region=region1
+				URL=https://s3.foo.bar
+				SigningRegion=sregion1
+				[ServiceOverride "2"]
+				Service=ec2
+				Region=region2
+				URL=https://ec2.foo.bar
+				SigningRegion=sregion
+				SigningMethod = v4
+				`),
+			nil,
+			false, true,
+			[]ServiceDescriptor{{name: "s3", region: "region1", signingRegion: "sregion1", signingMethod: ""},
+				{name: "ec2", region: "region2", signingRegion: "sregion", signingMethod: "v4"}},
+		},
+		{
+			"Multiple regions, Same Service",
+			strings.NewReader(`
+				[global]
+				[ServiceOverride "1"]
+				Service=s3
+				Region=region1
+				URL=https://s3.foo.bar
+				SigningRegion=sregion1
+				SigningMethod = v3
+				[ServiceOverride "2"]
+				Service=s3
+				Region=region2
+				URL=https://s3.foo.bar
+				SigningRegion=sregion1
+				SigningMethod = v4
+				SigningName = "name"
+				`),
+			nil,
+			false, true,
+			[]ServiceDescriptor{{name: "s3", region: "region1", signingRegion: "sregion1", signingMethod: "v3"},
+				{name: "s3", region: "region2", signingRegion: "sregion1", signingMethod: "v4", signingName: "name"}},
+		},
+	}
+
+	for _, test := range tests {
+		t.Logf("Running test case %s", test.name)
+		cfg, err := readAWSCloudConfig(test.reader)
+		if err == nil {
+			err = validateOverrides(cfg)
+		}
+		if test.expectError {
+			if err == nil {
+				t.Errorf("Should error for case %s (cfg=%v)", test.name, cfg)
+			}
+		} else {
+			if err != nil {
+				t.Errorf("Should succeed for case: %s, got %v", test.name, err)
+			}
+
+			if len(cfg.ServiceOverride) != len(test.servicesOverridden) {
+				t.Errorf("Expected %d overridden services, received %d for case %s",
+					len(test.servicesOverridden), len(cfg.ServiceOverride), test.name)
+			} else {
+				for _, sd := range test.servicesOverridden {
+					var found *struct {
+						Service       string
+						Region        string
+						URL           string
+						SigningRegion string
+						SigningMethod string
+						SigningName   string
+					}
+					for _, v := range cfg.ServiceOverride {
+						if v.Service == sd.name && v.Region == sd.region {
+							found = v
+							break
+						}
+					}
+					if found == nil {
+						t.Errorf("Missing override for service %s in case %s",
+							sd.name, test.name)
+					} else {
+						if found.SigningRegion != sd.signingRegion {
+							t.Errorf("Expected signing region '%s', received '%s' for case %s",
+								sd.signingRegion, found.SigningRegion, test.name)
+						}
+						if found.SigningMethod != sd.signingMethod {
+							t.Errorf("Expected signing method '%s', received '%s' for case %s",
+								sd.signingMethod, found.SigningRegion, test.name)
+						}
+						targetName := fmt.Sprintf("https://%s.foo.bar", sd.name)
+						if found.URL != targetName {
+							t.Errorf("Expected Endpoint '%s', received '%s' for case %s",
+								targetName, found.URL, test.name)
+						}
+						if found.SigningName != sd.signingName {
+							t.Errorf("Expected signing name '%s', received '%s' for case %s",
+								sd.signingName, found.SigningName, test.name)
+						}
+
+						fn := getResolver(cfg)
+						ep1, e := fn(sd.name, sd.region, nil)
+						if e != nil {
+							t.Errorf("Expected a valid endpoint for %s in case %s",
+								sd.name, test.name)
+						} else {
+							targetName := fmt.Sprintf("https://%s.foo.bar", sd.name)
+							if ep1.URL != targetName {
+								t.Errorf("Expected endpoint url: %s, received %s in case %s",
+									targetName, ep1.URL, test.name)
+							}
+							if ep1.SigningRegion != sd.signingRegion {
+								t.Errorf("Expected signing region '%s', received '%s' in case %s",
+									sd.signingRegion, ep1.SigningRegion, test.name)
+							}
+							if ep1.SigningMethod != sd.signingMethod {
+								t.Errorf("Expected signing method '%s', received '%s' in case %s",
+									sd.signingMethod, ep1.SigningRegion, test.name)
+							}
+						}
+					}
+				}
+			}
+		}
+	}
 }
 
 func tagsMatcher(expected *autoscaling.DescribeTagsInput) func(*autoscaling.DescribeTagsInput) bool {

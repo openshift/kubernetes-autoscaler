@@ -18,56 +18,78 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"net/http"
+	"os"
 	"time"
 
-	"github.com/golang/glog"
 	kube_flag "k8s.io/apiserver/pkg/util/flag"
 	"k8s.io/autoscaler/vertical-pod-autoscaler/common"
 	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/admission-controller/logic"
 	vpa_clientset "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/client/clientset/versioned"
-	vpa_lister "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/client/listers/autoscaling.k8s.io/v1beta1"
+	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/target"
 	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/metrics"
 	metrics_admission "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/metrics/admission"
 	vpa_api_util "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/vpa"
+	"k8s.io/client-go/informers"
+	kube_client "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
+	"k8s.io/klog"
+)
+
+const (
+	defaultResyncPeriod time.Duration = 10 * time.Minute
 )
 
 var (
-	certsDir = flag.String("certs-dir", "/etc/tls-certs", `Where the TLS cert files are stored.`)
-	address  = flag.String("address", ":8944", "The address to expose Prometheus metrics.")
-)
-
-func newReadyVPALister(stopChannel <-chan struct{}) vpa_lister.VerticalPodAutoscalerLister {
-	config, err := rest.InClusterConfig()
-	if err != nil {
-		glog.Fatal(err)
+	certsConfiguration = &certsConfig{
+		clientCaFile:  flag.String("client-ca-file", "/etc/tls-certs/caCert.pem", "Path to CA PEM file."),
+		tlsCertFile:   flag.String("tls-cert-file", "/etc/tls-certs/serverCert.pem", "Path to server certificate PEM file."),
+		tlsPrivateKey: flag.String("tls-private-key", "/etc/tls-certs/serverKey.pem", "Path to server certificate key PEM file."),
 	}
-	vpaClient := vpa_clientset.NewForConfigOrDie(config)
-	return vpa_api_util.NewAllVpasLister(vpaClient, stopChannel)
-}
+
+	port           = flag.Int("port", 8000, "The port to listen on.")
+	address        = flag.String("address", ":8944", "The address to expose Prometheus metrics.")
+	namespace      = os.Getenv("NAMESPACE")
+	webhookAddress = flag.String("webhook-address", "", "Address under which webhook is registered. Used when registerByURL is set to true.")
+	webhookPort    = flag.String("webhook-port", "", "Server Port for Webhook")
+	registerByURL  = flag.Bool("register-by-url", false, "If set to true, admission webhook will be registered by URL (webhookAddress:webhookPort) instead of by service name")
+)
 
 func main() {
 	kube_flag.InitFlags()
-	glog.V(1).Infof("Vertical Pod Autoscaler %s Admission Controller", common.VerticalPodAutoscalerVersion)
+	klog.V(1).Infof("Vertical Pod Autoscaler %s Admission Controller", common.VerticalPodAutoscalerVersion)
 
 	healthCheck := metrics.NewHealthCheck(time.Minute, false)
 	metrics.Initialize(*address, healthCheck)
 	metrics_admission.Register()
 
-	certs := initCerts(*certsDir)
-	stopChannel := make(chan struct{})
-	vpaLister := newReadyVPALister(stopChannel)
-	as := logic.NewAdmissionServer(logic.NewRecommendationProvider(vpaLister, vpa_api_util.NewCappingRecommendationProcessor()), logic.NewDefaultPodPreProcessor())
+	certs := initCerts(*certsConfiguration)
+
+	config, err := rest.InClusterConfig()
+	if err != nil {
+		klog.Fatal(err)
+	}
+
+	vpaClient := vpa_clientset.NewForConfigOrDie(config)
+	vpaLister := vpa_api_util.NewAllVpasLister(vpaClient, make(chan struct{}))
+	kubeClient := kube_client.NewForConfigOrDie(config)
+	factory := informers.NewSharedInformerFactory(kubeClient, defaultResyncPeriod)
+	targetSelectorFetcher := target.NewCompositeTargetSelectorFetcher(
+		target.NewVpaTargetSelectorFetcher(config, kubeClient, factory),
+		target.NewBeta1TargetSelectorFetcher(config),
+	)
+	as := logic.NewAdmissionServer(logic.NewRecommendationProvider(vpaLister, vpa_api_util.NewCappingRecommendationProcessor(), targetSelectorFetcher), logic.NewDefaultPodPreProcessor())
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		as.Serve(w, r)
 		healthCheck.UpdateLastActivity()
 	})
 	clientset := getClient()
 	server := &http.Server{
-		Addr:      ":8000",
+		Addr:      fmt.Sprintf(":%d", *port),
 		TLSConfig: configTLS(clientset, certs.serverCert, certs.serverKey),
 	}
-	go selfRegistration(clientset, certs.caCert)
+	url := fmt.Sprintf("%v:%v", webhookAddress, webhookPort)
+	go selfRegistration(clientset, certs.caCert, &namespace, url, *registerByURL)
 	server.ListenAndServeTLS("", "")
 }

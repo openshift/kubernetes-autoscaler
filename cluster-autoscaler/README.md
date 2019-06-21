@@ -9,7 +9,13 @@ Cluster Autoscaler is a tool that automatically adjusts the size of the Kubernet
 
 # FAQ/Documentation
 
-Is available [HERE](./FAQ.md).
+An FAQ is available [HERE](./FAQ.md).
+
+You should also take a look at the notes and "gotchas" for your specific cloud provider:
+* [AliCloud](./cloudprovider/alicloud/README.md)
+* [Azure](./cloudprovider/azure/README.md)
+* [AWS](./cloudprovider/aws/README.md)
+* [BaiduCloud](./cloudprovider/baiducloud/README.md)
 
 # Releases
 
@@ -19,6 +25,7 @@ Starting from Kubernetes 1.12, versioning scheme was changed to match Kubernetes
 
 | Kubernetes Version  | CA Version   |
 |--------|--------|
+| 1.13.X | 1.13.X  |
 | 1.12.X | 1.12.X  |
 | 1.11.X | 1.3.X  |
 | 1.10.X | 1.2.X  |
@@ -121,8 +128,8 @@ default deployment strategy on GCP.
 It is possible to run a customized deployment of Cluster Autoscaler on worker nodes, but extra care needs
 to be taken to ensure that Cluster Autoscaler remains up and running. Users can put it into kube-system
 namespace (Cluster Autoscaler doesn't scale down node with non-mirrored kube-system pods running
-on them) and add `scheduler.alpha.kubernetes.io/critical-pod` annotation (so that the rescheduler,
-if enabled, will kill other pods to make space for it to run).
+on them) and set a `priorityClassName: system-cluster-critical` property on your pod spec
+(to prevent your pod from being evicted).
 
 Supported cloud providers:
 * GCE https://kubernetes.io/docs/concepts/cluster-administration/cluster-management/

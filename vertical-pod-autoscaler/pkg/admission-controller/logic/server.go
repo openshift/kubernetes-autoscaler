@@ -24,13 +24,13 @@ import (
 
 	"strings"
 
-	"github.com/golang/glog"
 	"k8s.io/api/admission/v1beta1"
 	"k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	vpa_types "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/apis/autoscaling.k8s.io/v1beta1"
+	vpa_types "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/apis/autoscaling.k8s.io/v1beta2"
 	metrics_admission "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/metrics/admission"
 	vpa_api_util "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/vpa"
+	"k8s.io/klog"
 )
 
 // AdmissionServer is an admission webhook server that modifies pod resources request based on VPA recommendation
@@ -59,7 +59,7 @@ func (s *AdmissionServer) getPatchesForPodResourceRequest(raw []byte, namespace 
 		pod.Name = pod.GenerateName + "%"
 		pod.Namespace = namespace
 	}
-	glog.V(4).Infof("Admitting pod %v", pod.ObjectMeta)
+	klog.V(4).Infof("Admitting pod %v", pod.ObjectMeta)
 	containersResources, annotationsPerContainer, vpaName, err := s.recommendationProvider.GetContainersResourcesForPod(&pod)
 	if err != nil {
 		return nil, err
@@ -147,14 +147,14 @@ var (
 	}
 )
 
-func validateVPA(vpa *vpa_types.VerticalPodAutoscaler) error {
+func validateVPA(vpa *vpa_types.VerticalPodAutoscaler, isCreate bool) error {
 	if vpa.Spec.UpdatePolicy != nil {
 		mode := vpa.Spec.UpdatePolicy.UpdateMode
 		if mode == nil {
 			return fmt.Errorf("UpdateMode is required if UpdatePolicy is used")
 		}
 		if _, found := possibleUpdateModes[*mode]; !found {
-			return fmt.Errorf("Unexpected UpdateMode value %s", *mode)
+			return fmt.Errorf("unexpected UpdateMode value %s", *mode)
 		}
 	}
 
@@ -166,33 +166,37 @@ func validateVPA(vpa *vpa_types.VerticalPodAutoscaler) error {
 			mode := policy.Mode
 			if mode != nil {
 				if _, found := possibleScalingModes[*mode]; !found {
-					return fmt.Errorf("Unexpected Mode value %s", *mode)
+					return fmt.Errorf("unexpected Mode value %s", *mode)
 				}
 			}
 			for resource, min := range policy.MinAllowed {
 				max, found := policy.MaxAllowed[resource]
 				if found && max.Cmp(min) < 0 {
-					return fmt.Errorf("Max resource for %v is lower than min", resource)
+					return fmt.Errorf("max resource for %v is lower than min", resource)
 				}
 			}
 		}
 	}
 
+	if isCreate && vpa.Spec.TargetRef == nil {
+		return fmt.Errorf("TargetRef is required. If you're using v1beta1 version of the API, please migrate to v1beta2.")
+	}
+
 	return nil
 }
 
-func getPatchesForVPADefaults(raw []byte) ([]patchRecord, error) {
+func getPatchesForVPADefaults(raw []byte, isCreate bool) ([]patchRecord, error) {
 	vpa, err := parseVPA(raw)
 	if err != nil {
 		return nil, err
 	}
 
-	err = validateVPA(vpa)
+	err = validateVPA(vpa, isCreate)
 	if err != nil {
 		return nil, err
 	}
 
-	glog.V(4).Infof("Processing vpa: %v", vpa)
+	klog.V(4).Infof("Processing vpa: %v", vpa)
 	patches := []patchRecord{}
 	if vpa.Spec.UpdatePolicy == nil {
 		// Sets the default updatePolicy.
@@ -212,7 +216,7 @@ func (s *AdmissionServer) admit(data []byte) (*v1beta1.AdmissionResponse, metric
 
 	ar := v1beta1.AdmissionReview{}
 	if err := json.Unmarshal(data, &ar); err != nil {
-		glog.Error(err)
+		klog.Error(err)
 		return &response, metrics_admission.Error, metrics_admission.Unknown
 	}
 	// The externalAdmissionHookConfiguration registered via selfRegistration
@@ -228,7 +232,7 @@ func (s *AdmissionServer) admit(data []byte) (*v1beta1.AdmissionResponse, metric
 		patches, err = s.getPatchesForPodResourceRequest(ar.Request.Object.Raw, ar.Request.Namespace)
 		resource = metrics_admission.Pod
 	case vpaResource:
-		patches, err = getPatchesForVPADefaults(ar.Request.Object.Raw)
+		patches, err = getPatchesForVPADefaults(ar.Request.Object.Raw, ar.Request.Operation == v1beta1.Create)
 		resource = metrics_admission.Vpa
 		// we don't let in problematic VPA objects - late validation
 		if err != nil {
@@ -243,20 +247,20 @@ func (s *AdmissionServer) admit(data []byte) (*v1beta1.AdmissionResponse, metric
 	}
 
 	if err != nil {
-		glog.Error(err)
+		klog.Error(err)
 		return &response, metrics_admission.Error, resource
 	}
 
 	if len(patches) > 0 {
 		patch, err := json.Marshal(patches)
 		if err != nil {
-			glog.Errorf("Cannot marshal the patch %v: %v", patches, err)
+			klog.Errorf("Cannot marshal the patch %v: %v", patches, err)
 			return &response, metrics_admission.Error, resource
 		}
 		patchType := v1beta1.PatchTypeJSONPatch
 		response.PatchType = &patchType
 		response.Patch = patch
-		glog.V(4).Infof("Sending patches: %v", patches)
+		klog.V(4).Infof("Sending patches: %v", patches)
 	}
 
 	var status metrics_admission.AdmissionStatus
@@ -286,7 +290,7 @@ func (s *AdmissionServer) Serve(w http.ResponseWriter, r *http.Request) {
 	// verify the content type is accurate
 	contentType := r.Header.Get("Content-Type")
 	if contentType != "application/json" {
-		glog.Errorf("contentType=%s, expect application/json", contentType)
+		klog.Errorf("contentType=%s, expect application/json", contentType)
 		timer.Observe(metrics_admission.Error, metrics_admission.Unknown)
 		return
 	}
@@ -298,13 +302,13 @@ func (s *AdmissionServer) Serve(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := json.Marshal(ar)
 	if err != nil {
-		glog.Error(err)
+		klog.Error(err)
 		timer.Observe(metrics_admission.Error, resource)
 		return
 	}
 
 	if _, err := w.Write(resp); err != nil {
-		glog.Error(err)
+		klog.Error(err)
 		timer.Observe(metrics_admission.Error, resource)
 		return
 	}
