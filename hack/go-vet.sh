@@ -7,6 +7,6 @@ else
     --env IS_CONTAINER=TRUE \
     --volume "${PWD}:/go/src/k8s.io/autoscaler:z" \
     --workdir "/go/src/k8s.io/autoscaler" \
-    openshift/origin-release:golang-1.10 \
+    openshift/origin-release:golang-1.12 \
     ./hack/go-vet.sh "${@}"
 fi
