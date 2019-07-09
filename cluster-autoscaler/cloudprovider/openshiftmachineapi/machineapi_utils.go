@@ -20,12 +20,19 @@ import (
 	"strconv"
 
 	"github.com/pkg/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 const (
 	nodeGroupMinSizeAnnotationKey = "machine.openshift.io/cluster-api-autoscaler-node-group-min-size"
 	nodeGroupMaxSizeAnnotationKey = "machine.openshift.io/cluster-api-autoscaler-node-group-max-size"
+
+	nodeGroupInstanceCPUCapacity    = "machine.openshift.io/cluster-api-instance-cpu-capacity"
+	nodeGroupInstanceGPUCapacity    = "machine.openshift.io/cluster-api-instance-gpu-capacity"
+	nodeGroupInstanceMemoryCapacity = "machine.openshift.io/cluster-api-instance-memory-capacity"
+	nodeGroupInstancePodCapacity    = "machine.openshift.io/cluster-api-instance-pod-capacity"
+	nodeGroupScaleFromZero          = "machine.openshift.io/cluster-api-scale-from-zero"
 )
 
 var (
@@ -46,6 +53,8 @@ var (
 	// errInvalidMaxAnnotationValue is the error returned when a
 	// machine set has a non-integral max annotation value.
 	errInvalidMaxAnnotation = errors.New("invalid max annotation")
+
+	zeroQuantity = resource.MustParse("0")
 )
 
 // minSize returns the minimum value encoded in the annotations keyed
@@ -142,4 +151,39 @@ func machineSetIsOwnedByMachineDeployment(machineSet *MachineSet, machineDeploym
 		return ref.UID == machineDeployment.UID
 	}
 	return false
+}
+
+func scaleFromZeroEnabled(annotations map[string]string) bool {
+	if val, exists := annotations[nodeGroupScaleFromZero]; exists {
+		return val == "true"
+	}
+	return false
+}
+
+func parseCPUCapacity(annotations map[string]string) (resource.Quantity, error) {
+	if val, exists := annotations[nodeGroupInstanceCPUCapacity]; exists && val != "" {
+		return resource.ParseQuantity(val)
+	}
+	return zeroQuantity.DeepCopy(), nil
+}
+
+func parseMemoryCapacity(annotations map[string]string) (resource.Quantity, error) {
+	if val, exists := annotations[nodeGroupInstanceMemoryCapacity]; exists && val != "" {
+		return resource.ParseQuantity(val)
+	}
+	return zeroQuantity.DeepCopy(), nil
+}
+
+func parsePodCapacity(annotations map[string]string) (resource.Quantity, error) {
+	if val, exists := annotations[nodeGroupInstancePodCapacity]; exists && val != "" {
+		return resource.ParseQuantity(val)
+	}
+	return zeroQuantity.DeepCopy(), nil
+}
+
+func parseGPUCapacity(annotations map[string]string) (resource.Quantity, error) {
+	if val, exists := annotations[nodeGroupInstanceGPUCapacity]; exists && val != "" {
+		return resource.ParseQuantity(val)
+	}
+	return zeroQuantity.DeepCopy(), nil
 }

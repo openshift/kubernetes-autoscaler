@@ -21,8 +21,11 @@ import (
 	"path"
 	"time"
 
+	apiv1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	"k8s.io/utils/pointer"
 )
 
@@ -118,4 +121,32 @@ func newMachineSetScalableResource(controller *machineController, machineSet *Ma
 		maxSize:    maxSize,
 		minSize:    minSize,
 	}, nil
+}
+
+func (r machineSetScalableResource) Labels() map[string]string {
+	return cloudprovider.JoinStringMaps(r.machineSet.Labels, r.machineSet.Spec.Template.Labels, r.machineSet.Spec.Template.Spec.Labels)
+}
+
+func (r machineSetScalableResource) Taints() []apiv1.Taint {
+	return r.machineSet.Spec.Template.Spec.Taints
+}
+
+func (r machineSetScalableResource) CanScaleFromZero() bool {
+	return scaleFromZeroEnabled(r.machineSet.Annotations)
+}
+
+func (r machineSetScalableResource) InstanceCPUCapacity() (resource.Quantity, error) {
+	return parseCPUCapacity(r.machineSet.Annotations)
+}
+
+func (r machineSetScalableResource) InstanceMemoryCapacity() (resource.Quantity, error) {
+	return parseMemoryCapacity(r.machineSet.Annotations)
+}
+
+func (r machineSetScalableResource) InstancePodCapacity() (resource.Quantity, error) {
+	return parsePodCapacity(r.machineSet.Annotations)
+}
+
+func (r machineSetScalableResource) InstanceGPUCapacity() (resource.Quantity, error) {
+	return parseGPUCapacity(r.machineSet.Annotations)
 }

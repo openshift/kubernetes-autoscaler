@@ -20,6 +20,7 @@ import (
 	"strings"
 	"testing"
 
+	"k8s.io/apimachinery/pkg/api/resource"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -365,6 +366,198 @@ func TestUtilMachineSetMachineDeploymentOwnerRef(t *testing.T) {
 			owned := machineSetHasMachineDeploymentOwnerRef(&tc.machineSet)
 			if tc.owned != owned {
 				t.Errorf("expected %t, got %t", tc.owned, owned)
+			}
+		})
+	}
+}
+
+func TestScaleFromZeroEnabled(t *testing.T) {
+	for _, tc := range []struct {
+		description string
+		enabled     bool
+		annotations map[string]string
+	}{{
+		description: "nil annotations",
+		enabled:     false,
+	}, {
+		description: "empty annotations",
+		annotations: map[string]string{},
+		enabled:     false,
+	}, {
+		description: "non-matching annotation",
+		annotations: map[string]string{"foo": "bar"},
+		enabled:     false,
+	}, {
+		description: "matching key, value=!true annotation",
+		annotations: map[string]string{
+			"foo":                  "bar",
+			nodeGroupScaleFromZero: "false",
+		},
+		enabled: false,
+	}, {
+		description: "matching key, value=true annotation",
+		annotations: map[string]string{
+			"foo":                  "bar",
+			nodeGroupScaleFromZero: "true",
+		},
+		enabled: true,
+	}} {
+		t.Run(tc.description, func(t *testing.T) {
+			got := scaleFromZeroEnabled(tc.annotations)
+			if tc.enabled != got {
+				t.Errorf("expected %t, got %t", tc.enabled, got)
+			}
+		})
+	}
+}
+
+func TestParseCPUCapacity(t *testing.T) {
+	for _, tc := range []struct {
+		description      string
+		annotations      map[string]string
+		expectedQuantity resource.Quantity
+		expectedError    bool
+	}{{
+		description:      "nil annotations",
+		expectedQuantity: zeroQuantity.DeepCopy(),
+		expectedError:    false,
+	}, {
+		description:      "empty annotations",
+		annotations:      map[string]string{},
+		expectedQuantity: zeroQuantity.DeepCopy(),
+		expectedError:    false,
+	}, {
+		description:      "bad quantity",
+		annotations:      map[string]string{nodeGroupInstanceCPUCapacity: "not-a-quantity"},
+		expectedQuantity: zeroQuantity.DeepCopy(),
+		expectedError:    true,
+	}, {
+		description:      "valid quantity",
+		annotations:      map[string]string{nodeGroupInstanceCPUCapacity: "123m"},
+		expectedError:    false,
+		expectedQuantity: resource.MustParse("123m"),
+	}} {
+		t.Run(tc.description, func(t *testing.T) {
+			got, err := parseCPUCapacity(tc.annotations)
+			if tc.expectedError && err == nil {
+				t.Fatal("expected an error")
+			}
+			if tc.expectedQuantity.Cmp(got) != 0 {
+				t.Errorf("expected %v, got %v", tc.expectedQuantity.String(), got.String())
+			}
+		})
+	}
+}
+
+func TestParseMemoryCapacity(t *testing.T) {
+	for _, tc := range []struct {
+		description      string
+		annotations      map[string]string
+		expectedQuantity resource.Quantity
+		expectedError    bool
+	}{{
+		description:      "nil annotations",
+		expectedQuantity: zeroQuantity.DeepCopy(),
+		expectedError:    false,
+	}, {
+		description:      "empty annotations",
+		annotations:      map[string]string{},
+		expectedQuantity: zeroQuantity.DeepCopy(),
+		expectedError:    false,
+	}, {
+		description:      "bad quantity",
+		annotations:      map[string]string{nodeGroupInstanceMemoryCapacity: "not-a-quantity"},
+		expectedQuantity: zeroQuantity.DeepCopy(),
+		expectedError:    true,
+	}, {
+		description:      "valid quantity",
+		annotations:      map[string]string{nodeGroupInstanceMemoryCapacity: "456Mi"},
+		expectedError:    false,
+		expectedQuantity: resource.MustParse("456Mi"),
+	}} {
+		t.Run(tc.description, func(t *testing.T) {
+			got, err := parseMemoryCapacity(tc.annotations)
+			if tc.expectedError && err == nil {
+				t.Fatal("expected an error")
+			}
+			if tc.expectedQuantity.Cmp(got) != 0 {
+				t.Errorf("expected %v, got %v", tc.expectedQuantity.String(), got.String())
+			}
+		})
+	}
+}
+
+func TestParsePodCapacity(t *testing.T) {
+	for _, tc := range []struct {
+		description      string
+		annotations      map[string]string
+		expectedQuantity resource.Quantity
+		expectedError    bool
+	}{{
+		description:      "nil annotations",
+		expectedQuantity: zeroQuantity.DeepCopy(),
+		expectedError:    false,
+	}, {
+		description:      "empty annotations",
+		annotations:      map[string]string{},
+		expectedQuantity: zeroQuantity.DeepCopy(),
+		expectedError:    false,
+	}, {
+		description:      "bad quantity",
+		annotations:      map[string]string{nodeGroupInstancePodCapacity: "not-a-quantity"},
+		expectedQuantity: zeroQuantity.DeepCopy(),
+		expectedError:    true,
+	}, {
+		description:      "valid quantity",
+		annotations:      map[string]string{nodeGroupInstancePodCapacity: "42"},
+		expectedError:    false,
+		expectedQuantity: resource.MustParse("42"),
+	}} {
+		t.Run(tc.description, func(t *testing.T) {
+			got, err := parsePodCapacity(tc.annotations)
+			if tc.expectedError && err == nil {
+				t.Fatal("expected an error")
+			}
+			if tc.expectedQuantity.Cmp(got) != 0 {
+				t.Errorf("expected %v, got %v", tc.expectedQuantity.String(), got.String())
+			}
+		})
+	}
+}
+
+func TestParseGPUCapacity(t *testing.T) {
+	for _, tc := range []struct {
+		description      string
+		annotations      map[string]string
+		expectedQuantity resource.Quantity
+		expectedError    bool
+	}{{
+		description:      "nil annotations",
+		expectedQuantity: zeroQuantity.DeepCopy(),
+		expectedError:    false,
+	}, {
+		description:      "empty annotations",
+		annotations:      map[string]string{},
+		expectedQuantity: zeroQuantity.DeepCopy(),
+		expectedError:    false,
+	}, {
+		description:      "bad quantity",
+		annotations:      map[string]string{nodeGroupInstanceGPUCapacity: "not-a-quantity"},
+		expectedQuantity: zeroQuantity.DeepCopy(),
+		expectedError:    true,
+	}, {
+		description:      "valid quantity",
+		annotations:      map[string]string{nodeGroupInstanceGPUCapacity: "13"},
+		expectedError:    false,
+		expectedQuantity: resource.MustParse("13"),
+	}} {
+		t.Run(tc.description, func(t *testing.T) {
+			got, err := parseGPUCapacity(tc.annotations)
+			if tc.expectedError && err == nil {
+				t.Fatal("expected an error")
+			}
+			if tc.expectedQuantity.Cmp(got) != 0 {
+				t.Errorf("expected %v, got %v", tc.expectedQuantity.String(), got.String())
 			}
 		})
 	}

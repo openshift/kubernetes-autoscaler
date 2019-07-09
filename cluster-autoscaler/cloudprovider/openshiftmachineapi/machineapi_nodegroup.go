@@ -18,9 +18,13 @@ package openshiftmachineapi
 
 import (
 	"fmt"
+	"math/rand"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
+	kubeletapis "k8s.io/kubernetes/pkg/kubelet/apis"
 	schedulernodeinfo "k8s.io/kubernetes/pkg/scheduler/nodeinfo"
 )
 
@@ -103,8 +107,10 @@ func (ng *nodegroup) DeleteNodes(nodes []*corev1.Node) error {
 	// and we fail fast.
 	replicas := ng.scalableResource.Replicas()
 
-	if replicas-int32(len(nodes)) <= 0 {
-		return fmt.Errorf("unable to delete %d machines in %q, machine replicas are <= 0 ", len(nodes), ng.Id())
+	if !ng.scalableResource.CanScaleFromZero() {
+		if replicas-int32(len(nodes)) <= 0 {
+			return fmt.Errorf("unable to delete %d machines in %q, machine replicas are <= 0 ", len(nodes), ng.Id())
+		}
 	}
 
 	// Step 3: annotate the corresponding machine that it is a
@@ -212,9 +218,59 @@ func (ng *nodegroup) Nodes() ([]cloudprovider.Instance, error) {
 // fully populated Node object, with all of the labels, capacity and
 // allocatable information as well as all pods that are started on the
 // node by default, using manifest (most likely only kube-proxy).
-// Implementation optional.
 func (ng *nodegroup) TemplateNodeInfo() (*schedulernodeinfo.NodeInfo, error) {
-	return nil, cloudprovider.ErrNotImplemented
+	if !ng.scalableResource.CanScaleFromZero() {
+		return nil, cloudprovider.ErrNotImplemented
+	}
+
+	cpu, err := ng.scalableResource.InstanceCPUCapacity()
+	if err != nil {
+		return nil, err
+	}
+
+	mem, err := ng.scalableResource.InstanceMemoryCapacity()
+	if err != nil {
+		return nil, err
+	}
+
+	pod, err := ng.scalableResource.InstancePodCapacity()
+	if err != nil {
+		return nil, err
+	}
+
+	if cpu.IsZero() || mem.IsZero() {
+		return nil, cloudprovider.ErrNotImplemented
+	}
+
+	if pod.IsZero() {
+		pod = *resource.NewQuantity(110, resource.DecimalSI)
+	}
+
+	capacity := map[corev1.ResourceName]resource.Quantity{
+		corev1.ResourceCPU:    cpu,
+		corev1.ResourceMemory: mem,
+		corev1.ResourcePods:   pod,
+	}
+
+	nodeName := fmt.Sprintf("%s-asg-%d", ng.Name(), rand.Int63())
+	node := corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:     nodeName,
+			SelfLink: fmt.Sprintf("/api/v1/nodes/%s", nodeName),
+			Labels:   map[string]string{},
+		},
+	}
+
+	node.Status.Capacity = capacity
+	node.Status.Allocatable = capacity
+	node.Status.Conditions = cloudprovider.BuildReadyConditions()
+	node.Spec.Taints = ng.scalableResource.Taints()
+	node.Labels = joinStringMaps(ng.scalableResource.Labels(), buildGenericLabels(nodeName))
+
+	nodeInfo := schedulernodeinfo.NewNodeInfo(cloudprovider.BuildKubeProxy(ng.Name()))
+	nodeInfo.SetNode(&node)
+
+	return nodeInfo, nil
 }
 
 // Exist checks if the node group really exists on the cloud nodegroup
@@ -264,4 +320,27 @@ func newNodegroupFromMachineDeployment(controller *machineController, machineDep
 		machineController: controller,
 		scalableResource:  scalableResource,
 	}, nil
+}
+
+func joinStringMaps(labels ...map[string]string) map[string]string {
+	var m map[string]string
+
+	for i := range labels {
+		switch i {
+		case 0:
+			m = labels[i]
+		default:
+			m = cloudprovider.JoinStringMaps(m, labels[i])
+		}
+	}
+
+	return m
+}
+
+func buildGenericLabels(nodeName string) map[string]string {
+	m := make(map[string]string)
+	m[kubeletapis.LabelArch] = cloudprovider.DefaultArch
+	m[kubeletapis.LabelOS] = cloudprovider.DefaultOS
+	//m[kubeletapis.Hostname] = nodeName
+	return m
 }

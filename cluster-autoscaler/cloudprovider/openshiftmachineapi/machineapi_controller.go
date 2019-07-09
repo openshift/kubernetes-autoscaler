@@ -408,7 +408,9 @@ func (c *machineController) machineSetNodeGroups() ([]*nodegroup, error) {
 		if err != nil {
 			return err
 		}
-		if ng.MaxSize()-ng.MinSize() > 0 && pointer.Int32PtrDerefOr(machineSet.Spec.Replicas, 0) > 0 {
+		if ng.scalableResource.CanScaleFromZero() {
+			nodegroups = append(nodegroups, ng)
+		} else if ng.MaxSize()-ng.MinSize() > 0 && pointer.Int32PtrDerefOr(machineSet.Spec.Replicas, 0) > 0 {
 			nodegroups = append(nodegroups, ng)
 		}
 		return nil
@@ -490,11 +492,10 @@ func (c *machineController) nodeGroupForNode(node *corev1.Node) (*nodegroup, err
 			if err != nil {
 				return nil, fmt.Errorf("failed to build nodegroup for node %q: %v", node.Name, err)
 			}
-			// We don't scale from 0 so nodes must belong
-			// to a nodegroup that has a scale size of at
-			// least 1.
-			if nodegroup.MaxSize()-nodegroup.MinSize() < 1 {
-				return nil, nil
+			if !nodegroup.scalableResource.CanScaleFromZero() {
+				if nodegroup.MaxSize()-nodegroup.MinSize() < 1 {
+					return nil, nil
+				}
 			}
 			return nodegroup, nil
 		}
@@ -505,12 +506,11 @@ func (c *machineController) nodeGroupForNode(node *corev1.Node) (*nodegroup, err
 		return nil, fmt.Errorf("failed to build nodegroup for node %q: %v", node.Name, err)
 	}
 
-	// We don't scale from 0 so nodes must belong to a nodegroup
-	// that has a scale size of at least 1.
-	if nodegroup.MaxSize()-nodegroup.MinSize() < 1 {
-		return nil, nil
+	if !nodegroup.scalableResource.CanScaleFromZero() {
+		if nodegroup.MaxSize()-nodegroup.MinSize() < 1 {
+			return nil, nil
+		}
 	}
-
 	klog.V(4).Infof("node %q is in nodegroup %q", node.Name, machineSet.Name)
 	return nodegroup, nil
 }
