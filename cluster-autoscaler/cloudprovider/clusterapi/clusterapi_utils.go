@@ -17,10 +17,12 @@ limitations under the License.
 package clusterapi
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 
 	"github.com/pkg/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
@@ -32,6 +34,11 @@ const (
 	nodeGroupMaxSizeAnnotationKey           = "machine.openshift.io/cluster-api-autoscaler-node-group-max-size"
 	clusterNameLabel                        = "machine.openshift.io/cluster-name"
 	deprecatedClusterNameLabel              = "cluster.k8s.io/cluster-name"
+
+	cpuKey     = "machine.openshift.io/vCPU"
+	memoryKey  = "machine.openshift.io/memoryMb"
+	gpuKey     = "machine.openshift.io/GPU"
+	maxPodsKey = "machine.openshift.io/maxPods"
 )
 
 var (
@@ -52,6 +59,8 @@ var (
 	// errInvalidMaxAnnotationValue is the error returned when a
 	// machine set has a non-integral max annotation value.
 	errInvalidMaxAnnotation = errors.New("invalid max annotation")
+
+	zeroQuantity = resource.MustParse("0")
 )
 
 type normalizedProviderID string
@@ -147,6 +156,50 @@ func machineSetHasMachineDeploymentOwnerRef(machineSet *unstructured.Unstructure
 func normalizedProviderString(s string) normalizedProviderID {
 	split := strings.Split(s, "/")
 	return normalizedProviderID(split[len(split)-1])
+}
+
+func scaleFromZeroEnabled(annotations map[string]string) bool {
+	cpu := annotations[cpuKey]
+	mem := annotations[memoryKey]
+
+	if cpu != "" && mem != "" {
+		return true
+	}
+	return false
+}
+
+func parseKey(annotations map[string]string, key string) (resource.Quantity, error) {
+	if val, exists := annotations[key]; exists && val != "" {
+		return resource.ParseQuantity(val)
+	}
+	return zeroQuantity.DeepCopy(), nil
+}
+
+func parseCPUCapacity(annotations map[string]string) (resource.Quantity, error) {
+	return parseKey(annotations, cpuKey)
+}
+
+func parseMemoryCapacity(annotations map[string]string) (resource.Quantity, error) {
+	// the value for the memoryKey is expected to have the unit type included,
+	// eg "1024Mi". if only a number is present, we add the suffix "Mi".
+	val, exists := annotations[memoryKey]
+	if exists && val != "" {
+		// TODO remove this check once we ensured that the providers are using the correct values
+		if _, err := strconv.Atoi(val); err == nil {
+			// value is a number, we will append "Mi" as the unit type
+			val = fmt.Sprintf("%sMi", val)
+		}
+		return resource.ParseQuantity(val)
+	}
+	return zeroQuantity.DeepCopy(), nil
+}
+
+func parseGPUCapacity(annotations map[string]string) (resource.Quantity, error) {
+	return parseKey(annotations, gpuKey)
+}
+
+func parseMaxPodsCapacity(annotations map[string]string) (resource.Quantity, error) {
+	return parseKey(annotations, maxPodsKey)
 }
 
 func clusterNameFromResource(r *unstructured.Unstructured) string {
