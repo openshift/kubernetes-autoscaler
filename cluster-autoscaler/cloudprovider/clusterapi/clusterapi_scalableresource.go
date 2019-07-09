@@ -16,6 +16,11 @@ limitations under the License.
 
 package clusterapi
 
+import (
+	apiv1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
+)
+
 // scalableResource is a resource that can be scaled up and down by
 // adjusting its replica count field.
 type scalableResource interface {
@@ -46,4 +51,12 @@ type scalableResource interface {
 
 	// MarkMachineForDeletion marks machine for deletion
 	MarkMachineForDeletion(machine *Machine) error
+
+	Labels() map[string]string
+	Taints() []apiv1.Taint
+	CanScaleFromZero() bool
+	InstanceCPUCapacity() (resource.Quantity, error)
+	InstanceMemoryCapacity() (resource.Quantity, error)
+	InstanceGPUCapacity() (resource.Quantity, error)
+	InstanceMaxPodsCapacity() (resource.Quantity, error)
 }

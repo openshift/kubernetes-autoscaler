@@ -22,6 +22,8 @@ import (
 	"path"
 	"time"
 
+	apiv1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/utils/pointer"
@@ -134,4 +136,32 @@ func newMachineDeploymentScalableResource(controller *machineController, machine
 		maxSize:           maxSize,
 		minSize:           minSize,
 	}, nil
+}
+
+func (r machineDeploymentScalableResource) Taints() []apiv1.Taint {
+	return r.machineDeployment.Spec.Template.Spec.Taints
+}
+
+func (r machineDeploymentScalableResource) Labels() map[string]string {
+	return r.machineDeployment.Spec.Template.Spec.Labels
+}
+
+func (r machineDeploymentScalableResource) CanScaleFromZero() bool {
+	return scaleFromZeroEnabled(r.machineDeployment.Annotations)
+}
+
+func (r machineDeploymentScalableResource) InstanceCPUCapacity() (resource.Quantity, error) {
+	return parseCPUCapacity(r.machineDeployment.Annotations)
+}
+
+func (r machineDeploymentScalableResource) InstanceMemoryCapacity() (resource.Quantity, error) {
+	return parseMemoryCapacity(r.machineDeployment.Annotations)
+}
+
+func (r machineDeploymentScalableResource) InstanceGPUCapacity() (resource.Quantity, error) {
+	return parseGPUCapacity(r.machineDeployment.Annotations)
+}
+
+func (r machineDeploymentScalableResource) InstanceMaxPodsCapacity() (resource.Quantity, error) {
+	return parseMaxPodsCapacity(r.machineDeployment.Annotations)
 }

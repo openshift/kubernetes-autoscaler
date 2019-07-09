@@ -17,11 +17,37 @@ limitations under the License.
 package clusterapi
 
 import (
+	"time"
+
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/utils/pointer"
 )
+
+func newTaintFromInterface(t interface{}) corev1.Taint {
+	taint := corev1.Taint{}
+	if tt, ok := t.(map[string]interface{}); ok {
+		if tmap, found, _ := unstructured.NestedMap(tt); found {
+			if val, ok := tmap["key"].(string); ok {
+				taint.Key = val
+			}
+			if val, ok := tmap["effect"].(string); ok {
+				taint.Effect = corev1.TaintEffect(val)
+			}
+			if val, ok := tmap["value"].(string); ok {
+				taint.Value = val
+			}
+			if val, ok := tmap["timeAdded"].(string); ok {
+				ta := time.Time{}
+				ta.UnmarshalText([]byte(val))
+				nta := metav1.NewTime(ta)
+				taint.TimeAdded = &nta
+			}
+		}
+	}
+	return taint
+}
 
 func newMachineDeploymentFromUnstructured(u *unstructured.Unstructured) *MachineDeployment {
 	machineDeployment := MachineDeployment{
@@ -40,6 +66,20 @@ func newMachineDeploymentFromUnstructured(u *unstructured.Unstructured) *Machine
 		},
 		Spec:   MachineDeploymentSpec{},
 		Status: MachineDeploymentStatus{},
+	}
+
+	machineSpec, found, err := unstructured.NestedMap(u.Object, "spec", "template", "spec")
+	if err == nil && found {
+		machineSpecUnstructured := unstructured.Unstructured{Object: machineSpec}
+		machineDeployment.Spec.Template.Spec.Labels = machineSpecUnstructured.GetLabels()
+		taints, _, _ := unstructured.NestedSlice(machineSpec, "taints")
+		if taints != nil {
+			taintobjlist := make([]corev1.Taint, len(taints))
+			for i, t := range taints {
+				taintobjlist[i] = newTaintFromInterface(t)
+			}
+			machineDeployment.Spec.Template.Spec.Taints = taintobjlist
+		}
 	}
 
 	replicas, found, err := unstructured.NestedInt64(u.Object, "spec", "replicas")
@@ -67,6 +107,20 @@ func newMachineSetFromUnstructured(u *unstructured.Unstructured) *MachineSet {
 		},
 		Spec:   MachineSetSpec{},
 		Status: MachineSetStatus{},
+	}
+
+	machineSpec, found, err := unstructured.NestedMap(u.Object, "spec", "template", "spec")
+	if err == nil && found {
+		machineSpecUnstructured := unstructured.Unstructured{Object: machineSpec}
+		machineSet.Spec.Template.Spec.Labels = machineSpecUnstructured.GetLabels()
+		taints, _, _ := unstructured.NestedSlice(machineSpec, "taints")
+		if taints != nil {
+			taintobjlist := make([]corev1.Taint, len(taints))
+			for i, t := range taints {
+				taintobjlist[i] = newTaintFromInterface(t)
+			}
+			machineSet.Spec.Template.Spec.Taints = taintobjlist
+		}
 	}
 
 	replicas, found, err := unstructured.NestedInt64(u.Object, "spec", "replicas")
