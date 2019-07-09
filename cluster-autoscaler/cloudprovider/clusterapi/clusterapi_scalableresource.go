@@ -19,6 +19,8 @@ package clusterapi
 import (
 	"context"
 
+	apiv1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -55,6 +57,14 @@ type scalableResource interface {
 
 	// UnmarkMachineForDeletion unmarks machine for deletion
 	UnmarkMachineForDeletion(machine *Machine) error
+
+	Labels() map[string]string
+	Taints() []apiv1.Taint
+	CanScaleFromZero() bool
+	InstanceCPUCapacity() (resource.Quantity, error)
+	InstanceMemoryCapacity() (resource.Quantity, error)
+	InstanceGPUCapacity() (resource.Quantity, error)
+	InstanceMaxPodsCapacity() (resource.Quantity, error)
 }
 
 func unmarkMachineForDeletion(controller *machineController, machine *Machine) error {
