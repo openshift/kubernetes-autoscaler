@@ -1455,7 +1455,7 @@ func TestGetAPIGroupPreferredVersion(t *testing.T) {
 		{
 			description:      "find version for default API group",
 			APIGroup:         defaultCAPIGroup,
-			preferredVersion: "v1beta1",
+			preferredVersion: "v1alpha3",
 			envVar:           "",
 			error:            false,
 		},
@@ -1490,9 +1490,6 @@ func TestGetAPIGroupPreferredVersion(t *testing.T) {
 				},
 				{
 					GroupVersion: fmt.Sprintf("%s/v1alpha3", defaultCAPIGroup),
-				},
-				{
-					GroupVersion: fmt.Sprintf("%s/%s", customCAPIGroup, customVersion),
 				},
 				{
 					GroupVersion: fmt.Sprintf("%s/%s", customCAPIGroup, customVersion),
