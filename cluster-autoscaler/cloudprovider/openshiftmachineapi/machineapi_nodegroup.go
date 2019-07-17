@@ -22,7 +22,7 @@ import (
 
 	"github.com/openshift/cluster-api/pkg/apis/machine/v1beta1"
 	machinev1beta1 "github.com/openshift/cluster-api/pkg/client/clientset_generated/clientset/typed/machine/v1beta1"
-	apiv1 "k8s.io/api/core/v1"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	"k8s.io/klog"
 	schedulernodeinfo "k8s.io/kubernetes/pkg/scheduler/nodeinfo"
@@ -86,7 +86,7 @@ func (ng *nodegroup) IncreaseSize(delta int) error {
 // either on failure or if the given node doesn't belong to this node
 // group. This function should wait until node group size is updated.
 // Implementation required.
-func (ng *nodegroup) DeleteNodes(nodes []*apiv1.Node) error {
+func (ng *nodegroup) DeleteNodes(nodes []*corev1.Node) error {
 	// Step 1: Verify all nodes belong to this node group.
 	for _, node := range nodes {
 		actualNodeGroup, err := ng.machineController.nodeGroupForNode(node)

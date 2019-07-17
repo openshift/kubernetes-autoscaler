@@ -20,7 +20,7 @@ import (
 	"reflect"
 	"testing"
 
-	apiv1 "k8s.io/api/core/v1"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 )
@@ -79,7 +79,7 @@ func TestProviderConstructorProperties(t *testing.T) {
 		t.Errorf("expected 0, got %v", len(nodegroups))
 	}
 
-	ng, err := provider.NodeGroupForNode(&apiv1.Node{
+	ng, err := provider.NodeGroupForNode(&corev1.Node{
 		TypeMeta: v1.TypeMeta{
 			Kind: "Node",
 		},
