@@ -20,7 +20,7 @@ import (
 	"reflect"
 
 	clusterclientset "github.com/openshift/cluster-api/pkg/client/clientset_generated/clientset"
-	apiv1 "k8s.io/api/core/v1"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	"k8s.io/autoscaler/cluster-autoscaler/config"
@@ -65,7 +65,7 @@ func (p *provider) NodeGroups() []cloudprovider.NodeGroup {
 	return result
 }
 
-func (p *provider) NodeGroupForNode(node *apiv1.Node) (cloudprovider.NodeGroup, error) {
+func (p *provider) NodeGroupForNode(node *corev1.Node) (cloudprovider.NodeGroup, error) {
 	ng, err := p.controller.nodeGroupForNode(node)
 	if err != nil {
 		return nil, err
@@ -88,7 +88,7 @@ func (*provider) NewNodeGroup(
 	machineType string,
 	labels map[string]string,
 	systemLabels map[string]string,
-	taints []apiv1.Taint,
+	taints []corev1.Taint,
 	extraResources map[string]resource.Quantity,
 ) (cloudprovider.NodeGroup, error) {
 	return nil, cloudprovider.ErrNotImplemented
@@ -103,7 +103,7 @@ func (p *provider) Refresh() error {
 }
 
 // GetInstanceID gets the instance ID for the specified node.
-func (p *provider) GetInstanceID(node *apiv1.Node) string {
+func (p *provider) GetInstanceID(node *corev1.Node) string {
 	return node.Spec.ProviderID
 }
 
