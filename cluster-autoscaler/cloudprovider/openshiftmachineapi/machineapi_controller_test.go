@@ -26,7 +26,7 @@ import (
 
 	"github.com/openshift/cluster-api/pkg/apis/machine/v1beta1"
 	fakeclusterapi "github.com/openshift/cluster-api/pkg/client/clientset_generated/clientset/fake"
-	apiv1 "k8s.io/api/core/v1"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -42,7 +42,7 @@ type testConfig struct {
 	machineDeployment *v1beta1.MachineDeployment
 	machineSet        *v1beta1.MachineSet
 	machines          []*v1beta1.Machine
-	nodes             []*apiv1.Node
+	nodes             []*corev1.Node
 }
 
 type testSpec struct {
@@ -131,7 +131,7 @@ func createTestConfigs(specs ...testSpec) []*testConfig {
 	for i, spec := range specs {
 		config := &testConfig{
 			spec:     &specs[i],
-			nodes:    make([]*apiv1.Node, spec.nodeCount),
+			nodes:    make([]*corev1.Node, spec.nodeCount),
 			machines: make([]*v1beta1.Machine, spec.nodeCount),
 		}
 
@@ -192,8 +192,8 @@ func createTestConfigs(specs ...testSpec) []*testConfig {
 // makeLinkedNodeAndMachine creates a node and machine. The machine
 // has its NodeRef set to the new node and the new machine's owner
 // reference is set to owner.
-func makeLinkedNodeAndMachine(i int, namespace string, owner v1.OwnerReference) (*apiv1.Node, *v1beta1.Machine) {
-	node := &apiv1.Node{
+func makeLinkedNodeAndMachine(i int, namespace string, owner v1.OwnerReference) (*corev1.Node, *v1beta1.Machine) {
+	node := &corev1.Node{
 		TypeMeta: v1.TypeMeta{
 			Kind: "Node",
 		},
@@ -203,7 +203,7 @@ func makeLinkedNodeAndMachine(i int, namespace string, owner v1.OwnerReference) 
 				machineAnnotationKey: fmt.Sprintf("%s/%s-%s-machine-%d", namespace, namespace, owner.Name, i),
 			},
 		},
-		Spec: apiv1.NodeSpec{
+		Spec: corev1.NodeSpec{
 			ProviderID: fmt.Sprintf("%s-%s-nodeid-%d", namespace, owner.Name, i),
 		},
 	}
@@ -225,7 +225,7 @@ func makeLinkedNodeAndMachine(i int, namespace string, owner v1.OwnerReference) 
 			ProviderID: pointer.StringPtr(fmt.Sprintf("%s-%s-nodeid-%d", namespace, owner.Name, i)),
 		},
 		Status: v1beta1.MachineStatus{
-			NodeRef: &apiv1.ObjectReference{
+			NodeRef: &corev1.ObjectReference{
 				Kind: node.Kind,
 				Name: node.Name,
 			},
