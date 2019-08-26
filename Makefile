@@ -134,3 +134,7 @@ fmt: ## Go fmt your code
 .PHONY: vet
 vet: ## Go fmt your code
 	hack/go-vet.sh ./cluster-autoscaler/cloudprovider/openshiftmachineapi
+
+.PHONY: goimports
+goimports: ## Go fmt your code
+	hack/goimports.sh ./cluster-autoscaler/cloudprovider/openshiftmachineapi

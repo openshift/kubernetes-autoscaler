@@ -21,7 +21,7 @@ import (
 	"testing"
 
 	"github.com/openshift/cluster-api/pkg/apis/machine/v1beta1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1"
+	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 const (
