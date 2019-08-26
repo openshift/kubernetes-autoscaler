@@ -31,6 +31,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	cloudBuilder "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/builder"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/openshiftmachineapi"
 	"k8s.io/autoscaler/cluster-autoscaler/config"
 	"k8s.io/autoscaler/cluster-autoscaler/core"
 	"k8s.io/autoscaler/cluster-autoscaler/estimator"
@@ -280,6 +281,14 @@ func buildAutoscaler() (core.Autoscaler, error) {
 	if autoscalingOptions.CloudProviderName == "gke" {
 		processors.NodeGroupSetProcessor = &nodegroupset.BalancingNodeGroupSetProcessor{
 			Comparator: nodegroupset.IsGkeNodeInfoSimilar}
+
+	}
+	if autoscalingOptions.CloudProviderName == openshiftmachineapi.ProviderName {
+		// We do this because of:
+		// - https://bugzilla.redhat.com/show_bug.cgi?id=1731011
+		// - https://bugzilla.redhat.com/show_bug.cgi?id=1733235
+		processors.NodeGroupSetProcessor = &nodegroupset.BalancingNodeGroupSetProcessor{
+			Comparator: nodegroupset.IsOpenShiftMachineApiNodeInfoSimilar}
 
 	}
 	opts := core.AutoscalerOptions{
