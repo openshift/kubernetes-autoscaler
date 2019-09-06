@@ -1,14 +1,18 @@
 package nodegroupset
 
 import (
+	"math"
+
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	schedulernodeinfo "k8s.io/kubernetes/pkg/scheduler/nodeinfo"
 )
 
-// maxMemoryDifferenceInKiloBytes describes how much
-// Node.Status.Capacity can differ but still be considered equal.
-var maxMemoryDifferenceInKiloBytes = resource.MustParse("128Ki")
+const (
+	// MaxMemoryDifferenceInKiloBytes describes how much memory
+	// capacity can differ but still be considered equal.
+	MaxMemoryDifferenceInKiloBytes = 2 << 7 * 1000 // 128Ki
+)
 
 // IsOpenShiftMachineApiNodeInfoSimilar compares if two nodes should
 // be considered part of the same NodeGroupSet.
@@ -38,17 +42,30 @@ func isOpenShiftNodeInfoSimilar(n1, n2 *schedulernodeinfo.NodeInfo) bool {
 		}
 	}
 
-	// For capacity we allow quantities to be within a few Kb
-	// because we find that some cloud instances are slightly
-	// smaller/larger than other, typically 8-16Ki.
-	// See:
-	// https://bugzilla.redhat.com/show_bug.cgi?id=1731011
-	// https://bugzilla.redhat.com/show_bug.cgi?id=1733235
-	for _, qtyList := range capacity {
-		if len(qtyList) != 2 || !compareResourceEqualWithTolerance(qtyList[0], qtyList[1], maxMemoryDifferenceInKiloBytes) {
+	for kind, qtyList := range capacity {
+		if len(qtyList) != 2 {
 			return false
 		}
+		switch kind {
+		case apiv1.ResourceMemory:
+			// For memory capacity we allow a small tolerance:
+			//   https://bugzilla.redhat.com/show_bug.cgi?id=1731011
+			//   https://bugzilla.redhat.com/show_bug.cgi?id=1733235
+			larger := math.Max(float64(qtyList[0].Value()), float64(qtyList[1].Value()))
+			smaller := math.Min(float64(qtyList[0].Value()), float64(qtyList[1].Value()))
+			if larger-smaller > MaxMemoryDifferenceInKiloBytes {
+				return false
+			}
+		default:
+			// For other capacity types we require exact match.
+			// If this is ever changed, enforcing MaxCoresTotal limits
+			// as it is now may no longer work.
+			if qtyList[0].Cmp(qtyList[1]) != 0 {
+				return false
+			}
+		}
 	}
+
 	// For allocatable and free we allow resource quantities to be within a few % of each other
 	if !compareResourceMapsWithTolerance(allocatable, MaxAllocatableDifferenceRatio) {
 		return false
@@ -79,12 +96,4 @@ func isOpenShiftNodeInfoSimilar(n1, n2 *schedulernodeinfo.NodeInfo) bool {
 		}
 	}
 	return true
-}
-
-func compareResourceEqualWithTolerance(x, y, tolerance resource.Quantity) bool {
-	x.Sub(y)
-	if x.Sign() == -1 {
-		x.Neg()
-	}
-	return x.Cmp(tolerance) != 1 // <= max
 }
