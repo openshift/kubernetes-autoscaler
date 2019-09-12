@@ -1,4 +1,4 @@
-// +build !gce,!aws,!azure,!kubemark,!alicloud,!openshiftmachineapi
+// +build !gce,!aws,!azure,!kubemark,!alicloud,!openshiftmachineapi,!u
 
 /*
 Copyright 2018 The Kubernetes Authors.
@@ -27,6 +27,7 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gke"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/openshiftmachineapi"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/u"
 	"k8s.io/autoscaler/cluster-autoscaler/config"
 )
 
@@ -39,6 +40,7 @@ var AvailableCloudProviders = []string{
 	alicloud.ProviderName,
 	baiducloud.ProviderName,
 	openshiftmachineapi.ProviderName,
+	u.ProviderName,
 }
 
 // DefaultCloudProvider is GCE.
@@ -58,8 +60,8 @@ func buildCloudProvider(opts config.AutoscalingOptions, do cloudprovider.NodeGro
 		return alicloud.BuildAlicloud(opts, do, rl)
 	case baiducloud.ProviderName:
 		return baiducloud.BuildBaiducloud(opts, do, rl)
-	case openshiftmachineapi.ProviderName:
-		return openshiftmachineapi.BuildOpenShiftMachineAPI(opts, do, rl)
+	case u.ProviderName:
+		return u.BuildOpenShiftMachineAPI(opts, do, rl)
 	}
 	return nil
 }
