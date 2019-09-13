@@ -20,7 +20,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/openshift/cluster-api/pkg/apis/machine/v1beta1"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -29,7 +28,7 @@ const (
 	uuid2 = "ec23ebb0-bc60-443f-d139-046ec5046283"
 )
 
-func TestParseScalingBounds(t *testing.T) {
+func TestUtilParseScalingBounds(t *testing.T) {
 	for i, tc := range []struct {
 		description string
 		annotations map[string]string
@@ -113,7 +112,7 @@ func TestParseScalingBounds(t *testing.T) {
 		max: 1,
 	}} {
 		t.Run(tc.description, func(t *testing.T) {
-			machineSet := v1beta1.MachineSet{
+			machineSet := MachineSet{
 				ObjectMeta: v1.ObjectMeta{
 					Annotations: tc.annotations,
 				},
@@ -142,31 +141,31 @@ func TestParseScalingBounds(t *testing.T) {
 	}
 }
 
-func TestMachineSetIsOwnedByMachineDeployment(t *testing.T) {
+func TestUtilMachineSetIsOwnedByMachineDeployment(t *testing.T) {
 	for _, tc := range []struct {
 		description       string
-		machineSet        v1beta1.MachineSet
-		machineDeployment v1beta1.MachineDeployment
+		machineSet        MachineSet
+		machineDeployment MachineDeployment
 		owned             bool
 	}{{
 		description:       "not owned as no owner references",
-		machineSet:        v1beta1.MachineSet{},
-		machineDeployment: v1beta1.MachineDeployment{},
+		machineSet:        MachineSet{},
+		machineDeployment: MachineDeployment{},
 		owned:             false,
 	}, {
 		description: "not owned as not the same Kind",
-		machineSet: v1beta1.MachineSet{
+		machineSet: MachineSet{
 			ObjectMeta: v1.ObjectMeta{
 				OwnerReferences: []v1.OwnerReference{{
 					Kind: "Other",
 				}},
 			},
 		},
-		machineDeployment: v1beta1.MachineDeployment{},
+		machineDeployment: MachineDeployment{},
 		owned:             false,
 	}, {
 		description: "not owned because no OwnerReference.Name",
-		machineSet: v1beta1.MachineSet{
+		machineSet: MachineSet{
 			ObjectMeta: v1.ObjectMeta{
 				OwnerReferences: []v1.OwnerReference{{
 					Kind: "MachineSet",
@@ -174,7 +173,7 @@ func TestMachineSetIsOwnedByMachineDeployment(t *testing.T) {
 				}},
 			},
 		},
-		machineDeployment: v1beta1.MachineDeployment{
+		machineDeployment: MachineDeployment{
 			ObjectMeta: v1.ObjectMeta{
 				UID: uuid1,
 			},
@@ -182,7 +181,7 @@ func TestMachineSetIsOwnedByMachineDeployment(t *testing.T) {
 		owned: false,
 	}, {
 		description: "not owned as UID values don't match",
-		machineSet: v1beta1.MachineSet{
+		machineSet: MachineSet{
 			ObjectMeta: v1.ObjectMeta{
 				OwnerReferences: []v1.OwnerReference{{
 					Kind: "MachineSet",
@@ -191,7 +190,7 @@ func TestMachineSetIsOwnedByMachineDeployment(t *testing.T) {
 				}},
 			},
 		},
-		machineDeployment: v1beta1.MachineDeployment{
+		machineDeployment: MachineDeployment{
 			TypeMeta: v1.TypeMeta{
 				Kind: "MachineDeployment",
 			},
@@ -202,7 +201,7 @@ func TestMachineSetIsOwnedByMachineDeployment(t *testing.T) {
 		owned: false,
 	}, {
 		description: "owned as UID values match and same Kind and Name not empty",
-		machineSet: v1beta1.MachineSet{
+		machineSet: MachineSet{
 			ObjectMeta: v1.ObjectMeta{
 				OwnerReferences: []v1.OwnerReference{{
 					Kind: "MachineDeployment",
@@ -211,7 +210,7 @@ func TestMachineSetIsOwnedByMachineDeployment(t *testing.T) {
 				}},
 			},
 		},
-		machineDeployment: v1beta1.MachineDeployment{
+		machineDeployment: MachineDeployment{
 			TypeMeta: v1.TypeMeta{
 				Kind: "MachineDeployment",
 			},
@@ -231,31 +230,31 @@ func TestMachineSetIsOwnedByMachineDeployment(t *testing.T) {
 	}
 }
 
-func TestMachineIsOwnedByMachineSet(t *testing.T) {
+func TestUtilMachineIsOwnedByMachineSet(t *testing.T) {
 	for _, tc := range []struct {
 		description string
-		machine     v1beta1.Machine
-		machineSet  v1beta1.MachineSet
+		machine     Machine
+		machineSet  MachineSet
 		owned       bool
 	}{{
 		description: "not owned as no owner references",
-		machine:     v1beta1.Machine{},
-		machineSet:  v1beta1.MachineSet{},
+		machine:     Machine{},
+		machineSet:  MachineSet{},
 		owned:       false,
 	}, {
 		description: "not owned as not the same Kind",
-		machine: v1beta1.Machine{
+		machine: Machine{
 			ObjectMeta: v1.ObjectMeta{
 				OwnerReferences: []v1.OwnerReference{{
 					Kind: "Other",
 				}},
 			},
 		},
-		machineSet: v1beta1.MachineSet{},
+		machineSet: MachineSet{},
 		owned:      false,
 	}, {
 		description: "not owned because no OwnerReference.Name",
-		machine: v1beta1.Machine{
+		machine: Machine{
 			ObjectMeta: v1.ObjectMeta{
 				OwnerReferences: []v1.OwnerReference{{
 					Kind: "MachineSet",
@@ -263,7 +262,7 @@ func TestMachineIsOwnedByMachineSet(t *testing.T) {
 				}},
 			},
 		},
-		machineSet: v1beta1.MachineSet{
+		machineSet: MachineSet{
 			ObjectMeta: v1.ObjectMeta{
 				UID: uuid1,
 			},
@@ -271,7 +270,7 @@ func TestMachineIsOwnedByMachineSet(t *testing.T) {
 		owned: false,
 	}, {
 		description: "not owned as UID values don't match",
-		machine: v1beta1.Machine{
+		machine: Machine{
 			ObjectMeta: v1.ObjectMeta{
 				OwnerReferences: []v1.OwnerReference{{
 					Kind: "MachineSet",
@@ -280,7 +279,7 @@ func TestMachineIsOwnedByMachineSet(t *testing.T) {
 				}},
 			},
 		},
-		machineSet: v1beta1.MachineSet{
+		machineSet: MachineSet{
 			TypeMeta: v1.TypeMeta{
 				Kind: "MachineSet",
 			},
@@ -291,7 +290,7 @@ func TestMachineIsOwnedByMachineSet(t *testing.T) {
 		owned: false,
 	}, {
 		description: "owned as UID values match and same Kind and Name not empty",
-		machine: v1beta1.Machine{
+		machine: Machine{
 			ObjectMeta: v1.ObjectMeta{
 				OwnerReferences: []v1.OwnerReference{{
 					Kind: "MachineSet",
@@ -300,7 +299,7 @@ func TestMachineIsOwnedByMachineSet(t *testing.T) {
 				}},
 			},
 		},
-		machineSet: v1beta1.MachineSet{
+		machineSet: MachineSet{
 			TypeMeta: v1.TypeMeta{
 				Kind: "MachineSet",
 			},
@@ -320,31 +319,31 @@ func TestMachineIsOwnedByMachineSet(t *testing.T) {
 	}
 }
 
-func TestMachineSetMachineDeploymentOwnerRef(t *testing.T) {
+func TestUtilMachineSetMachineDeploymentOwnerRef(t *testing.T) {
 	for _, tc := range []struct {
 		description       string
-		machineSet        v1beta1.MachineSet
-		machineDeployment v1beta1.MachineDeployment
+		machineSet        MachineSet
+		machineDeployment MachineDeployment
 		owned             bool
 	}{{
 		description:       "machineset not owned as no owner references",
-		machineSet:        v1beta1.MachineSet{},
-		machineDeployment: v1beta1.MachineDeployment{},
+		machineSet:        MachineSet{},
+		machineDeployment: MachineDeployment{},
 		owned:             false,
 	}, {
 		description: "machineset not owned as ownerref not a MachineDeployment",
-		machineSet: v1beta1.MachineSet{
+		machineSet: MachineSet{
 			ObjectMeta: v1.ObjectMeta{
 				OwnerReferences: []v1.OwnerReference{{
 					Kind: "Other",
 				}},
 			},
 		},
-		machineDeployment: v1beta1.MachineDeployment{},
+		machineDeployment: MachineDeployment{},
 		owned:             false,
 	}, {
 		description: "machineset owned as Kind matches and Name not empty",
-		machineSet: v1beta1.MachineSet{
+		machineSet: MachineSet{
 			ObjectMeta: v1.ObjectMeta{
 				OwnerReferences: []v1.OwnerReference{{
 					Kind: "MachineDeployment",
@@ -352,7 +351,7 @@ func TestMachineSetMachineDeploymentOwnerRef(t *testing.T) {
 				}},
 			},
 		},
-		machineDeployment: v1beta1.MachineDeployment{
+		machineDeployment: MachineDeployment{
 			TypeMeta: v1.TypeMeta{
 				Kind: "MachineDeployment",
 			},
