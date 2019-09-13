@@ -24,6 +24,7 @@ import (
 	"testing"
 
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	"k8s.io/utils/pointer"
 )
@@ -268,7 +269,7 @@ func TestNodeGroupIncreaseSizeErrors(t *testing.T) {
 		switch v := (ng.scalableResource).(type) {
 		case *machineSetScalableResource:
 			// A nodegroup is immutable; get a fresh copy.
-			ms, err := ng.machineapiClient.MachineSets(ng.Namespace()).Get(ng.Name(), v1.GetOptions{})
+			ms, err := ng.machineController.getMachineSet(ng.Namespace(), ng.Name(), v1.GetOptions{})
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -277,7 +278,7 @@ func TestNodeGroupIncreaseSizeErrors(t *testing.T) {
 			}
 		case *machineDeploymentScalableResource:
 			// A nodegroup is immutable; get a fresh copy.
-			md, err := ng.machineapiClient.MachineDeployments(ng.Namespace()).Get(ng.Name(), v1.GetOptions{})
+			md, err := ng.machineController.getMachineDeployment(ng.Namespace(), ng.Name(), v1.GetOptions{})
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -352,7 +353,7 @@ func TestNodeGroupIncreaseSize(t *testing.T) {
 		switch v := (ng.scalableResource).(type) {
 		case *machineSetScalableResource:
 			// A nodegroup is immutable; get a fresh copy.
-			ms, err := ng.machineapiClient.MachineSets(ng.Namespace()).Get(ng.Name(), v1.GetOptions{})
+			ms, err := ng.machineController.getMachineSet(ng.Namespace(), ng.Name(), v1.GetOptions{})
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -361,7 +362,7 @@ func TestNodeGroupIncreaseSize(t *testing.T) {
 			}
 		case *machineDeploymentScalableResource:
 			// A nodegroup is immutable; get a fresh copy.
-			md, err := ng.machineapiClient.MachineDeployments(ng.Namespace()).Get(ng.Name(), v1.GetOptions{})
+			md, err := ng.machineController.getMachineDeployment(ng.Namespace(), ng.Name(), v1.GetOptions{})
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -428,23 +429,12 @@ func TestNodeGroupDecreaseTargetSize(t *testing.T) {
 		switch v := (ng.scalableResource).(type) {
 		case *machineSetScalableResource:
 			testConfig.machineSet.Spec.Replicas = int32ptr(*testConfig.machineSet.Spec.Replicas + tc.targetSizeIncrement)
-			ms, err := ng.machineapiClient.MachineSets(ng.Namespace()).Update(testConfig.machineSet)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-
-			if err := controller.machineSetInformer.Informer().GetStore().Add(ms); err != nil {
+			if err := controller.machineSetInformer.Informer().GetStore().Add(newUnstructuredFromMachineSet(testConfig.machineSet)); err != nil {
 				t.Fatalf("failed to add new machine: %v", err)
 			}
 		case *machineDeploymentScalableResource:
 			testConfig.machineDeployment.Spec.Replicas = int32ptr(*testConfig.machineDeployment.Spec.Replicas + tc.targetSizeIncrement)
-			md, err := ng.machineapiClient.MachineDeployments(ng.Namespace()).Update(testConfig.machineDeployment)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-
-			if err := controller.machineDeploymentInformer.Informer().GetStore().Add(md); err != nil {
-				t.Fatalf("failed to add new machine: %v", err)
+			if err := controller.machineDeploymentInformer.Informer().GetStore().Add(newUnstructuredFromMachineDeployment(testConfig.machineDeployment)); err != nil {
 			}
 		default:
 			t.Errorf("unexpected type: %T", v)
@@ -471,7 +461,7 @@ func TestNodeGroupDecreaseTargetSize(t *testing.T) {
 		switch v := (ng.scalableResource).(type) {
 		case *machineSetScalableResource:
 			// A nodegroup is immutable; get a fresh copy.
-			ms, err := ng.machineapiClient.MachineSets(ng.Namespace()).Get(ng.Name(), v1.GetOptions{})
+			ms, err := ng.machineController.getMachineSet(ng.Namespace(), ng.Name(), v1.GetOptions{})
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -480,7 +470,7 @@ func TestNodeGroupDecreaseTargetSize(t *testing.T) {
 			}
 		case *machineDeploymentScalableResource:
 			// A nodegroup is immutable; get a fresh copy.
-			md, err := ng.machineapiClient.MachineDeployments(ng.Namespace()).Get(ng.Name(), v1.GetOptions{})
+			md, err := ng.machineController.getMachineDeployment(ng.Namespace(), ng.Name(), v1.GetOptions{})
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -594,7 +584,7 @@ func TestNodeGroupDecreaseSizeErrors(t *testing.T) {
 		switch v := (ng.scalableResource).(type) {
 		case *machineSetScalableResource:
 			// A nodegroup is immutable; get a fresh copy.
-			ms, err := ng.machineapiClient.MachineSets(ng.Namespace()).Get(ng.Name(), v1.GetOptions{})
+			ms, err := ng.machineController.getMachineSet(ng.Namespace(), ng.Name(), v1.GetOptions{})
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -603,7 +593,7 @@ func TestNodeGroupDecreaseSizeErrors(t *testing.T) {
 			}
 		case *machineDeploymentScalableResource:
 			// A nodegroup is immutable; get a fresh copy.
-			md, err := ng.machineapiClient.MachineDeployments(ng.Namespace()).Get(ng.Name(), v1.GetOptions{})
+			md, err := ng.machineController.getMachineDeployment(ng.Namespace(), ng.Name(), v1.GetOptions{})
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -679,7 +669,7 @@ func TestNodeGroupDeleteNodes(t *testing.T) {
 		}
 
 		for i := 5; i < len(testConfig.machines); i++ {
-			machine, err := controller.clusterClientset.MachineV1beta1().Machines(testConfig.machines[i].Namespace).Get(testConfig.machines[i].Name, v1.GetOptions{})
+			machine, err := controller.getMachine(testConfig.machines[i].Namespace, testConfig.machines[i].Name, v1.GetOptions{})
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -690,7 +680,7 @@ func TestNodeGroupDeleteNodes(t *testing.T) {
 
 		switch v := (ng.scalableResource).(type) {
 		case *machineSetScalableResource:
-			updatedMachineSet, err := controller.clusterClientset.MachineV1beta1().MachineSets(testConfig.machineSet.Namespace).Get(testConfig.machineSet.Name, v1.GetOptions{})
+			updatedMachineSet, err := controller.getMachineSet(testConfig.machineSet.Namespace, testConfig.machineSet.Name, v1.GetOptions{})
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -698,7 +688,7 @@ func TestNodeGroupDeleteNodes(t *testing.T) {
 				t.Fatalf("expected 5 nodes, got %v", actual)
 			}
 		case *machineDeploymentScalableResource:
-			updatedMachineDeployment, err := controller.clusterClientset.MachineV1beta1().MachineDeployments(testConfig.machineDeployment.Namespace).Get(testConfig.machineDeployment.Name, v1.GetOptions{})
+			updatedMachineDeployment, err := controller.getMachineDeployment(testConfig.machineDeployment.Namespace, testConfig.machineDeployment.Name, v1.GetOptions{})
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -854,14 +844,14 @@ func TestNodeGroupDeleteNodesTwice(t *testing.T) {
 			// Make sure the scalable resource is up to date before being called
 			switch v := (ng.scalableResource).(type) {
 			case *machineSetScalableResource:
-				updatedMachineSet, err := controller.clusterClientset.MachineV1beta1().MachineSets(testConfig.machineSet.Namespace).Get(testConfig.machineSet.Name, v1.GetOptions{})
+				updatedMachineSet, err := controller.getMachineSet(testConfig.machineSet.Namespace, testConfig.machineSet.Name, v1.GetOptions{})
 				if err != nil {
 					t.Fatalf("unexpected error: %v", err)
 				}
 				sr := ng.scalableResource.(*machineSetScalableResource)
 				sr.machineSet = updatedMachineSet
 			case *machineDeploymentScalableResource:
-				updatedMachineDeployment, err := controller.clusterClientset.MachineV1beta1().MachineDeployments(testConfig.machineDeployment.Namespace).Get(testConfig.machineDeployment.Name, v1.GetOptions{})
+				updatedMachineDeployment, err := controller.getMachineDeployment(testConfig.machineDeployment.Namespace, testConfig.machineDeployment.Name, v1.GetOptions{})
 				if err != nil {
 					t.Fatalf("unexpected error: %v", err)
 				}
@@ -876,36 +866,39 @@ func TestNodeGroupDeleteNodesTwice(t *testing.T) {
 			}
 
 			for i := 7; i < len(testConfig.machines); i++ {
-				machine, err := controller.clusterClientset.MachineV1beta1().Machines(testConfig.machines[i].Namespace).Get(testConfig.machines[i].Name, v1.GetOptions{})
+				machine, err := controller.getMachine(testConfig.machines[i].Namespace, testConfig.machines[i].Name, v1.GetOptions{})
 				if err != nil {
 					t.Fatalf("unexpected error: %v", err)
 				}
 				if _, found := machine.Annotations[machineDeleteAnnotationKey]; !found {
-					t.Errorf("expected annotation %q on machine %s", machineDeleteAnnotationKey, machine.Name)
+					t.Errorf("expected annotation %q on machine %s", machineDeleteAnnotationKey, testConfig.machines[i].Name)
 				}
 				// Simulate delete that would have happened if the Machine API controllers were running
 				// Don't actually delete since the fake client does not support finalizers
 				now := v1.Now()
 				machine.DeletionTimestamp = &now
-				_, err = controller.clusterClientset.MachineV1beta1().Machines(testConfig.machines[i].Namespace).Update(machine)
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
+				if err := controller.machineInformer.Informer().GetStore().Update(newUnstructuredFromMachine(machine)); err != nil {
+					t.Fatalf("unexpected error updating machine, got %v", err)
 				}
 
 				// Ensure the update worked
 				isZero := true
 				for isZero {
-					machine, err := ng.machineController.findMachineByProviderID(*machine.Spec.ProviderID)
+					obj, exists, err := controller.machineInformer.Informer().GetStore().Get(machine)
 					if err != nil {
 						t.Fatalf("unexpected error: %v", err)
 					}
+					if !exists {
+						t.Fatalf("expected machine to exist")
+					}
+					machine := newMachineFromUnstructured((obj).(*unstructured.Unstructured))
 					isZero = machine.GetDeletionTimestamp().IsZero()
 				}
 			}
 
 			switch v := (ng.scalableResource).(type) {
 			case *machineSetScalableResource:
-				updatedMachineSet, err := controller.clusterClientset.MachineV1beta1().MachineSets(testConfig.machineSet.Namespace).Get(testConfig.machineSet.Name, v1.GetOptions{})
+				updatedMachineSet, err := ng.machineController.getMachineSet(testConfig.machineSet.Namespace, testConfig.machineSet.Name, v1.GetOptions{})
 				if err != nil {
 					t.Fatalf("unexpected error: %v", err)
 				}
@@ -913,7 +906,7 @@ func TestNodeGroupDeleteNodesTwice(t *testing.T) {
 					t.Fatalf("expected 7 nodes, got %v", actual)
 				}
 			case *machineDeploymentScalableResource:
-				updatedMachineDeployment, err := controller.clusterClientset.MachineV1beta1().MachineDeployments(testConfig.machineDeployment.Namespace).Get(testConfig.machineDeployment.Name, v1.GetOptions{})
+				updatedMachineDeployment, err := ng.machineController.getMachineDeployment(testConfig.machineDeployment.Namespace, testConfig.machineDeployment.Name, v1.GetOptions{})
 				if err != nil {
 					t.Fatalf("unexpected error: %v", err)
 				}

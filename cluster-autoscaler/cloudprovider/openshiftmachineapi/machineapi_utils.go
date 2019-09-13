@@ -19,7 +19,6 @@ package openshiftmachineapi
 import (
 	"strconv"
 
-	"github.com/openshift/cluster-api/pkg/apis/machine/v1beta1"
 	"github.com/pkg/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -107,7 +106,7 @@ func parseScalingBounds(annotations map[string]string) (int, int, error) {
 	return minSize, maxSize, nil
 }
 
-func machineOwnerRef(machine *v1beta1.Machine) *metav1.OwnerReference {
+func machineOwnerRef(machine *Machine) *metav1.OwnerReference {
 	for _, ref := range machine.OwnerReferences {
 		if ref.Kind == "MachineSet" && ref.Name != "" {
 			return ref.DeepCopy()
@@ -117,14 +116,14 @@ func machineOwnerRef(machine *v1beta1.Machine) *metav1.OwnerReference {
 	return nil
 }
 
-func machineIsOwnedByMachineSet(machine *v1beta1.Machine, machineSet *v1beta1.MachineSet) bool {
+func machineIsOwnedByMachineSet(machine *Machine, machineSet *MachineSet) bool {
 	if ref := machineOwnerRef(machine); ref != nil {
 		return ref.UID == machineSet.UID
 	}
 	return false
 }
 
-func machineSetMachineDeploymentRef(machineSet *v1beta1.MachineSet) *metav1.OwnerReference {
+func machineSetMachineDeploymentRef(machineSet *MachineSet) *metav1.OwnerReference {
 	for _, ref := range machineSet.OwnerReferences {
 		if ref.Kind == "MachineDeployment" {
 			return ref.DeepCopy()
@@ -134,11 +133,11 @@ func machineSetMachineDeploymentRef(machineSet *v1beta1.MachineSet) *metav1.Owne
 	return nil
 }
 
-func machineSetHasMachineDeploymentOwnerRef(machineSet *v1beta1.MachineSet) bool {
+func machineSetHasMachineDeploymentOwnerRef(machineSet *MachineSet) bool {
 	return machineSetMachineDeploymentRef(machineSet) != nil
 }
 
-func machineSetIsOwnedByMachineDeployment(machineSet *v1beta1.MachineSet, machineDeployment *v1beta1.MachineDeployment) bool {
+func machineSetIsOwnedByMachineDeployment(machineSet *MachineSet, machineDeployment *MachineDeployment) bool {
 	if ref := machineSetMachineDeploymentRef(machineSet); ref != nil {
 		return ref.UID == machineDeployment.UID
 	}

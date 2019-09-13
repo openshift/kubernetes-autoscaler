@@ -18,13 +18,9 @@ package openshiftmachineapi
 
 import (
 	"fmt"
-	"time"
 
-	"github.com/openshift/cluster-api/pkg/apis/machine/v1beta1"
-	machinev1beta1 "github.com/openshift/cluster-api/pkg/client/clientset_generated/clientset/typed/machine/v1beta1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
-	"k8s.io/klog"
 	schedulernodeinfo "k8s.io/kubernetes/pkg/scheduler/nodeinfo"
 )
 
@@ -35,7 +31,6 @@ const (
 )
 
 type nodegroup struct {
-	machineapiClient  machinev1beta1.MachineV1beta1Interface
 	machineController *machineController
 	scalableResource  scalableResource
 }
@@ -134,23 +129,16 @@ func (ng *nodegroup) DeleteNodes(nodes []*corev1.Node) error {
 		if machine.Annotations == nil {
 			machine.Annotations = map[string]string{}
 		}
-
-		machine.Annotations[machineDeleteAnnotationKey] = time.Now().String()
-		machine, err = ng.machineapiClient.Machines(machine.Namespace).Update(machine)
+		nodeGroup, err := ng.machineController.nodeGroupForNode(node)
 		if err != nil {
 			return err
 		}
 
+		if err := nodeGroup.scalableResource.MarkMachineForDeletion(machine); err != nil {
+			return err
+		}
+
 		if err := ng.scalableResource.SetSize(int32(replicas - 1)); err != nil {
-			delete(machine.Annotations, machineDeleteAnnotationKey)
-			// Log errors as warnings from Update()
-			// because no action is taken even if the
-			// annotation persists until the replica count
-			// is modified during a deletion.
-			_, updateErr := ng.machineapiClient.Machines(machine.Namespace).Update(machine)
-			if updateErr != nil {
-				klog.Warningf("failed to delete annotation %q from machine %q: %v", machineDeleteAnnotationKey, machine.Name, updateErr)
-			}
 			return err
 		}
 
@@ -256,25 +244,23 @@ func (ng *nodegroup) Autoprovisioned() bool {
 	return false
 }
 
-func newNodegroupFromMachineSet(controller *machineController, machineSet *v1beta1.MachineSet) (*nodegroup, error) {
+func newNodegroupFromMachineSet(controller *machineController, machineSet *MachineSet) (*nodegroup, error) {
 	scalableResource, err := newMachineSetScalableResource(controller, machineSet)
 	if err != nil {
 		return nil, err
 	}
 	return &nodegroup{
-		machineapiClient:  controller.clusterClientset.MachineV1beta1(),
 		machineController: controller,
 		scalableResource:  scalableResource,
 	}, nil
 }
 
-func newNodegroupFromMachineDeployment(controller *machineController, machineDeployment *v1beta1.MachineDeployment) (*nodegroup, error) {
+func newNodegroupFromMachineDeployment(controller *machineController, machineDeployment *MachineDeployment) (*nodegroup, error) {
 	scalableResource, err := newMachineDeploymentScalableResource(controller, machineDeployment)
 	if err != nil {
 		return nil, err
 	}
 	return &nodegroup{
-		machineapiClient:  controller.clusterClientset.MachineV1beta1(),
 		machineController: controller,
 		scalableResource:  scalableResource,
 	}, nil
