@@ -12,9 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-FROM k8s.gcr.io/debian-base-amd64:0.4.0
+FROM k8s.gcr.io/debian-base-amd64:1.0.0
 MAINTAINER Krzysztof Grygiel "kgrygiel@google.com"
 
 ADD recommender recommender
 
-ENTRYPOINT ./recommender --v=4 --stderrthreshold=info --prometheus-address=http://prometheus.monitoring.svc
+ENTRYPOINT ["./recommender"]
+CMD ["--v=4", "--stderrthreshold=info", "--prometheus-address=http://prometheus.monitoring.svc"]

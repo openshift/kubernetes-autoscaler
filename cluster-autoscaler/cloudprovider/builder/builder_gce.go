@@ -21,25 +21,21 @@ package builder
 import (
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
-	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gke"
 	"k8s.io/autoscaler/cluster-autoscaler/config"
 )
 
 // AvailableCloudProviders supported by the cloud provider builder.
 var AvailableCloudProviders = []string{
-	gce.ProviderNameGCE,
-	gke.ProviderNameGKE,
+	cloudprovider.GceProviderName,
 }
 
 // DefaultCloudProvider is GCE.
-const DefaultCloudProvider = gce.ProviderNameGCE
+const DefaultCloudProvider = cloudprovider.GceProviderName
 
 func buildCloudProvider(opts config.AutoscalingOptions, do cloudprovider.NodeGroupDiscoveryOptions, rl *cloudprovider.ResourceLimiter) cloudprovider.CloudProvider {
 	switch opts.CloudProviderName {
-	case gce.ProviderNameGCE:
+	case cloudprovider.GceProviderName:
 		return gce.BuildGCE(opts, do, rl)
-	case gke.ProviderNameGKE:
-		return gke.BuildGKE(opts, do, rl)
 	}
 
 	return nil

@@ -27,7 +27,9 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/estimator"
 	"k8s.io/autoscaler/cluster-autoscaler/expander/random"
 	"k8s.io/autoscaler/cluster-autoscaler/metrics"
+	processor_callbacks "k8s.io/autoscaler/cluster-autoscaler/processors/callbacks"
 	"k8s.io/autoscaler/cluster-autoscaler/processors/nodegroups"
+	"k8s.io/autoscaler/cluster-autoscaler/processors/status"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/errors"
 	kube_util "k8s.io/autoscaler/cluster-autoscaler/utils/kubernetes"
@@ -66,18 +68,33 @@ type groupSizeChange struct {
 }
 
 type scaleTestConfig struct {
-	nodes                  []nodeConfig
-	pods                   []podConfig
-	extraPods              []podConfig
-	expectedScaleUpOptions []groupSizeChange // we expect that all those options should be included in expansion options passed to expander strategy
-	scaleUpOptionToChoose  groupSizeChange   // this will be selected by assertingStrategy.BestOption
-	expectedFinalScaleUp   groupSizeChange   // we expect this to be delivered via scale-up event
-	expectedScaleDowns     []string
-	options                config.AutoscalingOptions
+	nodes                   []nodeConfig
+	pods                    []podConfig
+	extraPods               []podConfig
+	options                 config.AutoscalingOptions
+	nodeDeletionTracker     *NodeDeletionTracker
+	expansionOptionToChoose groupSizeChange // this will be selected by assertingStrategy.BestOption
+
+	//expectedScaleUpOptions []groupSizeChange // we expect that all those options should be included in expansion options passed to expander strategy
+	//expectedFinalScaleUp   groupSizeChange   // we expect this to be delivered via scale-up event
+	expectedScaleDowns []string
+	tempNodeNames      []string
+}
+
+type scaleTestResults struct {
+	expansionOptions []groupSizeChange
+	finalOption      groupSizeChange
+	scaleUpStatus    *status.ScaleUpStatus
+	noScaleUpReason  string
+	finalScaleDowns  []string
+	events           []string
 }
 
 // NewScaleTestAutoscalingContext creates a new test autoscaling context for scaling tests.
-func NewScaleTestAutoscalingContext(options config.AutoscalingOptions, fakeClient kube_client.Interface, listers kube_util.ListerRegistry, provider cloudprovider.CloudProvider) context.AutoscalingContext {
+func NewScaleTestAutoscalingContext(
+	options config.AutoscalingOptions, fakeClient kube_client.Interface,
+	listers kube_util.ListerRegistry, provider cloudprovider.CloudProvider,
+	processorCallbacks processor_callbacks.ProcessorCallbacks) context.AutoscalingContext {
 	fakeRecorder := kube_record.NewFakeRecorder(5)
 	fakeLogRecorder, _ := utils.NewStatusMapRecorder(fakeClient, "kube-system", fakeRecorder, false)
 	// Ignoring error here is safe - if a test doesn't specify valid estimatorName,
@@ -91,10 +108,11 @@ func NewScaleTestAutoscalingContext(options config.AutoscalingOptions, fakeClien
 			LogRecorder:    fakeLogRecorder,
 			ListerRegistry: listers,
 		},
-		CloudProvider:    provider,
-		PredicateChecker: simulator.NewTestPredicateChecker(),
-		ExpanderStrategy: random.NewStrategy(),
-		EstimatorBuilder: estimatorBuilder,
+		CloudProvider:      provider,
+		PredicateChecker:   simulator.NewTestPredicateChecker(),
+		ExpanderStrategy:   random.NewStrategy(),
+		EstimatorBuilder:   estimatorBuilder,
+		ProcessorCallbacks: processorCallbacks,
 	}
 }
 
@@ -112,10 +130,11 @@ func (p *mockAutoprovisioningNodeGroupManager) CreateNodeGroup(context *context.
 	return result, nil
 }
 
-func (p *mockAutoprovisioningNodeGroupManager) RemoveUnneededNodeGroups(context *context.AutoscalingContext) error {
+func (p *mockAutoprovisioningNodeGroupManager) RemoveUnneededNodeGroups(context *context.AutoscalingContext) (removedNodeGroups []cloudprovider.NodeGroup, err error) {
 	if !context.AutoscalingOptions.NodeAutoprovisioningEnabled {
-		return nil
+		return nil, nil
 	}
+	removedNodeGroups = make([]cloudprovider.NodeGroup, 0)
 	nodeGroups := context.CloudProvider.NodeGroups()
 	for _, nodeGroup := range nodeGroups {
 		if !nodeGroup.Autoprovisioned() {
@@ -133,8 +152,9 @@ func (p *mockAutoprovisioningNodeGroupManager) RemoveUnneededNodeGroups(context 
 		}
 		err = nodeGroup.Delete()
 		assert.NoError(p.t, err)
+		removedNodeGroups = append(removedNodeGroups, nodeGroup)
 	}
-	return nil
+	return removedNodeGroups, nil
 }
 
 func (p *mockAutoprovisioningNodeGroupManager) CleanUp() {

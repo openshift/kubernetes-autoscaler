@@ -1,11 +1,8 @@
-# See the OWNERS docs: https://git.k8s.io/community/contributors/guide/owners.md
-
 approvers:
-  - enxebre
-  - frobware
-  - ingvagabund
-  - bison
+- mwielgus
+- maciekpytel
+- bskiba
 reviewers:
-  - paulfantom
-  - spangenberg
-  - vikaschoudhary16
+- mwielgus
+- maciekpytel
+- bskiba
