@@ -107,6 +107,18 @@ func (p *provider) GetInstanceID(node *corev1.Node) string {
 	return node.Spec.ProviderID
 }
 
+// GetAvailableGPUTypes return all available GPU types cloud provider supports.
+func (p *provider) GetAvailableGPUTypes() map[string]struct{} {
+	// TODO: implement this
+	return nil
+}
+
+// GPULabel returns the label added to nodes with GPU resource.
+func (p *provider) GPULabel() string {
+	// TODO: implement this
+	return ""
+}
+
 func newProvider(
 	name string,
 	rl *cloudprovider.ResourceLimiter,
