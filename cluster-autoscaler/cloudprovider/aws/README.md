@@ -5,8 +5,9 @@ The cluster autoscaler on AWS scales worker nodes within any specified autoscali
 Cluster autoscaler must run on v1.3.0 or greater.
 
 ## Permissions
-The worker running the cluster autoscaler will need access to certain resources and actions.
+The worker running the cluster autoscaler will need access to certain resources and actions. We always recommend you to attach IAM policy to nodegroup and avoid using AWS credentials directly unless you have special requirements.
 
+### Attach IAM policy to NodeGroup
 A minimum IAM policy would look like:
 ```json
 {
@@ -17,6 +18,7 @@ A minimum IAM policy would look like:
             "Action": [
                 "autoscaling:DescribeAutoScalingGroups",
                 "autoscaling:DescribeAutoScalingInstances",
+                "autoscaling:DescribeLaunchConfigurations",
                 "autoscaling:SetDesiredCapacity",
                 "autoscaling:TerminateInstanceInAutoScalingGroup"
             ],
@@ -37,6 +39,7 @@ If you'd like to auto-discover node groups by specifying the `--node-group-auto-
             "Action": [
                 "autoscaling:DescribeAutoScalingGroups",
                 "autoscaling:DescribeAutoScalingInstances",
+                "autoscaling:DescribeLaunchConfigurations",
                 "autoscaling:DescribeTags",
                 "autoscaling:SetDesiredCapacity",
                 "autoscaling:TerminateInstanceInAutoScalingGroup"
@@ -48,6 +51,39 @@ If you'd like to auto-discover node groups by specifying the `--node-group-auto-
 ```
 
 AWS supports ARNs for autoscaling groups. More information [here](https://docs.aws.amazon.com/autoscaling/latest/userguide/control-access-using-iam.html#policy-auto-scaling-resources).
+
+### Using AWS Credentials
+For on premise users like to scale out to AWS, above approach that attaching policy to nodegroup role won't work. Instead, you can create an aws secret manually and add following environment variables to cluster-autoscaler deployment manifest. Cluster autoscaler will use credential to authenticate and authorize itself. Please make sure your role has above permissions.
+
+```
+apiVersion: v1
+kind: Secret
+metadata:
+  name: aws-secret
+type: Opaque
+data:
+  aws_access_key_id: BASE64_OF_YOUR_AWS_ACCESS_KEY_ID
+  aws_secret_access_key: BASE64_OF_YOUR_AWS_SECRET_ACCESS_KEY
+
+```
+Please check [guidance](https://kubernetes.io/docs/concepts/configuration/secret/#creating-a-secret-manually) for creating a secret manually.
+
+```
+env:
+- name: AWS_ACCESS_KEY_ID
+  valueFrom:
+    secretKeyRef:
+      name: aws-secret
+      key: aws_access_key_id
+- name: AWS_SECRET_ACCESS_KEY
+  valueFrom:
+    secretKeyRef:
+      name: aws-secret
+      key: aws_secret_access_key
+- name: AWS_REGION
+  value: YOUR_AWS_REGION
+
+```
 
 ## Deployment Specification
 Auto-Discovery Setup is always preferred option to avoid multiple, potentially different configuration for min/max values. If you want to adjust minimum and maximum size of the group, please adjust size on ASG directly, CA will fetch latest change when talking to ASG.
@@ -143,6 +179,8 @@ If you'd like to scale node groups from 0, an `autoscaling:DescribeLaunchConfigu
 
 ## Using AutoScalingGroup MixedInstancesPolicy
 
+> Note: The minimum version of cluster autoscaler to support MixedInstancePolicy is v1.14.x.
+
 It is possible to use Cluster Autoscaler with a [mixed instances policy](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-autoscaling-autoscalinggroup-mixedinstancespolicy.html), to enable diversification across on-demand and spot instances, of multiple instance types in a single ASG. When using spot instances, this increases the likelihood of successfully launching a spot instance to add the desired capacity to the cluster versus a single instance type, which may be in short supply.
 
 Note that the instance types should have the same amount of RAM and number of CPU cores, since this is fundamental to CA's scaling calculations. Using mismatched instances types can produce unintended results.
@@ -178,9 +216,10 @@ spec:
 See CloudFormation example [here](MixedInstancePolicy.md).
 
 ## Common Notes and Gotchas:
-- The `/etc/ssl/certs/ca-certificates.crt` should exist by default on your ec2 instance. If you use Amazon Linux 2 (EKS worker node AMI by default), use `/etc/kubernetes/pki/ca.crt` instead for the volume hostPath in your cluster autoscaler manifest.
+- The `/etc/ssl/certs/ca-bundle.crt` should exist by default on ec2 instance in your EKS cluster. If you use other cluster privision tools like [kops](https://github.com/kubernetes/kops) with different operating systems other than Amazon Linux 2, please use `/etc/ssl/certs/ca-certificates.crt` or correct path on your host instead for the volume hostPath in your cluster autoscaler manifest.
 - Cluster autoscaler does not support Auto Scaling Groups which span multiple Availability Zones; instead you should use an Auto Scaling Group for each Availability Zone and enable the [--balance-similar-node-groups](../../FAQ.md#im-running-cluster-with-nodes-in-multiple-zones-for-ha-purposes-is-that-supported-by-cluster-autoscaler) feature. If you do use a single Auto Scaling Group that spans multiple Availability Zones you will find that AWS unexpectedly terminates nodes without them being drained because of the [rebalancing feature](https://docs.aws.amazon.com/autoscaling/ec2/userguide/auto-scaling-benefits.html#arch-AutoScalingMultiAZ).
 - EBS volumes cannot span multiple AWS Availability Zones. If you have a Pod with Persistent Volume in an AZ, It must be running on a k8s/EKS node which is in the same Availability Zone of the Persistent Volume. If AWS Auto Scaling Group launches a new k8s/EKS node in different AZ and moves this Pod into the new node, The Persistent volume in previous AZ will not be available from the new AZ. The pod will stay in Pending status. The Workaround is using a single AZ for the k8s/EKS nodes.
 - By default, cluster autoscaler will not terminate nodes running pods in the kube-system namespace. You can override this default behaviour by passing in the `--skip-nodes-with-system-pods=false` flag.
 - By default, cluster autoscaler will wait 10 minutes between scale down operations, you can adjust this using the `--scale-down-delay-after-add`, `--scale-down-delay-after-delete`, and `--scale-down-delay-after-failure` flag. E.g. `--scale-down-delay-after-add=5m` to decrease the scale down delay to 5 minutes after a node has been added.
 - If you're running multiple ASGs, the `--expander` flag supports three options: `random`, `most-pods` and `least-waste`. `random` will expand a random ASG on scale up. `most-pods` will scale up the ASG that will schedule the most amount of pods. `least-waste` will expand the ASG that will waste the least amount of CPU/MEM resources. In the event of a tie, cluster autoscaler will fall back to `random`.
+- If you're managing your own kubelets, they need to be started with the `--provider-id` flag. The provider id has the format `aws:///<availability-zone>/<instance-id>`, e.g. `aws:///us-east-1a/i-01234abcdef`.

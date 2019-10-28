@@ -24,7 +24,7 @@ import (
 	apiv1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	labels "k8s.io/apimachinery/pkg/labels"
-	vpa_types "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/apis/autoscaling.k8s.io/v1beta2"
+	vpa_types "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/apis/autoscaling.k8s.io/v1"
 	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/recommender/util"
 )
 
@@ -198,6 +198,13 @@ func TestAggregateContainerStateLoadFromCheckpoint(t *testing.T) {
 func TestAggregateContainerStateIsExpired(t *testing.T) {
 	cs := NewAggregateContainerState()
 	cs.LastSampleStart = testTimestamp
+	cs.TotalSamplesCount = 1
 	assert.False(t, cs.isExpired(testTimestamp.Add(7*24*time.Hour)))
 	assert.True(t, cs.isExpired(testTimestamp.Add(8*24*time.Hour)))
+
+	csEmpty := NewAggregateContainerState()
+	csEmpty.TotalSamplesCount = 0
+	csEmpty.CreationTime = testTimestamp
+	assert.False(t, csEmpty.isExpired(testTimestamp.Add(7*24*time.Hour)))
+	assert.True(t, csEmpty.isExpired(testTimestamp.Add(8*24*time.Hour)))
 }

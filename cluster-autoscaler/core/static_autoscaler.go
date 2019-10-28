@@ -22,6 +22,8 @@ import (
 
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/util/uuid"
+
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	"k8s.io/autoscaler/cluster-autoscaler/clusterstate"
 	"k8s.io/autoscaler/cluster-autoscaler/clusterstate/utils"
@@ -66,9 +68,40 @@ type StaticAutoscaler struct {
 	lastScaleDownFailTime   time.Time
 	scaleDown               *ScaleDown
 	processors              *ca_processors.AutoscalingProcessors
+	processorCallbacks      *staticAutoscalerProcessorCallbacks
 	initialized             bool
 	// Caches nodeInfo computed for previously seen nodes
 	nodeInfoCache map[string]*schedulernodeinfo.NodeInfo
+	ignoredTaints taintKeySet
+}
+
+type staticAutoscalerProcessorCallbacks struct {
+	disableScaleDownForLoop bool
+	extraValues             map[string]interface{}
+}
+
+func newStaticAutoscalerProcessorCallbacks() *staticAutoscalerProcessorCallbacks {
+	callbacks := &staticAutoscalerProcessorCallbacks{}
+	callbacks.reset()
+	return callbacks
+}
+
+func (callbacks *staticAutoscalerProcessorCallbacks) DisableScaleDownForLoop() {
+	callbacks.disableScaleDownForLoop = true
+}
+
+func (callbacks *staticAutoscalerProcessorCallbacks) SetExtraValue(key string, value interface{}) {
+	callbacks.extraValues[key] = value
+}
+
+func (callbacks *staticAutoscalerProcessorCallbacks) GetExtraValue(key string) (value interface{}, found bool) {
+	value, found = callbacks.extraValues[key]
+	return
+}
+
+func (callbacks *staticAutoscalerProcessorCallbacks) reset() {
+	callbacks.disableScaleDownForLoop = false
+	callbacks.extraValues = make(map[string]interface{})
 }
 
 // NewStaticAutoscaler creates an instance of Autoscaler filled with provided parameters
@@ -81,13 +114,22 @@ func NewStaticAutoscaler(
 	expanderStrategy expander.Strategy,
 	estimatorBuilder estimator.EstimatorBuilder,
 	backoff backoff.Backoff) *StaticAutoscaler {
-	autoscalingContext := context.NewAutoscalingContext(opts, predicateChecker, autoscalingKubeClients, cloudProvider, expanderStrategy, estimatorBuilder)
+
+	processorCallbacks := newStaticAutoscalerProcessorCallbacks()
+	autoscalingContext := context.NewAutoscalingContext(opts, predicateChecker, autoscalingKubeClients, cloudProvider, expanderStrategy, estimatorBuilder, processorCallbacks)
 
 	clusterStateConfig := clusterstate.ClusterStateRegistryConfig{
 		MaxTotalUnreadyPercentage: opts.MaxTotalUnreadyPercentage,
 		OkTotalUnreadyCount:       opts.OkTotalUnreadyCount,
 		MaxNodeProvisionTime:      opts.MaxNodeProvisionTime,
 	}
+
+	ignoredTaints := make(taintKeySet)
+	for _, taintKey := range opts.IgnoredTaints {
+		klog.V(4).Infof("Ignoring taint %s on all NodeGroups", taintKey)
+		ignoredTaints[taintKey] = true
+	}
+
 	clusterStateRegistry := clusterstate.NewClusterStateRegistry(autoscalingContext.CloudProvider, clusterStateConfig, autoscalingContext.LogRecorder, backoff)
 
 	scaleDown := NewScaleDown(autoscalingContext, clusterStateRegistry)
@@ -100,9 +142,17 @@ func NewStaticAutoscaler(
 		lastScaleDownFailTime:   time.Now(),
 		scaleDown:               scaleDown,
 		processors:              processors,
+		processorCallbacks:      processorCallbacks,
 		clusterStateRegistry:    clusterStateRegistry,
 		nodeInfoCache:           make(map[string]*schedulernodeinfo.NodeInfo),
+		ignoredTaints:           ignoredTaints,
 	}
+}
+
+// Start starts components running in background.
+func (a *StaticAutoscaler) Start() error {
+	a.clusterStateRegistry.Start()
+	return nil
 }
 
 // cleanUpIfRequired removes ToBeDeleted taints added by a previous run of CA
@@ -116,10 +166,12 @@ func (a *StaticAutoscaler) cleanUpIfRequired() {
 	if readyNodes, err := a.ReadyNodeLister().List(); err != nil {
 		klog.Errorf("Failed to list ready nodes, not cleaning up taints: %v", err)
 	} else {
-		deletetaint.CleanAllToBeDeleted(readyNodes, a.AutoscalingContext.ClientSet, a.Recorder)
+		deletetaint.CleanAllToBeDeleted(readyNodes,
+			a.AutoscalingContext.ClientSet, a.Recorder)
 		if a.AutoscalingContext.AutoscalingOptions.MaxBulkSoftTaintCount == 0 {
 			// Clean old taints if soft taints handling is disabled
-			deletetaint.CleanAllDeletionCandidates(readyNodes, a.AutoscalingContext.ClientSet, a.Recorder)
+			deletetaint.CleanAllDeletionCandidates(readyNodes,
+				a.AutoscalingContext.ClientSet, a.Recorder)
 		}
 	}
 	a.initialized = true
@@ -128,6 +180,8 @@ func (a *StaticAutoscaler) cleanUpIfRequired() {
 // RunOnce iterates over node groups and scales them up/down if necessary
 func (a *StaticAutoscaler) RunOnce(currentTime time.Time) errors.AutoscalerError {
 	a.cleanUpIfRequired()
+	a.processorCallbacks.reset()
+	a.clusterStateRegistry.PeriodicCleanup()
 
 	unschedulablePodLister := a.UnschedulablePodLister()
 	scheduledPodLister := a.ScheduledPodLister()
@@ -138,7 +192,7 @@ func (a *StaticAutoscaler) RunOnce(currentTime time.Time) errors.AutoscalerError
 	klog.V(4).Info("Starting main loop")
 
 	stateUpdateStart := time.Now()
-	allNodes, readyNodes, typedErr := a.obtainNodeLists()
+	allNodes, readyNodes, typedErr := a.obtainNodeLists(a.CloudProvider)
 	if typedErr != nil {
 		return typedErr
 	}
@@ -160,7 +214,7 @@ func (a *StaticAutoscaler) RunOnce(currentTime time.Time) errors.AutoscalerError
 	}
 
 	nodeInfosForGroups, autoscalerError := getNodeInfosForGroups(
-		readyNodes, a.nodeInfoCache, autoscalingContext.CloudProvider, autoscalingContext.ListerRegistry, daemonsets, autoscalingContext.PredicateChecker)
+		readyNodes, a.nodeInfoCache, autoscalingContext.CloudProvider, autoscalingContext.ListerRegistry, daemonsets, autoscalingContext.PredicateChecker, a.ignoredTaints)
 	if autoscalerError != nil {
 		return autoscalerError.AddPrefix("failed to build node infos for node groups: ")
 	}
@@ -204,18 +258,12 @@ func (a *StaticAutoscaler) RunOnce(currentTime time.Time) errors.AutoscalerError
 	unregisteredNodes := a.clusterStateRegistry.GetUnregisteredNodes()
 	if len(unregisteredNodes) > 0 {
 		klog.V(1).Infof("%d unregistered nodes present", len(unregisteredNodes))
-		removedAny, err := removeOldUnregisteredNodes(unregisteredNodes, autoscalingContext, currentTime, autoscalingContext.LogRecorder)
+		removedAny, err := removeOldUnregisteredNodes(unregisteredNodes, autoscalingContext,
+			currentTime, autoscalingContext.LogRecorder)
 		// There was a problem with removing unregistered nodes. Retry in the next loop.
 		if err != nil {
-			if removedAny {
-				klog.Warningf("Some unregistered nodes were removed, but got error: %v", err)
-			} else {
-				klog.Errorf("Failed to remove unregistered nodes: %v", err)
-
-			}
-			return errors.ToAutoscalerError(errors.CloudProviderError, err)
+			klog.Warningf("Failed to remove unregistered nodes: %v", err)
 		}
-		// Some nodes were removed. Let's skip this iteration, the next one should be better.
 		if removedAny {
 			klog.V(0).Infof("Some unregistered nodes were removed, skipping iteration")
 			return nil
@@ -246,69 +294,37 @@ func (a *StaticAutoscaler) RunOnce(currentTime time.Time) errors.AutoscalerError
 
 	metrics.UpdateLastTime(metrics.Autoscaling, time.Now())
 
-	allUnschedulablePods, err := unschedulablePodLister.List()
+	unschedulablePods, err := unschedulablePodLister.List()
 	if err != nil {
 		klog.Errorf("Failed to list unscheduled pods: %v", err)
 		return errors.ToAutoscalerError(errors.ApiCallError, err)
 	}
-	metrics.UpdateUnschedulablePodsCount(len(allUnschedulablePods))
+	metrics.UpdateUnschedulablePodsCount(len(unschedulablePods))
 
-	allScheduled, err := scheduledPodLister.List()
+	originalScheduledPods, err := scheduledPodLister.List()
 	if err != nil {
 		klog.Errorf("Failed to list scheduled pods: %v", err)
 		return errors.ToAutoscalerError(errors.ApiCallError, err)
 	}
 
-	allUnschedulablePods, allScheduled, err = a.processors.PodListProcessor.Process(a.AutoscalingContext, allUnschedulablePods, allScheduled, allNodes)
-	if err != nil {
-		klog.Errorf("Failed to process pod list: %v", err)
-		return errors.ToAutoscalerError(errors.InternalError, err)
-	}
+	// scheduledPods will be mutated over this method. We keep original list of pods on originalScheduledPods.
+	scheduledPods := append([]*apiv1.Pod{}, originalScheduledPods...)
 
-	ConfigurePredicateCheckerForLoop(allUnschedulablePods, allScheduled, a.PredicateChecker)
+	ConfigurePredicateCheckerForLoop(unschedulablePods, scheduledPods, a.PredicateChecker)
 
-	// We need to check whether pods marked as unschedulable are actually unschedulable.
-	// It's likely we added a new node and the scheduler just haven't managed to put the
-	// pod on in yet. In this situation we don't want to trigger another scale-up.
-	//
-	// It's also important to prevent uncontrollable cluster growth if CA's simulated
-	// scheduler differs in opinion with real scheduler. Example of such situation:
-	// - CA and Scheduler has slightly different configuration
-	// - Scheduler can't schedule a pod and marks it as unschedulable
-	// - CA added a node which should help the pod
-	// - Scheduler doesn't schedule the pod on the new node
-	//   because according to it logic it doesn't fit there
-	// - CA see the pod is still unschedulable, so it adds another node to help it
-	//
-	// With the check enabled the last point won't happen because CA will ignore a pod
-	// which is supposed to schedule on an existing node.
-	scaleDownForbidden := false
+	unschedulablePods = tpu.ClearTPURequests(unschedulablePods)
 
-	unschedulablePodsWithoutTPUs := tpu.ClearTPURequests(allUnschedulablePods)
-
+	// todo: move split and append below to separate PodListProcessor
 	// Some unschedulable pods can be waiting for lower priority pods preemption so they have nominated node to run.
 	// Such pods don't require scale up but should be considered during scale down.
-	unschedulablePods, unschedulableWaitingForLowerPriorityPreemption := filterOutExpendableAndSplit(unschedulablePodsWithoutTPUs, a.ExpendablePodsPriorityCutoff)
+	unschedulablePods, unschedulableWaitingForLowerPriorityPreemption := filterOutExpendableAndSplit(unschedulablePods, a.ExpendablePodsPriorityCutoff)
 
-	klog.V(4).Infof("Filtering out schedulables")
-	filterOutSchedulableStart := time.Now()
-	var unschedulablePodsToHelp []*apiv1.Pod
-	if a.FilterOutSchedulablePodsUsesPacking {
-		unschedulablePodsToHelp = filterOutSchedulableByPacking(unschedulablePods, readyNodes, allScheduled,
-			unschedulableWaitingForLowerPriorityPreemption, a.PredicateChecker, a.ExpendablePodsPriorityCutoff)
-	} else {
-		unschedulablePodsToHelp = filterOutSchedulableSimple(unschedulablePods, readyNodes, allScheduled,
-			unschedulableWaitingForLowerPriorityPreemption, a.PredicateChecker, a.ExpendablePodsPriorityCutoff)
-	}
+	// we tread pods with nominated node-name as scheduled for sake of scale-up considerations
+	scheduledPods = append(scheduledPods, unschedulableWaitingForLowerPriorityPreemption...)
 
-	metrics.UpdateDurationFromStart(metrics.FilterOutSchedulable, filterOutSchedulableStart)
-
-	if len(unschedulablePodsToHelp) != len(unschedulablePods) {
-		klog.V(2).Info("Schedulable pods present")
-		scaleDownForbidden = true
-	} else {
-		klog.V(4).Info("No schedulable pods")
-	}
+	unschedulablePodsToHelp, scheduledPods, err := a.processors.PodListProcessor.Process(
+		a.AutoscalingContext, unschedulablePods, scheduledPods, allNodes, readyNodes,
+		getUpcomingNodeInfos(a.clusterStateRegistry, nodeInfosForGroups))
 
 	// finally, filter out pods that are too "young" to safely be considered for a scale-up (delay is configurable)
 	unschedulablePodsToHelp = a.filterOutYoungPods(unschedulablePodsToHelp, currentTime)
@@ -324,14 +340,14 @@ func (a *StaticAutoscaler) RunOnce(currentTime time.Time) errors.AutoscalerError
 		// is more pods to come. In theory we could check the newest pod time but then if pod were created
 		// slowly but at the pace of 1 every 2 seconds then no scale up would be triggered for long time.
 		// We also want to skip a real scale down (just like if the pods were handled).
-		scaleDownForbidden = true
+		a.processorCallbacks.DisableScaleDownForLoop()
 		scaleUpStatus.Result = status.ScaleUpInCooldown
 		klog.V(1).Info("Unschedulable pods are very new, waiting one iteration for more")
 	} else {
 		scaleUpStart := time.Now()
 		metrics.UpdateLastTime(metrics.ScaleUp, scaleUpStart)
 
-		scaleUpStatus, typedErr = ScaleUp(autoscalingContext, a.processors, a.clusterStateRegistry, unschedulablePodsToHelp, readyNodes, daemonsets, nodeInfosForGroups)
+		scaleUpStatus, typedErr = ScaleUp(autoscalingContext, a.processors, a.clusterStateRegistry, unschedulablePodsToHelp, readyNodes, daemonsets, nodeInfosForGroups, a.ignoredTaints)
 
 		metrics.UpdateDurationFromStart(metrics.ScaleUp, scaleUpStart)
 
@@ -365,9 +381,41 @@ func (a *StaticAutoscaler) RunOnce(currentTime time.Time) errors.AutoscalerError
 		klog.V(4).Infof("Calculating unneeded nodes")
 
 		scaleDown.CleanUp(currentTime)
-		potentiallyUnneeded := getPotentiallyUnneededNodes(autoscalingContext, allNodes)
 
-		typedErr := scaleDown.UpdateUnneededNodes(allNodes, potentiallyUnneeded, append(allScheduled, unschedulableWaitingForLowerPriorityPreemption...), currentTime, pdbs)
+		var scaleDownCandidates []*apiv1.Node
+		var podDestinations []*apiv1.Node
+		var temporaryNodes []*apiv1.Node
+
+		if a.processors == nil || a.processors.ScaleDownNodeProcessor == nil {
+			scaleDownCandidates = allNodes
+			podDestinations = allNodes
+			temporaryNodes = []*apiv1.Node{}
+		} else {
+			var err errors.AutoscalerError
+			a.processors.ScaleDownNodeProcessor.Reset()
+			scaleDownCandidates, err = a.processors.ScaleDownNodeProcessor.GetScaleDownCandidates(
+				autoscalingContext, allNodes)
+			if err != nil {
+				klog.Error(err)
+				return err
+			}
+			podDestinations, err = a.processors.ScaleDownNodeProcessor.GetPodDestinationCandidates(autoscalingContext, allNodes)
+			if err != nil {
+				klog.Error(err)
+				return err
+			}
+			temporaryNodes, err = a.processors.ScaleDownNodeProcessor.GetTemporaryNodes(allNodes)
+			if err != nil {
+				klog.Error(err)
+				return err
+			}
+		}
+
+		tempNodesPerNodeGroup := getTempNodesPerNodeGroup(a.CloudProvider, temporaryNodes)
+
+		// We use scheduledPods (not originalScheduledPods) here, so artificial scheduled pods introduced by processors
+		// (e.g unscheduled pods with nominated node name) can block scaledown of given node.
+		typedErr := scaleDown.UpdateUnneededNodes(allNodes, podDestinations, scaleDownCandidates, scheduledPods, currentTime, pdbs, tempNodesPerNodeGroup)
 		if typedErr != nil {
 			scaleDownStatus.Result = status.ScaleDownError
 			klog.Errorf("Failed to scale down: %v", typedErr)
@@ -382,33 +430,41 @@ func (a *StaticAutoscaler) RunOnce(currentTime time.Time) errors.AutoscalerError
 			}
 		}
 
-		scaleDownInCooldown := scaleDownForbidden ||
+		scaleDownInCooldown := a.processorCallbacks.disableScaleDownForLoop ||
 			a.lastScaleUpTime.Add(a.ScaleDownDelayAfterAdd).After(currentTime) ||
 			a.lastScaleDownFailTime.Add(a.ScaleDownDelayAfterFailure).After(currentTime) ||
 			a.lastScaleDownDeleteTime.Add(a.ScaleDownDelayAfterDelete).After(currentTime)
 		// In dry run only utilization is updated
-		calculateUnneededOnly := scaleDownInCooldown || scaleDown.nodeDeleteStatus.IsDeleteInProgress()
+		calculateUnneededOnly := scaleDownInCooldown || scaleDown.nodeDeletionTracker.IsNonEmptyNodeDeleteInProgress()
 
 		klog.V(4).Infof("Scale down status: unneededOnly=%v lastScaleUpTime=%s "+
-			"lastScaleDownDeleteTime=%v lastScaleDownFailTime=%s scaleDownForbidden=%v isDeleteInProgress=%v",
-			calculateUnneededOnly, a.lastScaleUpTime, a.lastScaleDownDeleteTime, a.lastScaleDownFailTime,
-			scaleDownForbidden, scaleDown.nodeDeleteStatus.IsDeleteInProgress())
+			"lastScaleDownDeleteTime=%v lastScaleDownFailTime=%s scaleDownForbidden=%v "+
+			"isDeleteInProgress=%v scaleDownInCooldown=%v",
+			calculateUnneededOnly, a.lastScaleUpTime,
+			a.lastScaleDownDeleteTime, a.lastScaleDownFailTime, a.processorCallbacks.disableScaleDownForLoop,
+			scaleDown.nodeDeletionTracker.IsNonEmptyNodeDeleteInProgress(), scaleDownInCooldown)
+		metrics.UpdateScaleDownInCooldown(scaleDownInCooldown)
 
 		if scaleDownInCooldown {
 			scaleDownStatus.Result = status.ScaleDownInCooldown
-		} else if scaleDown.nodeDeleteStatus.IsDeleteInProgress() {
+		} else if scaleDown.nodeDeletionTracker.IsNonEmptyNodeDeleteInProgress() {
 			scaleDownStatus.Result = status.ScaleDownInProgress
 		} else {
 			klog.V(4).Infof("Starting scale down")
 
 			// We want to delete unneeded Node Groups only if there was no recent scale up,
 			// and there is no current delete in progress and there was no recent errors.
-			a.processors.NodeGroupManager.RemoveUnneededNodeGroups(autoscalingContext)
+			removedNodeGroups, err := a.processors.NodeGroupManager.RemoveUnneededNodeGroups(autoscalingContext)
+			if err != nil {
+				klog.Errorf("Error while removing unneeded node groups: %v", err)
+			}
 
 			scaleDownStart := time.Now()
 			metrics.UpdateLastTime(metrics.ScaleDown, scaleDownStart)
-			scaleDownStatus, typedErr := scaleDown.TryToScaleDown(allNodes, allScheduled, pdbs, currentTime)
+			scaleDownStatus, typedErr := scaleDown.TryToScaleDown(allNodes, originalScheduledPods, pdbs, currentTime, temporaryNodes, tempNodesPerNodeGroup)
 			metrics.UpdateDurationFromStart(metrics.ScaleDown, scaleDownStart)
+
+			scaleDownStatus.RemovedNodeGroups = removedNodeGroups
 
 			if scaleDownStatus.Result == status.ScaleDownNodeDeleted {
 				a.lastScaleDownDeleteTime = currentTime
@@ -463,13 +519,13 @@ func (a *StaticAutoscaler) deleteCreatedNodesWithErrors() {
 
 		nodeGroup := nodeGroups[nodeGroupId]
 		if nodeGroup == nil {
-			err = fmt.Errorf("Node group %s not found", nodeGroup)
+			err = fmt.Errorf("node group %s not found", nodeGroupId)
 		} else {
 			err = nodeGroup.DeleteNodes(nodesToBeDeleted)
 		}
 
 		if err != nil {
-			klog.Warningf("Error while trying to delete nodes from %v: %v", nodeGroup.Id(), err)
+			klog.Warningf("Error while trying to delete nodes from %v: %v", nodeGroupId, err)
 		}
 	}
 }
@@ -506,9 +562,11 @@ func (a *StaticAutoscaler) ExitCleanUp() {
 		return
 	}
 	utils.DeleteStatusConfigMap(a.AutoscalingContext.ClientSet, a.AutoscalingContext.ConfigNamespace)
+
+	a.clusterStateRegistry.Stop()
 }
 
-func (a *StaticAutoscaler) obtainNodeLists() ([]*apiv1.Node, []*apiv1.Node, errors.AutoscalerError) {
+func (a *StaticAutoscaler) obtainNodeLists(cp cloudprovider.CloudProvider) ([]*apiv1.Node, []*apiv1.Node, errors.AutoscalerError) {
 	allNodes, err := a.AllNodeLister().List()
 	if err != nil {
 		klog.Errorf("Failed to list all nodes: %v", err)
@@ -525,12 +583,15 @@ func (a *StaticAutoscaler) obtainNodeLists() ([]*apiv1.Node, []*apiv1.Node, erro
 	// Treat those nodes as unready until GPU actually becomes available and let
 	// our normal handling for booting up nodes deal with this.
 	// TODO: Remove this call when we handle dynamically provisioned resources.
-	allNodes, readyNodes = gpu.FilterOutNodesWithUnreadyGpus(allNodes, readyNodes)
+	allNodes, readyNodes = gpu.FilterOutNodesWithUnreadyGpus(cp.GPULabel(), allNodes, readyNodes)
 	return allNodes, readyNodes, nil
 }
 
 // actOnEmptyCluster returns true if the cluster was empty and thus acted upon
 func (a *StaticAutoscaler) actOnEmptyCluster(allNodes, readyNodes []*apiv1.Node, currentTime time.Time) bool {
+	if a.AutoscalingContext.AutoscalingOptions.ScaleUpFromZero {
+		return false
+	}
 	if len(allNodes) == 0 {
 		a.onEmptyCluster("Cluster has no nodes.", true)
 		return true
@@ -575,4 +636,27 @@ func allPodsAreNew(pods []*apiv1.Pod, currentTime time.Time) bool {
 	}
 	found, oldest := getOldestCreateTimeWithGpu(pods)
 	return found && oldest.Add(unschedulablePodWithGpuTimeBuffer).After(currentTime)
+}
+
+func buildNodeForNodeTemplate(nodeTemplate *schedulernodeinfo.NodeInfo, index int) *apiv1.Node {
+	node := nodeTemplate.Node().DeepCopy()
+	node.Name = fmt.Sprintf("%s-%d", node.Name, index)
+	node.UID = uuid.NewUUID()
+	return node
+}
+
+func getUpcomingNodeInfos(registry *clusterstate.ClusterStateRegistry, nodeInfos map[string]*schedulernodeinfo.NodeInfo) []*apiv1.Node {
+	upcomingNodes := make([]*apiv1.Node, 0)
+	for nodeGroup, numberOfNodes := range registry.GetUpcomingNodes() {
+		nodeTemplate, found := nodeInfos[nodeGroup]
+		if !found {
+			klog.Warningf("Couldn't find template for node group %s", nodeGroup)
+			continue
+		}
+		for i := 0; i < numberOfNodes; i++ {
+			// Ensure new nodes having different names because nodeName would used as a map key.
+			upcomingNodes = append(upcomingNodes, buildNodeForNodeTemplate(nodeTemplate, i))
+		}
+	}
+	return upcomingNodes
 }

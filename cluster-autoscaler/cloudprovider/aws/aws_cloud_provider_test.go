@@ -149,7 +149,7 @@ func TestBuildAwsCloudProvider(t *testing.T) {
 
 func TestName(t *testing.T) {
 	provider := testProvider(t, testAwsManager)
-	assert.Equal(t, provider.Name(), ProviderName)
+	assert.Equal(t, provider.Name(), cloudprovider.AwsProviderName)
 }
 
 func TestNodeGroups(t *testing.T) {
@@ -279,6 +279,10 @@ func TestAwsRefFromProviderId(t *testing.T) {
 	awsRef, err := AwsRefFromProviderId("aws:///us-east-1a/i-260942b3")
 	assert.NoError(t, err)
 	assert.Equal(t, awsRef, &AwsInstanceRef{Name: "i-260942b3", ProviderID: "aws:///us-east-1a/i-260942b3"})
+
+	placeholderRef, err := AwsRefFromProviderId("aws:///us-east-1a/i-placeholder-some.arbitrary.cluster.local")
+	assert.NoError(t, err)
+	assert.Equal(t, placeholderRef, &AwsInstanceRef{Name: "i-placeholder-some.arbitrary.cluster.local", ProviderID: "aws:///us-east-1a/i-placeholder-some.arbitrary.cluster.local"})
 }
 
 func TestTargetSize(t *testing.T) {
@@ -398,6 +402,7 @@ func TestDeleteNodes(t *testing.T) {
 	})
 
 	// Look up the current number of instances...
+	var expectedInstancesCount int64 = 2
 	service.On("DescribeAutoScalingGroupsPages",
 		&autoscaling.DescribeAutoScalingGroupsInput{
 			AutoScalingGroupNames: aws.StringSlice([]string{"test-asg"}),
@@ -406,7 +411,9 @@ func TestDeleteNodes(t *testing.T) {
 		mock.AnythingOfType("func(*autoscaling.DescribeAutoScalingGroupsOutput, bool) bool"),
 	).Run(func(args mock.Arguments) {
 		fn := args.Get(1).(func(*autoscaling.DescribeAutoScalingGroupsOutput, bool) bool)
-		fn(testNamedDescribeAutoScalingGroupsOutput("test-asg", 2, "test-instance-id", "second-test-instance-id"), false)
+		fn(testNamedDescribeAutoScalingGroupsOutput("test-asg", expectedInstancesCount, "test-instance-id", "second-test-instance-id"), false)
+		// we expect the instance count to be 1 after the call to DeleteNodes
+		expectedInstancesCount = 1
 	}).Return(nil)
 
 	provider.Refresh()
@@ -423,7 +430,7 @@ func TestDeleteNodes(t *testing.T) {
 	err = asgs[0].DeleteNodes([]*apiv1.Node{node})
 	assert.NoError(t, err)
 	service.AssertNumberOfCalls(t, "TerminateInstanceInAutoScalingGroup", 1)
-	service.AssertNumberOfCalls(t, "DescribeAutoScalingGroupsPages", 1)
+	service.AssertNumberOfCalls(t, "DescribeAutoScalingGroupsPages", 2)
 
 	newSize, err := asgs[0].TargetSize()
 	assert.NoError(t, err)

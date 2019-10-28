@@ -1,9 +1,8 @@
 approvers:
-- joelsmith
-- sjenning
 - schylek
 - kgolab
+- jbartosik
 reviewers:
 - schylek
 - kgolab
-
+- jbartosik

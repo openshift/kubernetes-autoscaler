@@ -17,13 +17,21 @@ limitations under the License.
 package autoscaling
 
 import (
+	"fmt"
+	"os"
 	"testing"
 
 	"k8s.io/kubernetes/test/e2e/framework"
+	"k8s.io/kubernetes/test/e2e/framework/viperconfig"
 )
 
 func init() {
-	framework.ViperizeFlags()
+	framework.HandleFlags()
+	if err := viperconfig.ViperizeFlags("", "e2e"); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	framework.AfterReadingAllFlags(&framework.TestContext)
 }
 
 func TestVpaE2E(t *testing.T) {

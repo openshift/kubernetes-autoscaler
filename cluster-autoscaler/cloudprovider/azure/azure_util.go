@@ -34,11 +34,12 @@ import (
 	azStorage "github.com/Azure/azure-sdk-for-go/storage"
 	"github.com/Azure/go-autorest/autorest"
 	"github.com/Azure/go-autorest/autorest/to"
+
 	"golang.org/x/crypto/pkcs12"
-	"k8s.io/klog"
 
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	"k8s.io/client-go/pkg/version"
+	"k8s.io/klog"
 )
 
 const (
@@ -639,4 +640,22 @@ func convertResourceGroupNameToLower(resourceID string) (string, error) {
 
 	resourceGroup := matches[1]
 	return strings.Replace(resourceID, resourceGroup, strings.ToLower(resourceGroup), 1), nil
+}
+
+// isAzureRequestsThrottled returns true when the err is http.StatusTooManyRequests (429).
+func isAzureRequestsThrottled(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	v, ok := err.(autorest.DetailedError)
+	if !ok {
+		return false
+	}
+
+	if v.StatusCode == http.StatusTooManyRequests {
+		return true
+	}
+
+	return false
 }

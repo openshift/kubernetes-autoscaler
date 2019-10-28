@@ -30,7 +30,7 @@ import (
 
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
-	provider_gce "k8s.io/kubernetes/pkg/cloudprovider/providers/gce"
+	provider_gce "k8s.io/legacy-cloud-providers/gce"
 
 	"cloud.google.com/go/compute/metadata"
 	"golang.org/x/oauth2"
@@ -64,11 +64,11 @@ type GceManager interface {
 	Cleanup() error
 
 	// GetMigs returns list of registered MIGs.
-	GetMigs() []*MigInformation
+	GetMigs() []Mig
 	// GetMigNodes returns mig nodes.
 	GetMigNodes(mig Mig) ([]cloudprovider.Instance, error)
 	// GetMigForInstance returns MIG to which the given instance belongs.
-	GetMigForInstance(instance *GceRef) (Mig, error)
+	GetMigForInstance(instance GceRef) (Mig, error)
 	// GetMigTemplateNode returns a template node for MIG.
 	GetMigTemplateNode(mig Mig) (*apiv1.Node, error)
 	// GetResourceLimiter returns resource limiter.
@@ -79,15 +79,17 @@ type GceManager interface {
 	// SetMigSize sets MIG size.
 	SetMigSize(mig Mig, size int64) error
 	// DeleteInstances deletes the given instances. All instances must be controlled by the same MIG.
-	DeleteInstances(instances []*GceRef) error
+	DeleteInstances(instances []GceRef) error
 }
 
 type gceManagerImpl struct {
-	cache                    GceCache
+	cache                    *GceCache
 	lastRefresh              time.Time
 	machinesCacheLastRefresh time.Time
 
-	GceService AutoscalingGceClient
+	GceService                   AutoscalingGceClient
+	migTargetSizesProvider       MigTargetSizesProvider
+	migInstanceTemplatesProvider MigInstanceTemplatesProvider
 
 	location              string
 	projectId             string
@@ -153,15 +155,18 @@ func CreateGceManager(configReader io.Reader, discoveryOpts cloudprovider.NodeGr
 	if err != nil {
 		return nil, err
 	}
+	cache := NewGceCache(gceService)
 	manager := &gceManagerImpl{
-		cache:                NewGceCache(gceService),
-		GceService:           gceService,
-		location:             location,
-		regional:             regional,
-		projectId:            projectId,
-		templates:            &GceTemplateBuilder{},
-		interrupt:            make(chan struct{}),
-		explicitlyConfigured: make(map[GceRef]bool),
+		cache:                        cache,
+		GceService:                   gceService,
+		migTargetSizesProvider:       NewCachingMigTargetSizesProvider(cache, gceService, projectId),
+		migInstanceTemplatesProvider: NewCachingMigInstanceTemplatesProvider(cache, gceService),
+		location:                     location,
+		regional:                     regional,
+		projectId:                    projectId,
+		templates:                    &GceTemplateBuilder{},
+		interrupt:                    make(chan struct{}),
+		explicitlyConfigured:         make(map[GceRef]bool),
 	}
 
 	if err := manager.fetchExplicitMigs(discoveryOpts.NodeGroupSpecs); err != nil {
@@ -206,26 +211,23 @@ func (m *gceManagerImpl) registerMig(mig Mig) bool {
 
 // GetMigSize gets MIG size.
 func (m *gceManagerImpl) GetMigSize(mig Mig) (int64, error) {
-	if migSize, found := m.cache.GetMigTargetSize(mig.GceRef()); found {
-		return migSize, nil
-	}
-	targetSize, err := m.GceService.FetchMigTargetSize(mig.GceRef())
-	if err != nil {
-		return -1, err
-	}
-	m.cache.SetMigTargetSize(mig.GceRef(), targetSize)
-	return targetSize, nil
+	return m.migTargetSizesProvider.GetMigTargetSize(mig.GceRef())
 }
 
 // SetMigSize sets MIG size.
 func (m *gceManagerImpl) SetMigSize(mig Mig, size int64) error {
 	klog.V(0).Infof("Setting mig size %s to %d", mig.Id(), size)
-	m.cache.InvalidateTargetSizeCacheForMig(mig.GceRef())
-	return m.GceService.ResizeMig(mig.GceRef(), size)
+	m.cache.InvalidateMigTargetSize(mig.GceRef())
+	err := m.GceService.ResizeMig(mig.GceRef(), size)
+	if err != nil {
+		return err
+	}
+	m.cache.SetMigTargetSize(mig.GceRef(), size)
+	return nil
 }
 
 // DeleteInstances deletes the given instances. All instances must be controlled by the same MIG.
-func (m *gceManagerImpl) DeleteInstances(instances []*GceRef) error {
+func (m *gceManagerImpl) DeleteInstances(instances []GceRef) error {
 	if len(instances) == 0 {
 		return nil
 	}
@@ -242,17 +244,17 @@ func (m *gceManagerImpl) DeleteInstances(instances []*GceRef) error {
 			return fmt.Errorf("cannot delete instances which don't belong to the same MIG.")
 		}
 	}
-	m.cache.InvalidateTargetSizeCacheForMig(commonMig.GceRef())
+	m.cache.InvalidateMigTargetSize(commonMig.GceRef())
 	return m.GceService.DeleteInstances(commonMig.GceRef(), instances)
 }
 
 // GetMigs returns list of registered MIGs.
-func (m *gceManagerImpl) GetMigs() []*MigInformation {
+func (m *gceManagerImpl) GetMigs() []Mig {
 	return m.cache.GetMigs()
 }
 
 // GetMigForInstance returns MIG to which the given instance belongs.
-func (m *gceManagerImpl) GetMigForInstance(instance *GceRef) (Mig, error) {
+func (m *gceManagerImpl) GetMigForInstance(instance GceRef) (Mig, error) {
 	return m.cache.GetMigForInstance(instance)
 }
 
@@ -263,7 +265,7 @@ func (m *gceManagerImpl) GetMigNodes(mig Mig) ([]cloudprovider.Instance, error) 
 
 // Refresh triggers refresh of cached resources.
 func (m *gceManagerImpl) Refresh() error {
-	m.cache.InvalidateTargetSizeCache()
+	m.cache.InvalidateAllMigTargetSizes()
 	if m.lastRefresh.Add(refreshInterval).After(time.Now()) {
 		return nil
 	}
@@ -372,8 +374,8 @@ func (m *gceManagerImpl) fetchAutoMigs() error {
 	}
 
 	for _, mig := range m.GetMigs() {
-		if !exists[mig.Config.GceRef()] && !m.explicitlyConfigured[mig.Config.GceRef()] {
-			m.cache.UnregisterMig(mig.Config)
+		if !exists[mig.GceRef()] && !m.explicitlyConfigured[mig.GceRef()] {
+			m.cache.UnregisterMig(mig)
 			changed = true
 		}
 	}
@@ -462,7 +464,8 @@ func (m *gceManagerImpl) findMigsInRegion(region string, name *regexp.Regexp) ([
 
 // GetMigTemplateNode constructs a node from GCE instance template of the given MIG.
 func (m *gceManagerImpl) GetMigTemplateNode(mig Mig) (*apiv1.Node, error) {
-	template, err := m.GceService.FetchMigTemplate(mig.GceRef())
+	template, err := m.migInstanceTemplatesProvider.GetMigInstanceTemplate(mig.GceRef())
+
 	if err != nil {
 		return nil, err
 	}

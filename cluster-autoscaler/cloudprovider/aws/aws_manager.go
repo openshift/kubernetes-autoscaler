@@ -41,8 +41,8 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/gpu"
 	"k8s.io/klog"
-	provider_aws "k8s.io/kubernetes/pkg/cloudprovider/providers/aws"
 	kubeletapis "k8s.io/kubernetes/pkg/kubelet/apis"
+	provider_aws "k8s.io/legacy-cloud-providers/aws"
 )
 
 const (
@@ -146,9 +146,14 @@ func newAWSSDKProvider(cfg *provider_aws.CloudConfig) *awsSDKProvider {
 func getRegion(cfg ...*aws.Config) string {
 	region, present := os.LookupEnv("AWS_REGION")
 	if !present {
-		svc := ec2metadata.New(session.New(), cfg...)
-		if r, err := svc.Region(); err == nil {
-			region = r
+		sess, err := session.NewSession()
+		if err != nil {
+			klog.Errorf("Error getting AWS session while retrieving region: %v", err)
+		} else {
+			svc := ec2metadata.New(sess, cfg...)
+			if r, err := svc.Region(); err == nil {
+				region = r
+			}
 		}
 	}
 	return region
@@ -182,8 +187,11 @@ func createAWSManagerInternal(
 
 	if autoScalingService == nil || ec2Service == nil {
 		awsSdkProvider := newAWSSDKProvider(cfg)
-		sess := session.New(aws.NewConfig().WithRegion(getRegion()).
+		sess, err := session.NewSession(aws.NewConfig().WithRegion(getRegion()).
 			WithEndpointResolver(getResolver(awsSdkProvider.cfg)))
+		if err != nil {
+			return nil, err
+		}
 
 		if autoScalingService == nil {
 			autoScalingService = &autoScalingWrapper{autoscaling.New(sess), map[string]string{}}
@@ -277,7 +285,11 @@ func (m *AwsManager) SetAsgSize(asg *asg, size int) error {
 
 // DeleteInstances deletes the given instances. All instances must be controlled by the same ASG.
 func (m *AwsManager) DeleteInstances(instances []*AwsInstanceRef) error {
-	return m.asgCache.DeleteInstances(instances)
+	if err := m.asgCache.DeleteInstances(instances); err != nil {
+		return err
+	}
+	klog.V(2).Infof("Some ASG instances might have been deleted, forcing ASG list refresh")
+	return m.forceRefresh()
 }
 
 // GetAsgNodes returns Asg nodes.
@@ -316,8 +328,15 @@ func (m *AwsManager) getAsgTemplate(asg *asg) (*asgTemplate, error) {
 func (m *AwsManager) buildInstanceType(asg *asg) (string, error) {
 	if asg.LaunchConfigurationName != "" {
 		return m.autoScalingService.getInstanceTypeByLCName(asg.LaunchConfigurationName)
-	} else if asg.LaunchTemplateName != "" && asg.LaunchTemplateVersion != "" {
-		return m.ec2Service.getInstanceTypeByLT(asg.LaunchTemplateName, asg.LaunchTemplateVersion)
+	} else if asg.LaunchTemplate != nil {
+		return m.ec2Service.getInstanceTypeByLT(asg.LaunchTemplate)
+	} else if asg.MixedInstancesPolicy != nil {
+		// always use first instance
+		if len(asg.MixedInstancesPolicy.instanceTypesOverrides) != 0 {
+			return asg.MixedInstancesPolicy.instanceTypesOverrides[0], nil
+		}
+
+		return m.ec2Service.getInstanceTypeByLT(asg.MixedInstancesPolicy.launchTemplate)
 	}
 
 	return "", errors.New("Unable to get instance type from launch config or launch template")

@@ -22,6 +22,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/watch"
 	clientset "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/client/clientset/versioned"
+	autoscalingv1 "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/client/clientset/versioned/typed/autoscaling.k8s.io/v1"
+	fakeautoscalingv1 "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/client/clientset/versioned/typed/autoscaling.k8s.io/v1/fake"
 	autoscalingv1beta1 "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/client/clientset/versioned/typed/autoscaling.k8s.io/v1beta1"
 	fakeautoscalingv1beta1 "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/client/clientset/versioned/typed/autoscaling.k8s.io/v1beta1/fake"
 	autoscalingv1beta2 "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/client/clientset/versioned/typed/autoscaling.k8s.io/v1beta2"
@@ -75,6 +77,11 @@ func (c *Clientset) Discovery() discovery.DiscoveryInterface {
 
 var _ clientset.Interface = &Clientset{}
 
+// AutoscalingV1 retrieves the AutoscalingV1Client
+func (c *Clientset) AutoscalingV1() autoscalingv1.AutoscalingV1Interface {
+	return &fakeautoscalingv1.FakeAutoscalingV1{Fake: &c.Fake}
+}
+
 // AutoscalingV1beta2 retrieves the AutoscalingV1beta2Client
 func (c *Clientset) AutoscalingV1beta2() autoscalingv1beta2.AutoscalingV1beta2Interface {
 	return &fakeautoscalingv1beta2.FakeAutoscalingV1beta2{Fake: &c.Fake}
@@ -85,17 +92,7 @@ func (c *Clientset) AutoscalingV1beta1() autoscalingv1beta1.AutoscalingV1beta1In
 	return &fakeautoscalingv1beta1.FakeAutoscalingV1beta1{Fake: &c.Fake}
 }
 
-// Autoscaling retrieves the AutoscalingV1beta1Client
-func (c *Clientset) Autoscaling() autoscalingv1beta1.AutoscalingV1beta1Interface {
-	return &fakeautoscalingv1beta1.FakeAutoscalingV1beta1{Fake: &c.Fake}
-}
-
 // PocV1alpha1 retrieves the PocV1alpha1Client
 func (c *Clientset) PocV1alpha1() pocv1alpha1.PocV1alpha1Interface {
-	return &fakepocv1alpha1.FakePocV1alpha1{Fake: &c.Fake}
-}
-
-// Poc retrieves the PocV1alpha1Client
-func (c *Clientset) Poc() pocv1alpha1.PocV1alpha1Interface {
 	return &fakepocv1alpha1.FakePocV1alpha1{Fake: &c.Fake}
 }

@@ -2,27 +2,32 @@
 
 ## Contents
 - [Intro](#intro)
-- [Installation](#intallation)
+- [Installation](#installation)
   - [Prerequisites](#prerequisites)
   - [Install command](#install-command)
   - [Quick start](#quick-start)
   - [Test your installation](#test-your-installation)
   - [Example VPA configuration](#example-vpa-configuration)
   - [Troubleshooting](#troubleshooting)
-  - [Components of VPA](#component-of-vpa)
+  - [Components of VPA](#components-of-vpa)
   - [Tear down](#tear-down)
-- [Known limitations](#known-limitation)
+- [Known limitations](#known-limitations)
   - [Limitations of beta version](#limitations-of-beta-version)
+- [Related Links](#related-links)
 
 # Intro
 
 Vertical Pod Autoscaler (VPA) frees the users from necessity of setting
-up-to-date resource requests for the containers in their pods.
-When configured, it will set the requests automatically based on usage and
-thus allow proper scheduling onto nodes so that appropriate resource amount is
-available for each pod.
+up-to-date resource limits and requests for the containers in their pods. When
+configured, it will set the requests automatically based on usage and thus
+allow proper scheduling onto nodes so that appropriate resource amount is
+available for each pod. It will also maintain ratios between limits and
+requests that were specified in initial containers configuration.
 
-It can both down-scale pods that are over-requesting resources, and also up-scale pods that are under-requesting resources based on their usage over time.
+It can both down-scale pods that are over-requesting resources, and also
+up-scale pods that are under-requesting resources based on their usage over
+time.
+
 
 Autoscaling is configured with a
 [Custom Resource Definition object](https://kubernetes.io/docs/concepts/api-extension/custom-resources/)
@@ -35,106 +40,21 @@ procedure described below.
 
 # Installation
 
-The current default version is Vertical Pod Autoscaler 0.4.0
+The current default version is Vertical Pod Autoscaler 0.5.0
 
-**NOTE:** version 0.4 requires at least Kubernetes 1.11 to work (needs certain
+**NOTE:** since version 0.4 VPA requires at least Kubernetes 1.11 to work (needs certain
 Custom Resource Definition capabilities). With older Kubernetes versions we
-suggest using the [latest 0.3 version](https://github.com/kubernetes/autoscaler/blob/vpa-release-0.3/vertical-pod-autoscaler/README.md) 
+suggest using the [latest 0.3 version](https://github.com/kubernetes/autoscaler/blob/vpa-release-0.3/vertical-pod-autoscaler/README.md).
 
-### Notice on switching to v1beta2 version (0.3.X to >=0.4.0)
+### Notice on removal of v1beta1 version (>=0.5.0)
 
-In 0.4.0 we introduced a new version of the API - `autoscaling.k8s.io/v1beta2`.
-Full API is accessible [here](https://github.com/kubernetes/autoscaler/blob/master/vertical-pod-autoscaler/pkg/apis/autoscaling.k8s.io/v1beta2/types.go).
+**NOTE:** In 0.5.0 we disabled the old version of the API - `autoscaling.k8s.io/v1beta1`.
+The VPA objects in this version will no longer receive recommendations and
+existing recommendations will be removed. The objects will remain present though
+and a ConfigUnsupported condition will be set on them.
 
-The change introduced is in the way you express which pods should be scaled by a
-given Vertical Pod Autoscaler. In short we are moving from label selectors to
-controller references. This change is introduced due to two main reasons:
-* Use of selectors is prone to misconfigurations - e.g. VPA objects targeting
-all pods, overlapping VPA objects
-* This change aligns VPA with [Horizontal Pod Autoscaler
-  API](https://github.com/kubernetes/api/blob/master/autoscaling/v1/types.go)
+This doc is for installing latest VPA. For instructions on migration from older versions see Migration Doc [Migration Doc](https://github.com/kubernetes/autoscaler/blob/master/vertical-pod-autoscaler/MIGRATE.md)
 
-Let's see an example ilustrating the change:
-
-**[DEPRECATED]** In `v1beta1` pods to scale by VPA are specified by a
-[kubernetes label selector](https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#label-selectors).
-
-```yaml
-apiVersion: "autoscaling.k8s.io/v1beta1"
-kind: VerticalPodAutoscaler
-metadata:
-  name: hamster-vpa-deprecated
-spec:
-  selector: # selector is the deprecated way
-    matchLabels:
-      app: hamster
-```
-
-**[RECOMMENDED]** In `v1beta2` pods to scale by VPA are specified by a
-target reference. This target will usually be a Deployment, as configured in the
-example below.
-
-```yaml
-apiVersion: "autoscaling.k8s.io/v1beta2"
-kind: VerticalPodAutoscaler
-metadata:
-  name: hamster-vpa
-spec:
-  targetRef:
-    apiVersion: "extensions/v1beta1"
-    kind:       Deployment
-    name:       hamster
-```
-
-The target object can be a well known controller (Deployment, ReplicaSet, DaemonSet, StatefulSet etc.)
-or any object that implements the scale subresource. VPA uses ScaleStatus to
-retrieve the pod set controlled by this object.
-If VerticalPodAutoscaler cannot use specified target it will report
-ConfigUnsupported condition.
-
-Note that VerticalPodAutoscaler does not require full implementation
-of scale subresource - it will not use it to modify the replica count.
-The only thing retrieved is a label selector matching pods grouped by this controller.
-
-See complete examples:
-* [v1beta2](./examples/hamster.yaml)
-* [v1beta1](./examples/hamster-deprecated.yaml)
-
-You can perform a 0.3 to 0.4 upgrade without losing your VPA objects.
-The recommended way is as follows:
-
-1. Run `./hack/vpa-apply-upgrade.sh` - this will restart your VPA installation with
-a new version, add the new API and keep all your VPA objects.
-1. Your `v1beta1` objects will be marked as deprecated but still work
-1. Switch your VPA definition to
-`apiVersion: "autoscaling.k8s.io/v1beta2"`
-1. Modify the VPA spec to:
-```yaml
-spec:
-  # Note the empty selector field - this is needed to remove previously defined selector
-  selector:
-  targetRef:
-    apiVersion: "extensions/v1beta1"
-    kind:       "Deployment"
-    name:       "<deployment_name>" # This matches the deployment name
-```
-5. Kubectl apply -f the above
-
-You can also first try the new API in the `"Off"` mode.
-
-### Notice on switching from alpha to beta (<0.3.0 to 0.4.0+)
-
-**NOTE:** We highly recommend switching to the 0.4.X version. However,
-for instructions on switching to 0.3.X see the [0.3 version README](https://github.com/kubernetes/autoscaler/blob/vpa-release-0.3/vertical-pod-autoscaler/README.md)
-
-Between versions 0.2.x and 0.4.x there is an alpha to beta switch which includes
-a change of VPA apiVersion. The safest way to switch is to use `vpa-down.sh`
-script to tear down the old installation of VPA first. This will delete your old
-VPA objects that have been defined with `poc.autoscaling.k8s.io/v1alpha1`
-apiVersion. Then use `vpa-up.sh` to bring up the new version of VPA and create
-your VPA objects from the scratch, passing apiVersion
-`autoscaling.k8s.io/v1beta2` and switching from selector to targetRef, as
-described in the prevous section.
 
 ### Prerequisites
 
@@ -296,6 +216,42 @@ kubectl delete clusterrolebinding myname-cluster-admin-binding
 ./hack/vpa-down.sh
 ```
 
+# Limits control
+
+When setting limits VPA will conform to
+[resource policies](https://github.com/kubernetes/autoscaler/blob/master/vertical-pod-autoscaler/pkg/apis/autoscaling.k8s.io/v1beta2/types.go#L82).
+It will maintain limit to request ratio specified for all containers.
+
+VPA will try to cap recommendations between min and max of
+[limit ranges](https://kubernetes.io/docs/concepts/policy/limit-range/). If limit range conflicts
+and VPA resource policy conflict then VPA will follow VPA policy (and set values outside limit
+range).
+
+## Examples
+
+### Keeping limit proportional to request
+
+Container template specifies resource request for 500 milli CPU and 1 GB of RAM. The template also
+specifies resource limit of 2 GB RAM. VPA recommendation is 1000 milli CPU and 2 GB of RAM. When VPA
+applies the recommendation it will also set memory limit to 4 GB.
+
+### Capping to Limit Range
+
+Container template specifies resource request for 500 milli CPU and 1 GB of RAM. The template also
+specifies resource limit of 2 GB RAM. A limit range sets maximum limit to 3 GB RAM per container.
+VPA recommendation is 1000 milli CPU and 2 GB of RAM. When VPA applies the recommendation it will
+set memory limit to 3 GB (to keep it within the allowed limit range) and memory request to 1.5 GB (
+to maintain 2:1 limit/request ratio from the template).
+
+### Resource Policy Overriding Limit Range
+
+Container template specifies resource request for 500 milli CPU and 1 GB of RAM. The template also
+specifies resource limit of 2 GB RAM. A limit range sets maximum limit to 3 GB RAM per container.
+VPAs Container Resource Policy requires VPA to set containers request to at least 750 milli CPU and
+2 GB RAM. VPA recommendation is 1000 milli CPU and 2 GB of RAM. When applying the recommendation
+VPA will set RAM request to 2 GB (following the resource policy) and RAM limit to 4 GB (to maintain
+2:1 limit/request ratio from the template).
+
 # Known limitations
 
 ## Limitations of beta version
@@ -316,9 +272,6 @@ kubectl delete clusterrolebinding myname-cluster-admin-binding
   size, available quota) and cause **pods to go pending**. This can be partly 
   addressed by using VPA together with [Cluster Autoscaler](https://github.com/kubernetes/autoscaler/blob/master/cluster-autoscaler/FAQ.md#basics).
 * Multiple VPA resources matching the same pod have undefined behavior.
-* VPA does not change resource limits. This implies that recommendations are
-  capped to limits during actuation.
-  **NOTE** This behaviour is likely to change so please don't rely on it.
 
 # Related links
 
