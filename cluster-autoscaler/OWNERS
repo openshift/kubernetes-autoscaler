@@ -1,10 +1,14 @@
-approvers:
-- aleksandra-malinowska
-- losipiuk
-- vivekbagade
-reviewers:
-- feiskyer
-- aleksandra-malinowska
-- losipiuk
-- Jeffwan
+# See the OWNERS docs: https://git.k8s.io/community/contributors/guide/owners.md
 
+approvers:
+- enxebre
+- frobware
+- elmiko
+- alexander-demichev
+- JoelSpeed
+reviewers:
+- enxebre
+- frobware
+- elmiko
+- alexander-demichev
+- JoelSpeed
