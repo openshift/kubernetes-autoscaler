@@ -20,16 +20,28 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
 
-	"github.com/golang/mock/gomock"
+	autoscalingv1 "k8s.io/api/autoscaling/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
-	vpa_types "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/apis/autoscaling.k8s.io/v1beta2"
+	vpa_types "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/apis/autoscaling.k8s.io/v1"
+	controllerfetcher "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/recommender/input/controller_fetcher"
+	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/recommender/input/spec"
 	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/recommender/model"
 	target_mock "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/target/mock"
 	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/test"
 )
+
+type fakeControllerFetcher struct {
+	key *controllerfetcher.ControllerKeyWithAPIVersion
+	err error
+}
+
+func (f *fakeControllerFetcher) FindTopLevel(controller *controllerfetcher.ControllerKeyWithAPIVersion) (*controllerfetcher.ControllerKeyWithAPIVersion, error) {
+	return f.key, f.err
+}
 
 func parseLabelSelector(selector string) labels.Selector {
 	labelSelector, _ := metav1.ParseToLabelSelector(selector)
@@ -42,14 +54,28 @@ var (
 	unsupportedConditionTextFromFetcher   = "Cannot read targetRef. Reason: targetRef not defined"
 	unsupportedConditionNoExtraText       = "Cannot read targetRef"
 	unsupportedConditionBothDefined       = "Both targetRef and label selector defined. Please remove label selector"
+	unsupportedConditionNoTargetRef       = "Cannot read targetRef"
+	unsupportedConditionMudaMudaMuda      = "Error checking if target is a top level controller: muda muda muda"
+	unsupportedTargetRefHasParent         = "The targetRef controller has a parent but it should point to a top-level controller"
 )
 
-func TestLegacySelector(t *testing.T) {
+const (
+	kind       = "dodokind"
+	name1      = "dotaro"
+	name2      = "doseph"
+	namespace  = "testNamespace"
+	apiVersion = "stardust"
+)
+
+func TestLoadPods(t *testing.T) {
 
 	type testCase struct {
-		legacySelector            labels.Selector
+		name                      string
 		selector                  labels.Selector
 		fetchSelectorError        error
+		targetRef                 *autoscalingv1.CrossVersionObjectReference
+		topLevelKey               *controllerfetcher.ControllerKeyWithAPIVersion
+		findTopLevelError         error
 		expectedSelector          labels.Selector
 		expectedConfigUnsupported *string
 		expectedConfigDeprecated  *string
@@ -57,7 +83,7 @@ func TestLegacySelector(t *testing.T) {
 
 	testCases := []testCase{
 		{
-			legacySelector:            nil,
+			name:                      "no selector",
 			selector:                  nil,
 			fetchSelectorError:        fmt.Errorf("targetRef not defined"),
 			expectedSelector:          labels.Nothing(),
@@ -65,7 +91,7 @@ func TestLegacySelector(t *testing.T) {
 			expectedConfigDeprecated:  nil,
 		},
 		{
-			legacySelector:            nil,
+			name:                      "also no selector but no error",
 			selector:                  nil,
 			fetchSelectorError:        nil,
 			expectedSelector:          labels.Nothing(),
@@ -73,56 +99,125 @@ func TestLegacySelector(t *testing.T) {
 			expectedConfigDeprecated:  nil,
 		},
 		{
-			legacySelector:            parseLabelSelector("app = test"),
-			selector:                  nil,
-			fetchSelectorError:        fmt.Errorf("targetRef not defined"),
-			expectedSelector:          labels.Nothing(),
-			expectedConfigUnsupported: &unsupportedConditionNoLongerSupported,
-			expectedConfigDeprecated:  nil,
-		}, {
-			// the only valid option since v1beta1 removal
-			legacySelector:            nil,
-			selector:                  parseLabelSelector("app = test"),
-			fetchSelectorError:        nil,
+			name:               "targetRef selector",
+			selector:           parseLabelSelector("app = test"),
+			fetchSelectorError: nil,
+			targetRef: &autoscalingv1.CrossVersionObjectReference{
+				Kind:       kind,
+				Name:       name1,
+				APIVersion: apiVersion,
+			},
+			topLevelKey: &controllerfetcher.ControllerKeyWithAPIVersion{
+				ControllerKey: controllerfetcher.ControllerKey{
+					Kind:      kind,
+					Name:      name1,
+					Namespace: namespace,
+				},
+				ApiVersion: apiVersion,
+			},
 			expectedSelector:          parseLabelSelector("app = test"),
 			expectedConfigUnsupported: nil,
 			expectedConfigDeprecated:  nil,
-		}, {
-			legacySelector:            parseLabelSelector("app = test1"),
-			selector:                  parseLabelSelector("app = test2"),
+		},
+		{
+			name:                      "no targetRef",
+			selector:                  parseLabelSelector("app = test"),
 			fetchSelectorError:        nil,
 			expectedSelector:          labels.Nothing(),
-			expectedConfigUnsupported: &unsupportedConditionBothDefined,
+			expectedConfigUnsupported: nil,
 			expectedConfigDeprecated:  nil,
+		},
+		{
+			name:               "can't decide if top-level-ref",
+			selector:           nil,
+			fetchSelectorError: nil,
+			expectedSelector:   labels.Nothing(),
+			targetRef: &autoscalingv1.CrossVersionObjectReference{
+				Kind:       kind,
+				Name:       name1,
+				APIVersion: apiVersion,
+			},
+			expectedConfigUnsupported: &unsupportedConditionNoTargetRef,
+		},
+		{
+			name:               "non-top-level targetRef",
+			selector:           parseLabelSelector("app = test"),
+			fetchSelectorError: nil,
+			expectedSelector:   labels.Nothing(),
+			targetRef: &autoscalingv1.CrossVersionObjectReference{
+				Kind:       kind,
+				Name:       name1,
+				APIVersion: apiVersion,
+			},
+			topLevelKey: &controllerfetcher.ControllerKeyWithAPIVersion{
+				ControllerKey: controllerfetcher.ControllerKey{
+					Kind:      kind,
+					Name:      name2,
+					Namespace: namespace,
+				},
+				ApiVersion: apiVersion,
+			},
+			expectedConfigUnsupported: &unsupportedTargetRefHasParent,
+		},
+		{
+			name:               "error checking if top-level-ref",
+			selector:           parseLabelSelector("app = test"),
+			fetchSelectorError: nil,
+			expectedSelector:   labels.Nothing(),
+			targetRef: &autoscalingv1.CrossVersionObjectReference{
+				Kind:       "doestar",
+				Name:       "doseph-doestar",
+				APIVersion: "taxonomy",
+			},
+			expectedConfigUnsupported: &unsupportedConditionMudaMudaMuda,
+			findTopLevelError:         fmt.Errorf("muda muda muda"),
+		},
+		{
+			name:               "top-level target ref",
+			selector:           parseLabelSelector("app = test"),
+			fetchSelectorError: nil,
+			expectedSelector:   parseLabelSelector("app = test"),
+			targetRef: &autoscalingv1.CrossVersionObjectReference{
+				Kind:       kind,
+				Name:       name1,
+				APIVersion: apiVersion,
+			},
+			topLevelKey: &controllerfetcher.ControllerKeyWithAPIVersion{
+				ControllerKey: controllerfetcher.ControllerKey{
+					Kind:      kind,
+					Name:      name1,
+					Namespace: namespace,
+				},
+				ApiVersion: apiVersion,
+			},
+			expectedConfigUnsupported: nil,
 		},
 	}
 
-	for i, tc := range testCases {
+	for _, tc := range testCases {
 
-		t.Run(fmt.Sprintf("test case number: %d", i), func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			defer ctrl.Finish()
 
-			vpa := test.VerticalPodAutoscaler().WithName("testVpa").WithContainer("container").WithNamespace("testNamespace").Get()
+			vpa := test.VerticalPodAutoscaler().WithName("testVpa").WithContainer("container").WithNamespace("testNamespace").WithTargetRef(tc.targetRef).Get()
 			vpaLister := &test.VerticalPodAutoscalerListerMock{}
 			vpaLister.On("List").Return([]*vpa_types.VerticalPodAutoscaler{vpa}, nil)
 
-			legacyTargetSelectorFetcher := target_mock.NewMockVpaTargetSelectorFetcher(ctrl)
 			targetSelectorFetcher := target_mock.NewMockVpaTargetSelectorFetcher(ctrl)
 
 			clusterState := model.NewClusterState()
 
 			clusterStateFeeder := clusterStateFeeder{
-				vpaLister:             vpaLister,
-				clusterState:          clusterState,
-				legacySelectorFetcher: legacyTargetSelectorFetcher,
-				selectorFetcher:       targetSelectorFetcher,
+				vpaLister:       vpaLister,
+				clusterState:    clusterState,
+				selectorFetcher: targetSelectorFetcher,
+				controllerFetcher: &fakeControllerFetcher{
+					key: tc.topLevelKey,
+					err: tc.findTopLevelError,
+				},
 			}
 
-			// legacyTargetSelectorFetcher is called twice:
-			// - one time to determine ultimate selector
-			// - one time to check if object uses deprecated API
-			legacyTargetSelectorFetcher.EXPECT().Fetch(vpa).Times(2).Return(tc.legacySelector, nil)
 			targetSelectorFetcher.EXPECT().Fetch(vpa).Return(tc.selector, tc.fetchSelectorError)
 			clusterStateFeeder.LoadVPAs()
 
@@ -156,5 +251,102 @@ func TestLegacySelector(t *testing.T) {
 
 		})
 	}
+}
 
+type testSpecClient struct {
+	pods []*spec.BasicPodSpec
+}
+
+func (c *testSpecClient) GetPodSpecs() ([]*spec.BasicPodSpec, error) {
+	return c.pods, nil
+}
+
+func makeTestSpecClient(podLabels []map[string]string) spec.SpecClient {
+	pods := make([]*spec.BasicPodSpec, len(podLabels))
+	for i, l := range podLabels {
+		pods[i] = &spec.BasicPodSpec{
+			ID:        model.PodID{Namespace: "default", PodName: fmt.Sprintf("pod-%d", i)},
+			PodLabels: l,
+		}
+	}
+	return &testSpecClient{
+		pods: pods,
+	}
+}
+
+func TestClusterStateFeeder_LoadPods(t *testing.T) {
+	for _, tc := range []struct {
+		Name              string
+		VPALabelSelectors []string
+		PodLabels         []map[string]string
+		TrackedPods       int
+	}{
+		{
+			Name:              "simple",
+			VPALabelSelectors: []string{"name=vpa-pod"},
+			PodLabels: []map[string]string{
+				{"name": "vpa-pod"},
+				{"type": "stateful"},
+			},
+			TrackedPods: 1,
+		},
+		{
+			Name:              "multiple",
+			VPALabelSelectors: []string{"name=vpa-pod,type=stateful"},
+			PodLabels: []map[string]string{
+				{"name": "vpa-pod", "type": "stateful"},
+				{"type": "stateful"},
+				{"name": "vpa-pod"},
+			},
+			TrackedPods: 1,
+		},
+		{
+			Name:              "no matches",
+			VPALabelSelectors: []string{"name=vpa-pod"},
+			PodLabels: []map[string]string{
+				{"name": "non-vpa-pod", "type": "stateful"},
+			},
+			TrackedPods: 0,
+		},
+		{
+			Name:              "set based",
+			VPALabelSelectors: []string{"environment in (staging, qa),name=vpa-pod"},
+			PodLabels: []map[string]string{
+				{"name": "vpa-pod", "environment": "staging"},
+				{"name": "vpa-pod", "environment": "production"},
+				{"name": "non-vpa-pod", "environment": "staging"},
+				{"name": "non-vpa-pod", "environment": "production"},
+			},
+			TrackedPods: 1,
+		},
+	} {
+		t.Run(tc.Name, func(t *testing.T) {
+			clusterState := model.NewClusterState()
+			for i, selector := range tc.VPALabelSelectors {
+				vpaLabel, err := labels.Parse(selector)
+				assert.NoError(t, err)
+				clusterState.Vpas = map[model.VpaID]*model.Vpa{
+					{VpaName: fmt.Sprintf("test-vpa-%d", i), Namespace: "default"}: {PodSelector: vpaLabel},
+				}
+			}
+
+			feeder := clusterStateFeeder{
+				specClient:     makeTestSpecClient(tc.PodLabels),
+				memorySaveMode: true,
+				clusterState:   clusterState,
+			}
+
+			feeder.LoadPods()
+			assert.Len(t, feeder.clusterState.Pods, tc.TrackedPods, "number of pods is not %d", tc.TrackedPods)
+
+			feeder = clusterStateFeeder{
+				specClient:     makeTestSpecClient(tc.PodLabels),
+				memorySaveMode: false,
+				clusterState:   clusterState,
+			}
+
+			feeder.LoadPods()
+			assert.Len(t, feeder.clusterState.Pods, len(tc.PodLabels), "number of pods is not %d", len(tc.PodLabels))
+		})
+	}
 }

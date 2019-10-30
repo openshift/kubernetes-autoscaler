@@ -19,7 +19,6 @@ package gce
 import (
 	"context"
 	"fmt"
-	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	"net/http"
 	"net/url"
 	"path"
@@ -27,12 +26,14 @@ import (
 	"strings"
 	"time"
 
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
+
 	gce "google.golang.org/api/compute/v1"
 	"k8s.io/klog"
 )
 
 const (
-	defaultOperationWaitTimeout  = 5 * time.Second
+	defaultOperationWaitTimeout  = 20 * time.Second
 	defaultOperationPollInterval = 100 * time.Millisecond
 
 	// ErrorCodeQuotaExceeded is error code used in InstanceErrorInfo if quota exceeded error occurs.
@@ -40,6 +41,9 @@ const (
 
 	// ErrorCodeStockout is error code used in InstanceErrorInfo if stockout occurs.
 	ErrorCodeStockout = "STOCKOUT"
+
+	// ErrorCodeOther is error code used in InstanceErrorInfo if other error occurs.
+	ErrorCodeOther = "OTHER"
 )
 
 // AutoscalingGceClient is used for communicating with GCE API.
@@ -47,6 +51,7 @@ type AutoscalingGceClient interface {
 	// reading resources
 	FetchMachineType(zone, machineType string) (*gce.MachineType, error)
 	FetchMachineTypes(zone string) ([]*gce.MachineType, error)
+	FetchAllMigs(zone string) ([]*gce.InstanceGroupManager, error)
 	FetchMigTargetSize(GceRef) (int64, error)
 	FetchMigBasename(GceRef) (string, error)
 	FetchMigInstances(GceRef) ([]cloudprovider.Instance, error)
@@ -56,7 +61,7 @@ type AutoscalingGceClient interface {
 
 	// modifying resources
 	ResizeMig(GceRef, int64) error
-	DeleteInstances(migRef GceRef, instances []*GceRef) error
+	DeleteInstances(migRef GceRef, instances []GceRef) error
 }
 
 type autoscalingGceClientV1 struct {
@@ -116,6 +121,22 @@ func (client *autoscalingGceClientV1) FetchMachineTypes(zone string) ([]*gce.Mac
 	return machines.Items, nil
 }
 
+func (client *autoscalingGceClientV1) FetchAllMigs(zone string) ([]*gce.InstanceGroupManager, error) {
+	registerRequest("instance_group_managers", "list")
+
+	var migs []*gce.InstanceGroupManager
+	err := client.gceService.InstanceGroupManagers.List(client.projectId, zone).Pages(
+		context.TODO(),
+		func(page *gce.InstanceGroupManagerList) error {
+			migs = append(migs, page.Items...)
+			return nil
+		})
+	if err != nil {
+		return nil, err
+	}
+	return migs, nil
+}
+
 func (client *autoscalingGceClientV1) FetchMigTargetSize(migRef GceRef) (int64, error) {
 	registerRequest("instance_group_managers", "get")
 	igm, err := client.gceService.InstanceGroupManagers.Get(migRef.Project, migRef.Zone, migRef.Name).Do()
@@ -159,12 +180,12 @@ func (client *autoscalingGceClientV1) waitForOp(operation *gce.Operation, projec
 	return fmt.Errorf("timeout while waiting for operation %s on %s to complete.", operation.Name, operation.TargetLink)
 }
 
-func (client *autoscalingGceClientV1) DeleteInstances(migRef GceRef, instances []*GceRef) error {
+func (client *autoscalingGceClientV1) DeleteInstances(migRef GceRef, instances []GceRef) error {
 	req := gce.InstanceGroupManagersDeleteInstancesRequest{
 		Instances: []string{},
 	}
 	for _, i := range instances {
-		req.Instances = append(req.Instances, GenerateInstanceUrl(*i))
+		req.Instances = append(req.Instances, GenerateInstanceUrl(i))
 	}
 	registerRequest("instance_group_managers", "delete_instances")
 	op, err := client.gceService.InstanceGroupManagers.DeleteInstances(migRef.Project, migRef.Zone, migRef.Name, &req).Do()
@@ -181,6 +202,7 @@ func (client *autoscalingGceClientV1) FetchMigInstances(migRef GceRef) ([]cloudp
 		return nil, err
 	}
 	infos := []cloudprovider.Instance{}
+	errorCodeCounts := make(map[string]int)
 	for _, gceInstance := range gceInstances.ManagedInstances {
 		ref, err := ParseInstanceUrlRef(gceInstance.Instance)
 		if err != nil {
@@ -206,6 +228,7 @@ func (client *autoscalingGceClientV1) FetchMigInstances(migRef GceRef) ([]cloudp
 			errorMessages := []string{}
 			errorFound := false
 			for _, instanceError := range getLastAttemptErrors(gceInstance) {
+				errorCodeCounts[instanceError.Code]++
 				if isStockoutErrorCode(instanceError.Code) {
 					errorInfo.ErrorClass = cloudprovider.OutOfResourcesErrorClass
 					errorInfo.ErrorCode = ErrorCodeStockout
@@ -214,6 +237,7 @@ func (client *autoscalingGceClientV1) FetchMigInstances(migRef GceRef) ([]cloudp
 					errorInfo.ErrorCode = ErrorCodeQuotaExceeded
 				} else if !errorFound {
 					errorInfo.ErrorClass = cloudprovider.OtherErrorClass
+					errorInfo.ErrorCode = ErrorCodeOther
 				}
 				errorFound = true
 
@@ -228,6 +252,9 @@ func (client *autoscalingGceClientV1) FetchMigInstances(migRef GceRef) ([]cloudp
 		}
 
 		infos = append(infos, instance)
+	}
+	if len(errorCodeCounts) > 0 {
+		klog.V(4).Infof("Spotted following instance creation error codes: %#v", errorCodeCounts)
 	}
 	return infos, nil
 }

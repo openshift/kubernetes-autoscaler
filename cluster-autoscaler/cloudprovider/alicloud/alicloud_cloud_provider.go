@@ -18,6 +18,7 @@ package alicloud
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	apiv1 "k8s.io/api/core/v1"
@@ -27,12 +28,20 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/config/dynamic"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/errors"
 	"k8s.io/klog"
-	"os"
 )
 
 const (
-	// ProviderName  is the cloud provider name for alicloud
-	ProviderName = "alicloud"
+	// GPULabel is the label added to nodes with GPU resource.
+	GPULabel = "aliyun.accelerator/nvidia_name"
+)
+
+var (
+	availableGPUTypes = map[string]struct{}{
+		"Tesla-P4": {},
+		"M40":      {},
+		"P100":     {},
+		"V100":     {},
+	}
 )
 
 type aliCloudProvider struct {
@@ -87,7 +96,17 @@ func (ali *aliCloudProvider) addAsg(asg *Asg) {
 }
 
 func (ali *aliCloudProvider) Name() string {
-	return ProviderName
+	return cloudprovider.AlicloudProviderName
+}
+
+// GPULabel returns the label added to nodes with GPU resource.
+func (ali *aliCloudProvider) GPULabel() string {
+	return GPULabel
+}
+
+// GetAvailableGPUTypes return all available GPU types cloud provider supports
+func (ali *aliCloudProvider) GetAvailableGPUTypes() map[string]struct{} {
+	return availableGPUTypes
 }
 
 func (ali *aliCloudProvider) NodeGroups() []cloudprovider.NodeGroup {

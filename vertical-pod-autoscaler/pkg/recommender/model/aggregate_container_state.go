@@ -40,8 +40,9 @@ import (
 	"math"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	vpa_types "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/apis/autoscaling.k8s.io/v1beta2"
+	vpa_types "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/apis/autoscaling.k8s.io/v1"
 	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/recommender/util"
 )
 
@@ -66,6 +67,15 @@ type ContainerStateAggregator interface {
 	// should be equal to some sample that was aggregated with AddSample()
 	// in the past.
 	SubtractSample(sample *ContainerUsageSample)
+	// GetLastRecommendation returns last recommendation calculated for this
+	// aggregator.
+	GetLastRecommendation() corev1.ResourceList
+	// NeedsRecommendation returns true if this aggregator should have
+	// a recommendation calculated.
+	NeedsRecommendation() bool
+	// GetUpdateMode returns the update mode of VPA controlling this aggregator,
+	// nil if aggregator is not autoscaled.
+	GetUpdateMode() *vpa_types.UpdateMode
 }
 
 // AggregateContainerState holds input signals aggregated from a set of containers.
@@ -80,9 +90,37 @@ type AggregateContainerState struct {
 	// each container should add one peak per memory aggregation interval (e.g. once every 24h).
 	AggregateMemoryPeaks util.Histogram
 	// Note: first/last sample timestamps as well as the sample count are based only on CPU samples.
-	FirstSampleStart  time.Time
-	LastSampleStart   time.Time
-	TotalSamplesCount int
+	FirstSampleStart   time.Time
+	LastSampleStart    time.Time
+	TotalSamplesCount  int
+	CreationTime       time.Time
+	LastRecommendation corev1.ResourceList
+	IsUnderVPA         bool
+	UpdateMode         *vpa_types.UpdateMode
+}
+
+// GetLastRecommendation returns last recorded recommendation.
+func (a *AggregateContainerState) GetLastRecommendation() corev1.ResourceList {
+	return a.LastRecommendation
+}
+
+// NeedsRecommendation returns true if the state should have recommendation calculated.
+func (a *AggregateContainerState) NeedsRecommendation() bool {
+	return a.IsUnderVPA
+}
+
+// GetUpdateMode returns the update mode of VPA controlling this aggregator,
+// nil if aggregator is not autoscaled.
+func (a *AggregateContainerState) GetUpdateMode() *vpa_types.UpdateMode {
+	return a.UpdateMode
+}
+
+// MarkNotAutoscaled registers that this container state is not contorled by
+// a VPA object.
+func (a *AggregateContainerState) MarkNotAutoscaled() {
+	a.IsUnderVPA = false
+	a.LastRecommendation = nil
+	a.UpdateMode = nil
 }
 
 // MergeContainerState merges two AggregateContainerStates.
@@ -104,6 +142,7 @@ func NewAggregateContainerState() *AggregateContainerState {
 	return &AggregateContainerState{
 		AggregateCPUUsage:    util.NewDecayingHistogram(CPUHistogramOptions, CPUHistogramDecayHalfLife),
 		AggregateMemoryPeaks: util.NewDecayingHistogram(MemoryHistogramOptions, MemoryHistogramDecayHalfLife),
+		CreationTime:         time.Now(),
 	}
 }
 
@@ -192,7 +231,14 @@ func (a *AggregateContainerState) LoadFromCheckpoint(checkpoint *vpa_types.Verti
 }
 
 func (a *AggregateContainerState) isExpired(now time.Time) bool {
-	return !a.LastSampleStart.IsZero() && now.Sub(a.LastSampleStart) >= MemoryAggregationWindowLength
+	if a.isEmpty() {
+		return now.Sub(a.CreationTime) >= MemoryAggregationWindowLength
+	}
+	return now.Sub(a.LastSampleStart) >= MemoryAggregationWindowLength
+}
+
+func (a *AggregateContainerState) isEmpty() bool {
+	return a.TotalSamplesCount == 0
 }
 
 // AggregateStateByContainerName takes a set of AggregateContainerStates and merge them
@@ -236,4 +282,22 @@ func (p *ContainerStateAggregatorProxy) AddSample(sample *ContainerUsageSample) 
 func (p *ContainerStateAggregatorProxy) SubtractSample(sample *ContainerUsageSample) {
 	aggregator := p.cluster.findOrCreateAggregateContainerState(p.containerID)
 	aggregator.SubtractSample(sample)
+}
+
+// GetLastRecommendation returns last recorded recommendation.
+func (p *ContainerStateAggregatorProxy) GetLastRecommendation() corev1.ResourceList {
+	aggregator := p.cluster.findOrCreateAggregateContainerState(p.containerID)
+	return aggregator.GetLastRecommendation()
+}
+
+// NeedsRecommendation returns true if the aggregator should have recommendation calculated.
+func (p *ContainerStateAggregatorProxy) NeedsRecommendation() bool {
+	aggregator := p.cluster.findOrCreateAggregateContainerState(p.containerID)
+	return aggregator.NeedsRecommendation()
+}
+
+// GetUpdateMode returns update mode of VPA controlling the aggregator.
+func (p *ContainerStateAggregatorProxy) GetUpdateMode() *vpa_types.UpdateMode {
+	aggregator := p.cluster.findOrCreateAggregateContainerState(p.containerID)
+	return aggregator.GetUpdateMode()
 }

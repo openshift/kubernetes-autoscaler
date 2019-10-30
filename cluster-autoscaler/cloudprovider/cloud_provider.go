@@ -17,12 +17,32 @@ limitations under the License.
 package cloudprovider
 
 import (
+	"fmt"
 	"time"
 
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/errors"
 	schedulernodeinfo "k8s.io/kubernetes/pkg/scheduler/nodeinfo"
+)
+
+const (
+	// AzureProviderName gets the provider name of azure
+	AzureProviderName = "azure"
+	// AlicloudProviderName gets the provider name of alicloud
+	AlicloudProviderName = "alicloud"
+	// AwsProviderName gets the provider name of aws
+	AwsProviderName = "aws"
+	// BaiducloudProviderName gets the provider name of baiducloud
+	BaiducloudProviderName = "baiducloud"
+	// DigitalOceanProviderName gets the provider name of digitalocean
+	DigitalOceanProviderName = "digitalocean"
+	// GceProviderName gets the provider name of gce
+	GceProviderName = "gce"
+	// MagnumProviderName gets the provider name of magnum
+	MagnumProviderName = "magnum"
+	// KubemarkProviderName gets the provider name of kubemark
+	KubemarkProviderName = "kubemark"
 )
 
 // CloudProvider contains configuration info and functions for interacting with
@@ -55,6 +75,12 @@ type CloudProvider interface {
 
 	// GetResourceLimiter returns struct containing limits (max, min) for resources (cores, memory etc.).
 	GetResourceLimiter() (*ResourceLimiter, error)
+
+	// GPULabel returns the label added to nodes with GPU resource.
+	GPULabel() string
+
+	// GetAvailableGPUTypes return all available GPU types cloud provider supports.
+	GetAvailableGPUTypes() map[string]struct{}
 
 	// Cleanup cleans up open resources before the cloud provider is destroyed, i.e. go routines etc.
 	Cleanup() error
@@ -193,6 +219,17 @@ const (
 	// OtherErrorClass means some non-specific error situation occurred
 	OtherErrorClass InstanceErrorClass = 99
 )
+
+func (c InstanceErrorClass) String() string {
+	switch c {
+	case OutOfResourcesErrorClass:
+		return "OutOfResource"
+	case OtherErrorClass:
+		return "Other"
+	default:
+		return fmt.Sprintf("%d", c)
+	}
+}
 
 // PricingModel contains information about the node price and how it changes in time.
 type PricingModel interface {

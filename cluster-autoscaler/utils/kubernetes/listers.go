@@ -185,10 +185,9 @@ func NewUnschedulablePodInNamespaceLister(kubeClient client.Interface, namespace
 	selector := fields.ParseSelectorOrDie("spec.nodeName==" + "" + ",status.phase!=" +
 		string(apiv1.PodSucceeded) + ",status.phase!=" + string(apiv1.PodFailed))
 	podListWatch := cache.NewListWatchFromClient(kubeClient.CoreV1().RESTClient(), "pods", namespace, selector)
-	store := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc})
+	store, reflector := cache.NewNamespaceKeyedIndexerAndReflector(podListWatch, &apiv1.Pod{}, time.Hour)
 	podLister := v1lister.NewPodLister(store)
-	podReflector := cache.NewReflector(podListWatch, &apiv1.Pod{}, store, time.Hour)
-	go podReflector.Run(stopchannel)
+	go reflector.Run(stopchannel)
 	return &UnschedulablePodLister{
 		podLister: podLister,
 	}
@@ -210,10 +209,9 @@ func NewScheduledPodLister(kubeClient client.Interface, stopchannel <-chan struc
 	selector := fields.ParseSelectorOrDie("spec.nodeName!=" + "" + ",status.phase!=" +
 		string(apiv1.PodSucceeded) + ",status.phase!=" + string(apiv1.PodFailed))
 	podListWatch := cache.NewListWatchFromClient(kubeClient.CoreV1().RESTClient(), "pods", apiv1.NamespaceAll, selector)
-	store := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc})
+	store, reflector := cache.NewNamespaceKeyedIndexerAndReflector(podListWatch, &apiv1.Pod{}, time.Hour)
 	podLister := v1lister.NewPodLister(store)
-	podReflector := cache.NewReflector(podListWatch, &apiv1.Pod{}, store, time.Hour)
-	go podReflector.Run(stopchannel)
+	go reflector.Run(stopchannel)
 
 	return &ScheduledPodLister{
 		podLister: podLister,
@@ -223,65 +221,61 @@ func NewScheduledPodLister(kubeClient client.Interface, stopchannel <-chan struc
 // NodeLister lists nodes.
 type NodeLister interface {
 	List() ([]*apiv1.Node, error)
+	Get(name string) (*apiv1.Node, error)
 }
 
-// ReadyNodeLister lists ready nodes.
-type ReadyNodeLister struct {
+// nodeLister implementation.
+type nodeListerImpl struct {
 	nodeLister v1lister.NodeLister
+	filter     func(*apiv1.Node) bool
 }
 
-// List returns ready nodes.
-func (readyNodeLister *ReadyNodeLister) List() ([]*apiv1.Node, error) {
-	nodes, err := readyNodeLister.nodeLister.List(labels.Everything())
-	if err != nil {
-		return []*apiv1.Node{}, err
-	}
-	readyNodes := make([]*apiv1.Node, 0, len(nodes))
-	for _, node := range nodes {
-		if IsNodeReadyAndSchedulable(node) {
-			readyNodes = append(readyNodes, node)
-		}
-	}
-	return readyNodes, nil
-}
-
-// NewReadyNodeLister builds a node lister.
+// NewReadyNodeLister builds a node lister that returns only ready nodes.
 func NewReadyNodeLister(kubeClient client.Interface, stopChannel <-chan struct{}) NodeLister {
+	return NewNodeLister(kubeClient, IsNodeReadyAndSchedulable, stopChannel)
+}
+
+// NewAllNodeLister builds a node lister that returns all nodes (ready and unready).
+func NewAllNodeLister(kubeClient client.Interface, stopChannel <-chan struct{}) NodeLister {
+	return NewNodeLister(kubeClient, nil, stopChannel)
+}
+
+// NewNodeLister builds a node lister.
+func NewNodeLister(kubeClient client.Interface, filter func(*apiv1.Node) bool, stopChannel <-chan struct{}) NodeLister {
 	listWatcher := cache.NewListWatchFromClient(kubeClient.CoreV1().RESTClient(), "nodes", apiv1.NamespaceAll, fields.Everything())
-	store := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc})
+	store, reflector := cache.NewNamespaceKeyedIndexerAndReflector(listWatcher, &apiv1.Node{}, time.Hour)
 	nodeLister := v1lister.NewNodeLister(store)
-	reflector := cache.NewReflector(listWatcher, &apiv1.Node{}, store, time.Hour)
 	go reflector.Run(stopChannel)
-	return &ReadyNodeLister{
+	return &nodeListerImpl{
 		nodeLister: nodeLister,
+		filter:     filter,
 	}
 }
 
-// AllNodeLister lists all nodes
-type AllNodeLister struct {
-	nodeLister v1lister.NodeLister
-}
-
-// List returns all nodes
-func (allNodeLister *AllNodeLister) List() ([]*apiv1.Node, error) {
-	nodes, err := allNodeLister.nodeLister.List(labels.Everything())
+// List returns list of nodes.
+func (l *nodeListerImpl) List() ([]*apiv1.Node, error) {
+	var nodes []*apiv1.Node
+	var err error
+	if l.filter != nil {
+		nodes, err = l.nodeLister.ListWithPredicate(l.filter)
+	} else {
+		nodes, err = l.nodeLister.List(labels.Everything())
+	}
 	if err != nil {
 		return []*apiv1.Node{}, err
 	}
-	allNodes := append(make([]*apiv1.Node, 0, len(nodes)), nodes...)
-	return allNodes, nil
+	results := make([]*apiv1.Node, 0, len(nodes))
+	results = append(results, nodes...)
+	return results, nil
 }
 
-// NewAllNodeLister builds a node lister that returns all nodes (ready and unready)
-func NewAllNodeLister(kubeClient client.Interface, stopchannel <-chan struct{}) NodeLister {
-	listWatcher := cache.NewListWatchFromClient(kubeClient.CoreV1().RESTClient(), "nodes", apiv1.NamespaceAll, fields.Everything())
-	store := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc})
-	nodeLister := v1lister.NewNodeLister(store)
-	reflector := cache.NewReflector(listWatcher, &apiv1.Node{}, store, time.Hour)
-	go reflector.Run(stopchannel)
-	return &AllNodeLister{
-		nodeLister: nodeLister,
+// Get returns the node with the given name.
+func (l *nodeListerImpl) Get(name string) (*apiv1.Node, error) {
+	node, err := l.nodeLister.Get(name)
+	if err != nil {
+		return nil, err
 	}
+	return node, nil
 }
 
 // PodDisruptionBudgetLister lists pod disruption budgets.
@@ -302,9 +296,8 @@ func (lister *PodDisruptionBudgetListerImpl) List() ([]*policyv1.PodDisruptionBu
 // NewPodDisruptionBudgetLister builds a pod disruption budget lister.
 func NewPodDisruptionBudgetLister(kubeClient client.Interface, stopchannel <-chan struct{}) PodDisruptionBudgetLister {
 	listWatcher := cache.NewListWatchFromClient(kubeClient.PolicyV1beta1().RESTClient(), "poddisruptionbudgets", apiv1.NamespaceAll, fields.Everything())
-	store := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc})
+	store, reflector := cache.NewNamespaceKeyedIndexerAndReflector(listWatcher, &policyv1.PodDisruptionBudget{}, time.Hour)
 	pdbLister := v1policylister.NewPodDisruptionBudgetLister(store)
-	reflector := cache.NewReflector(listWatcher, &policyv1.PodDisruptionBudget{}, store, time.Hour)
 	go reflector.Run(stopchannel)
 	return &PodDisruptionBudgetListerImpl{
 		pdbLister: pdbLister,
@@ -314,9 +307,8 @@ func NewPodDisruptionBudgetLister(kubeClient client.Interface, stopchannel <-cha
 // NewDaemonSetLister builds a daemonset lister.
 func NewDaemonSetLister(kubeClient client.Interface, stopchannel <-chan struct{}) v1appslister.DaemonSetLister {
 	listWatcher := cache.NewListWatchFromClient(kubeClient.AppsV1().RESTClient(), "daemonsets", apiv1.NamespaceAll, fields.Everything())
-	store := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc})
+	store, reflector := cache.NewNamespaceKeyedIndexerAndReflector(listWatcher, &appsv1.DaemonSet{}, time.Hour)
 	lister := v1appslister.NewDaemonSetLister(store)
-	reflector := cache.NewReflector(listWatcher, &appsv1.DaemonSet{}, store, time.Hour)
 	go reflector.Run(stopchannel)
 	return lister
 }
@@ -324,9 +316,8 @@ func NewDaemonSetLister(kubeClient client.Interface, stopchannel <-chan struct{}
 // NewReplicationControllerLister builds a replicationcontroller lister.
 func NewReplicationControllerLister(kubeClient client.Interface, stopchannel <-chan struct{}) v1lister.ReplicationControllerLister {
 	listWatcher := cache.NewListWatchFromClient(kubeClient.CoreV1().RESTClient(), "replicationcontrollers", apiv1.NamespaceAll, fields.Everything())
-	store := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc})
+	store, reflector := cache.NewNamespaceKeyedIndexerAndReflector(listWatcher, &apiv1.ReplicationController{}, time.Hour)
 	lister := v1lister.NewReplicationControllerLister(store)
-	reflector := cache.NewReflector(listWatcher, &apiv1.ReplicationController{}, store, time.Hour)
 	go reflector.Run(stopchannel)
 	return lister
 }
@@ -334,9 +325,8 @@ func NewReplicationControllerLister(kubeClient client.Interface, stopchannel <-c
 // NewJobLister builds a job lister.
 func NewJobLister(kubeClient client.Interface, stopchannel <-chan struct{}) v1batchlister.JobLister {
 	listWatcher := cache.NewListWatchFromClient(kubeClient.BatchV1().RESTClient(), "jobs", apiv1.NamespaceAll, fields.Everything())
-	store := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc})
+	store, reflector := cache.NewNamespaceKeyedIndexerAndReflector(listWatcher, &batchv1.Job{}, time.Hour)
 	lister := v1batchlister.NewJobLister(store)
-	reflector := cache.NewReflector(listWatcher, &batchv1.Job{}, store, time.Hour)
 	go reflector.Run(stopchannel)
 	return lister
 }
@@ -344,9 +334,8 @@ func NewJobLister(kubeClient client.Interface, stopchannel <-chan struct{}) v1ba
 // NewReplicaSetLister builds a replicaset lister.
 func NewReplicaSetLister(kubeClient client.Interface, stopchannel <-chan struct{}) v1appslister.ReplicaSetLister {
 	listWatcher := cache.NewListWatchFromClient(kubeClient.AppsV1().RESTClient(), "replicasets", apiv1.NamespaceAll, fields.Everything())
-	store := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc})
+	store, reflector := cache.NewNamespaceKeyedIndexerAndReflector(listWatcher, &appsv1.ReplicaSet{}, time.Hour)
 	lister := v1appslister.NewReplicaSetLister(store)
-	reflector := cache.NewReflector(listWatcher, &appsv1.ReplicaSet{}, store, time.Hour)
 	go reflector.Run(stopchannel)
 	return lister
 }
@@ -354,9 +343,18 @@ func NewReplicaSetLister(kubeClient client.Interface, stopchannel <-chan struct{
 // NewStatefulSetLister builds a statefulset lister.
 func NewStatefulSetLister(kubeClient client.Interface, stopchannel <-chan struct{}) v1appslister.StatefulSetLister {
 	listWatcher := cache.NewListWatchFromClient(kubeClient.AppsV1().RESTClient(), "statefulsets", apiv1.NamespaceAll, fields.Everything())
-	store := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc})
+	store, reflector := cache.NewNamespaceKeyedIndexerAndReflector(listWatcher, &appsv1.StatefulSet{}, time.Hour)
 	lister := v1appslister.NewStatefulSetLister(store)
-	reflector := cache.NewReflector(listWatcher, &appsv1.StatefulSet{}, store, time.Hour)
+	go reflector.Run(stopchannel)
+	return lister
+}
+
+// NewConfigMapListerForNamespace builds a configmap lister for the passed namespace (including all).
+func NewConfigMapListerForNamespace(kubeClient client.Interface, stopchannel <-chan struct{},
+	namespace string) v1lister.ConfigMapLister {
+	listWatcher := cache.NewListWatchFromClient(kubeClient.CoreV1().RESTClient(), "configmaps", namespace, fields.Everything())
+	store, reflector := cache.NewNamespaceKeyedIndexerAndReflector(listWatcher, &apiv1.ConfigMap{}, time.Hour)
+	lister := v1lister.NewConfigMapLister(store)
 	go reflector.Run(stopchannel)
 	return lister
 }

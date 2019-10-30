@@ -20,18 +20,25 @@ import (
 	"io"
 	"os"
 
-	"k8s.io/klog"
-
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	"k8s.io/autoscaler/cluster-autoscaler/config"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/errors"
+	"k8s.io/klog"
 )
 
 const (
-	// ProviderName is the cloud provider name for Azure
-	ProviderName = "azure"
+	// GPULabel is the label added to nodes with GPU resource.
+	GPULabel = "cloud.google.com/gke-accelerator"
+)
+
+var (
+	availableGPUTypes = map[string]struct{}{
+		"nvidia-tesla-k80":  {},
+		"nvidia-tesla-p100": {},
+		"nvidia-tesla-v100": {},
+	}
 )
 
 // AzureCloudProvider provides implementation of CloudProvider interface for Azure.
@@ -61,6 +68,16 @@ func (azure *AzureCloudProvider) Name() string {
 	return "azure"
 }
 
+// GPULabel returns the label added to nodes with GPU resource.
+func (azure *AzureCloudProvider) GPULabel() string {
+	return GPULabel
+}
+
+// GetAvailableGPUTypes return all available GPU types cloud provider supports
+func (azure *AzureCloudProvider) GetAvailableGPUTypes() map[string]struct{} {
+	return availableGPUTypes
+}
+
 // NodeGroups returns all node groups configured for this cloud provider.
 func (azure *AzureCloudProvider) NodeGroups() []cloudprovider.NodeGroup {
 	asgs := azure.azureManager.getAsgs()
@@ -74,6 +91,10 @@ func (azure *AzureCloudProvider) NodeGroups() []cloudprovider.NodeGroup {
 
 // NodeGroupForNode returns the node group for the given node.
 func (azure *AzureCloudProvider) NodeGroupForNode(node *apiv1.Node) (cloudprovider.NodeGroup, error) {
+	if node.Spec.ProviderID == "" {
+		klog.V(6).Infof("Skipping to search for node group for the node '%s'. Because doesn't have spec.ProviderID.\n", node.ObjectMeta.Name)
+		return nil, nil
+	}
 	klog.V(6).Infof("Searching for node group for the node: %s\n", node.Spec.ProviderID)
 	ref := &azureRef{
 		Name: node.Spec.ProviderID,
@@ -118,6 +139,11 @@ type azureRef struct {
 // GetKey returns key of the given azure reference.
 func (m *azureRef) GetKey() string {
 	return m.Name
+}
+
+// String is represented by calling GetKey()
+func (m *azureRef) String() string {
+	return m.GetKey()
 }
 
 // BuildAzure builds Azure cloud provider, manager etc.

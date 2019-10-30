@@ -1,4 +1,4 @@
-// +build !gce,!aws,!azure,!kubemark,!alicloud,!openshiftmachineapi
+// +build !gce,!aws,!azure,!kubemark,!alicloud,!magnum,!digitalocean,!openshiftmachineapi
 
 /*
 Copyright 2018 The Kubernetes Authors.
@@ -24,40 +24,47 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/aws"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/azure"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/baiducloud"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/digitalocean"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
-	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gke"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/magnum"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/packet"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/openshiftmachineapi"
 	"k8s.io/autoscaler/cluster-autoscaler/config"
 )
 
 // AvailableCloudProviders supported by the cloud provider builder.
 var AvailableCloudProviders = []string{
-	aws.ProviderName,
-	azure.ProviderName,
-	gce.ProviderNameGCE,
-	gke.ProviderNameGKE,
-	alicloud.ProviderName,
-	baiducloud.ProviderName,
+	cloudprovider.AwsProviderName,
+	cloudprovider.AzureProviderName,
+	cloudprovider.GceProviderName,
+	cloudprovider.AlicloudProviderName,
+	cloudprovider.BaiducloudProviderName,
+	cloudprovider.MagnumProviderName,
+	cloudprovider.DigitalOceanProviderName,
 	openshiftmachineapi.ProviderName,
 }
 
 // DefaultCloudProvider is GCE.
-const DefaultCloudProvider = gce.ProviderNameGCE
+const DefaultCloudProvider = cloudprovider.GceProviderName
 
 func buildCloudProvider(opts config.AutoscalingOptions, do cloudprovider.NodeGroupDiscoveryOptions, rl *cloudprovider.ResourceLimiter) cloudprovider.CloudProvider {
 	switch opts.CloudProviderName {
-	case gce.ProviderNameGCE:
+	case cloudprovider.GceProviderName:
 		return gce.BuildGCE(opts, do, rl)
-	case gke.ProviderNameGKE:
-		return gke.BuildGKE(opts, do, rl)
-	case aws.ProviderName:
+	case cloudprovider.AwsProviderName:
 		return aws.BuildAWS(opts, do, rl)
-	case azure.ProviderName:
+	case cloudprovider.AzureProviderName:
 		return azure.BuildAzure(opts, do, rl)
-	case alicloud.ProviderName:
+	case cloudprovider.AlicloudProviderName:
 		return alicloud.BuildAlicloud(opts, do, rl)
-	case baiducloud.ProviderName:
+	case cloudprovider.BaiducloudProviderName:
 		return baiducloud.BuildBaiducloud(opts, do, rl)
+	case cloudprovider.DigitalOceanProviderName:
+		return digitalocean.BuildDigitalOcean(opts, do, rl)
+	case cloudprovider.MagnumProviderName:
+		return magnum.BuildMagnum(opts, do, rl)
+	case packet.ProviderName:
+		return packet.BuildPacket(opts, do, rl)
 	case openshiftmachineapi.ProviderName:
 		return openshiftmachineapi.BuildOpenShiftMachineAPI(opts, do, rl)
 	}

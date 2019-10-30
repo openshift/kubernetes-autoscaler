@@ -22,8 +22,14 @@ import (
 
 	apiv1 "k8s.io/api/core/v1"
 	labels "k8s.io/apimachinery/pkg/labels"
-	vpa_types "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/apis/autoscaling.k8s.io/v1beta2"
+	vpa_types "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/apis/autoscaling.k8s.io/v1"
+	vpa_utils "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/vpa"
 	"k8s.io/klog"
+)
+
+const (
+	// RecommendationMissingMaxDuration is maximum time that we accept the recommendation can be missing.
+	RecommendationMissingMaxDuration = 30 * time.Minute
 )
 
 // ClusterState holds all runtime information about the cluster required for the
@@ -36,6 +42,13 @@ type ClusterState struct {
 	Pods map[PodID]*PodState
 	// VPA objects in the cluster.
 	Vpas map[VpaID]*Vpa
+	// VPA objects in the cluster that have no recommendation mapped to the first
+	// time we've noticed the recommendation missing or last time we logged
+	// a warning about it.
+	EmptyVPAs map[VpaID]time.Time
+	// VpasWithMatchingPods contains information if there exist live pods that
+	// this VPAs selector matches.
+	VpasWithMatchingPods map[VpaID]bool
 	// Observed VPAs. Used to check if there are updates needed.
 	ObservedVpas []*vpa_types.VerticalPodAutoscaler
 
@@ -44,6 +57,11 @@ type ClusterState struct {
 	// Map with all label sets used by the aggregations. It serves as a cache
 	// that allows to quickly access labels.Set corresponding to a labelSetKey.
 	labelSetMap labelSetMap
+}
+
+// StateMapSize is the number of pods being tracked by the VPA
+func (cluster *ClusterState) StateMapSize() int {
+	return len(cluster.aggregateStateMap)
 }
 
 // AggregateStateKey determines the set of containers for which the usage samples
@@ -79,10 +97,12 @@ type PodState struct {
 // NewClusterState returns a new ClusterState with no pods.
 func NewClusterState() *ClusterState {
 	return &ClusterState{
-		Pods:              make(map[PodID]*PodState),
-		Vpas:              make(map[VpaID]*Vpa),
-		aggregateStateMap: make(aggregateContainerStatesMap),
-		labelSetMap:       make(labelSetMap),
+		Pods:                 make(map[PodID]*PodState),
+		Vpas:                 make(map[VpaID]*Vpa),
+		EmptyVPAs:            make(map[VpaID]time.Time),
+		VpasWithMatchingPods: make(map[VpaID]bool),
+		aggregateStateMap:    make(aggregateContainerStatesMap),
+		labelSetMap:          make(labelSetMap),
 	}
 }
 
@@ -216,7 +236,9 @@ func (cluster *ClusterState) AddOrUpdateVpa(apiObject *vpa_types.VerticalPodAuto
 		vpa = NewVpa(vpaID, selector, apiObject.CreationTimestamp.Time)
 		cluster.Vpas[vpaID] = vpa
 		for aggregationKey, aggregation := range cluster.aggregateStateMap {
-			vpa.UseAggregationIfMatching(aggregationKey, aggregation)
+			if vpa.UseAggregationIfMatching(aggregationKey, aggregation) {
+				cluster.VpasWithMatchingPods[vpa.ID] = true
+			}
 		}
 	}
 	vpa.TargetRef = apiObject.Spec.TargetRef
@@ -231,10 +253,16 @@ func (cluster *ClusterState) AddOrUpdateVpa(apiObject *vpa_types.VerticalPodAuto
 
 // DeleteVpa removes a VPA with the given ID from the ClusterState.
 func (cluster *ClusterState) DeleteVpa(vpaID VpaID) error {
-	if _, vpaExists := cluster.Vpas[vpaID]; !vpaExists {
+	vpa, vpaExists := cluster.Vpas[vpaID]
+	if !vpaExists {
 		return NewKeyError(vpaID)
 	}
+	for _, state := range vpa.aggregateContainerStates {
+		state.MarkNotAutoscaled()
+	}
 	delete(cluster.Vpas, vpaID)
+	delete(cluster.EmptyVPAs, vpaID)
+	delete(cluster.VpasWithMatchingPods, vpaID)
 	return nil
 }
 
@@ -285,20 +313,33 @@ func (cluster *ClusterState) findOrCreateAggregateContainerState(containerID Con
 		cluster.aggregateStateMap[aggregateStateKey] = aggregateContainerState
 		// Link the new aggregation to the existing VPAs.
 		for _, vpa := range cluster.Vpas {
-			vpa.UseAggregationIfMatching(aggregateStateKey, aggregateContainerState)
+			if vpa.UseAggregationIfMatching(aggregateStateKey, aggregateContainerState) {
+				cluster.VpasWithMatchingPods[vpa.ID] = true
+			}
 		}
 	}
 	return aggregateContainerState
 }
 
 // GarbageCollectAggregateCollectionStates removes obsolete AggregateCollectionStates from the ClusterState.
+// AggregateCollectionState is obsolete in following situations:
+// 1) It has no samples and there are no more active pods that can contribute,
+// 2) The last sample is too old to give meaningful recommendation (>8 days),
+// 3) There are no samples and the aggregate state was created >8 days ago.
 func (cluster *ClusterState) GarbageCollectAggregateCollectionStates(now time.Time) {
 	klog.V(1).Info("Garbage collection of AggregateCollectionStates triggered")
 	keysToDelete := make([]AggregateStateKey, 0)
+	activeKeys := cluster.getActiveAggregateStateKeys()
 	for key, aggregateContainerState := range cluster.aggregateStateMap {
+		isKeyActive := activeKeys[key]
+		if !isKeyActive && aggregateContainerState.isEmpty() {
+			keysToDelete = append(keysToDelete, key)
+			klog.V(1).Infof("Removing empty and inactive AggregateCollectionState for %+v", key)
+			continue
+		}
 		if aggregateContainerState.isExpired(now) {
 			keysToDelete = append(keysToDelete, key)
-			klog.V(1).Infof("Removing AggregateCollectionStates for %+v", key)
+			klog.V(1).Infof("Removing expired AggregateCollectionState for %+v", key)
 		}
 	}
 	for _, key := range keysToDelete {
@@ -307,6 +348,53 @@ func (cluster *ClusterState) GarbageCollectAggregateCollectionStates(now time.Ti
 			vpa.DeleteAggregation(key)
 		}
 	}
+}
+
+func (cluster *ClusterState) getActiveAggregateStateKeys() map[AggregateStateKey]bool {
+	activeKeys := map[AggregateStateKey]bool{}
+	for _, pod := range cluster.Pods {
+		// Pods that will not run anymore are considered inactive.
+		if pod.Phase == apiv1.PodSucceeded || pod.Phase == apiv1.PodFailed {
+			continue
+		}
+		for container := range pod.Containers {
+			activeKeys[cluster.MakeAggregateStateKey(pod, container)] = true
+		}
+	}
+	return activeKeys
+}
+
+// RecordRecommendation marks the state of recommendation in the cluster. We
+// keep track of empty recommendations and log information about them
+// periodically.
+func (cluster *ClusterState) RecordRecommendation(vpa *Vpa, now time.Time) error {
+	if vpa.Recommendation != nil && len(vpa.Recommendation.ContainerRecommendations) > 0 {
+		delete(cluster.EmptyVPAs, vpa.ID)
+		return nil
+	}
+	lastLogged, ok := cluster.EmptyVPAs[vpa.ID]
+	if !ok {
+		cluster.EmptyVPAs[vpa.ID] = now
+	} else {
+		if lastLogged.Add(RecommendationMissingMaxDuration).Before(now) {
+			cluster.EmptyVPAs[vpa.ID] = now
+			return fmt.Errorf("VPA %v/%v is missing recommendation for more than %v", vpa.ID.Namespace, vpa.ID.VpaName, RecommendationMissingMaxDuration)
+		}
+	}
+	return nil
+}
+
+// GetMatchingPods returns a list of currently active pods that match the
+// given VPA. Traverses through all pods in the cluster - use sparingly.
+func (cluster *ClusterState) GetMatchingPods(vpa *Vpa) []PodID {
+	matchingPods := []PodID{}
+	for podID, pod := range cluster.Pods {
+		if vpa_utils.PodLabelsMatchVPA(podID.Namespace, cluster.labelSetMap[pod.labelSetKey],
+			vpa.ID.Namespace, vpa.PodSelector) {
+			matchingPods = append(matchingPods, podID)
+		}
+	}
+	return matchingPods
 }
 
 // Implementation of the AggregateStateKey interface. It can be used as a map key.
@@ -331,5 +419,8 @@ func (k aggregateStateKey) ContainerName() string {
 
 // Labels returns the set of labels for the aggregateStateKey.
 func (k aggregateStateKey) Labels() labels.Labels {
+	if k.labelSetMap == nil {
+		return labels.Set{}
+	}
 	return (*k.labelSetMap)[k.labelSetKey]
 }

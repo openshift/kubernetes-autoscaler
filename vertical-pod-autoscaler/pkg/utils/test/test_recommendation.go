@@ -18,7 +18,7 @@ package test
 
 import (
 	apiv1 "k8s.io/api/core/v1"
-	vpa_types "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/apis/autoscaling.k8s.io/v1beta2"
+	vpa_types "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/apis/autoscaling.k8s.io/v1"
 )
 
 // RecommendationBuilder helps building test instances of RecommendedPodResources.
@@ -28,6 +28,7 @@ type RecommendationBuilder interface {
 	WithLowerBound(cpu, memory string) RecommendationBuilder
 	WithUpperBound(cpu, memory string) RecommendationBuilder
 	Get() *vpa_types.RecommendedPodResources
+	GetContainerResources() vpa_types.RecommendedContainerResources
 }
 
 // Recommendation returns a new RecommendationBuilder.
@@ -73,10 +74,21 @@ func (b *recommendationBuilder) Get() *vpa_types.RecommendedPodResources {
 	return &vpa_types.RecommendedPodResources{
 		ContainerRecommendations: []vpa_types.RecommendedContainerResources{
 			{
-				ContainerName: b.containerName,
-				Target:        b.target,
-				LowerBound:    b.lowerBound,
-				UpperBound:    b.upperBound,
+				ContainerName:  b.containerName,
+				Target:         b.target,
+				UncappedTarget: b.target,
+				LowerBound:     b.lowerBound,
+				UpperBound:     b.upperBound,
 			},
 		}}
+}
+
+func (b *recommendationBuilder) GetContainerResources() vpa_types.RecommendedContainerResources {
+	return vpa_types.RecommendedContainerResources{
+		ContainerName:  b.containerName,
+		Target:         b.target,
+		UncappedTarget: b.target,
+		LowerBound:     b.lowerBound,
+		UpperBound:     b.upperBound,
+	}
 }
