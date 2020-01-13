@@ -31,18 +31,19 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/baiducloud/baiducloud-sdk-go/bce"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/baiducloud/baiducloud-sdk-go/cce"
+	"k8s.io/autoscaler/cluster-autoscaler/utils/gpu"
 	"k8s.io/klog"
 )
 
 const (
 
-	// CceUserAgent is prefix of http header UserAgent
+	// CceUserAgent is a prefix of the http header UserAgent.
 	CceUserAgent = "cce-k8s:"
 
 	letterBytes = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
 )
 
-// BaiducloudManager is handles baiducloud communication and data caching.
+// BaiducloudManager handles baiducloud communication and data caching.
 type BaiducloudManager struct {
 	cloudConfig *CloudConfig
 	cceClient   *cce.Client
@@ -63,6 +64,7 @@ type asgTemplate struct {
 	CPU          int
 	Memory       int
 	GpuCount     int
+	Tags         map[string]string
 }
 
 // CreateBaiducloudManager constructs baiducloudManager object.
@@ -85,7 +87,7 @@ func CreateBaiducloudManager(configReader io.Reader) (*BaiducloudManager, error)
 
 	bceConfig := bce.NewConfig(bce.NewCredentials(cfg.AccessKeyID, cfg.SecretAccessKey))
 	bceConfig.Region = cfg.Region
-	bceConfig.Timeout = 10 * time.Second
+	bceConfig.Timeout = 20 * time.Second
 	bceConfig.Endpoint = cfg.Endpoint + "/internal-api"
 	bceConfig.UserAgent = CceUserAgent + cfg.ClusterID
 	cceClient := cce.NewClient(cce.NewConfig(bceConfig))
@@ -108,30 +110,53 @@ func CreateBaiducloudManager(configReader io.Reader) (*BaiducloudManager, error)
 	return manager, nil
 }
 
-// RegisterAsg registers asg in in Bce Manager
+// RegisterAsg registers asg in the BCE Manager.
 func (m *BaiducloudManager) RegisterAsg(asg *Asg) {
 	m.asgs.Register(asg)
 }
 
-// GetAsgForInstance returns AsgConfig of the given Instance
-func (m *BaiducloudManager) GetAsgForInstance(instance *BaiducloudRef) (*Asg, error) {
-	return m.asgs.FindForInstance(instance)
+// GetAsgForInstance returns AsgConfig.
+func (m *BaiducloudManager) GetAsgForInstance(instanceID string) (*Asg, error) {
+	return m.asgs.FindForInstance(instanceID)
 }
 
-// GetAsgSize gets asg size.
+// GetAsgSize gets asg's size.
 func (m *BaiducloudManager) GetAsgSize(asg *Asg) (int64, error) {
-	instanceList, err := m.cceClient.ListInstances(m.cloudConfig.ClusterID)
+	instanceList, err := m.cceClient.GetAsgNodes(asg.Name, m.cloudConfig.ClusterID)
 	if err != nil {
 		return -1, err
 	}
 	size := int64(0)
 	for _, instance := range instanceList {
+		klog.V(4).Infof("Group: %s instances status: %v \n", asg.Name, instance.Status)
 		if instance.Status == cce.InstanceStatusRunning || instance.Status == cce.InstanceStatusCreating || instance.Status == "" {
 			size++
 		}
 	}
-	klog.V(4).Infof("GetAsgSize: %d\n", size)
+	printNodeStatusCount(instanceList, asg.Name, size)
 	return size, nil
+}
+
+func printNodeStatusCount(instanceList []cce.CceInstance, asgName string, size int64) {
+	runningCount := 0
+	creatingCount := 0
+	deletingCount := 0
+	exception := 0
+	for _, instance := range instanceList {
+		switch instance.Status {
+		case "RUNNING":
+			runningCount++
+		case "CREATING":
+			creatingCount++
+		case "DELETING":
+			deletingCount++
+		default:
+			exception++
+			klog.V(4).Infof("EXCEPTION instance: %v, status: %v", instance.InstanceId, instance.Status)
+		}
+	}
+	klog.V(4).Infof("Group: %s TotalSize: %d, CA Size: %d ,instances RUNNING: %v, CREATING: %v, DELETING: %v, EXCEPTION: %v",
+		asgName, len(instanceList), size, runningCount, creatingCount, deletingCount, exception)
 }
 
 func randStringBytes(n int) string {
@@ -142,35 +167,15 @@ func randStringBytes(n int) string {
 	return string(b)
 }
 
-// ScaleUpCluster  Scale UP cluster
-func (m *BaiducloudManager) ScaleUpCluster(delta int) error {
-	var args *cce.ScaleUpClusterArgs
-	password := randStringBytes(4) + "123!T"
-	cceCluster, err := m.cceClient.DescribeCluster(m.cloudConfig.ClusterID)
-	if err != nil {
-		klog.Errorf("error while ScaleUpCluster since DescribeCluster failed.")
-		return fmt.Errorf("scaleUpCluster error: %v", err)
-	}
-	args = &cce.ScaleUpClusterArgs{
+// ScaleUpCluster scales up cluster.
+func (m *BaiducloudManager) ScaleUpCluster(delta int, groupID string) error {
+	var args *cce.ScaleUpClusterWithGroupIDArgs
+	args = &cce.ScaleUpClusterWithGroupIDArgs{
 		ClusterID: m.cloudConfig.ClusterID,
-		OrderContent: cce.OrderContent{
-			Items: []cce.OrderItem{
-				{
-					Config: cce.BccOrderConfig{
-						CPU:              cceCluster.NodeConfig.CPU,
-						Memory:           cceCluster.NodeConfig.Memory,
-						InstanceType:     cceCluster.NodeConfig.InstanceType,
-						DiskSize:         cceCluster.NodeConfig.DiskSize,
-						AdminPass:        password,
-						AdminPassConfirm: password,
-						ServiceType:      "BCC",
-						PurchaseNum:      delta,
-					},
-				},
-			},
-		},
+		Num:       delta,
+		GroupID:   groupID,
 	}
-	_, err = m.cceClient.ScaleUpCluster(args)
+	err := m.cceClient.ScaleUpClusterWithGroupID(args)
 	if err != nil {
 		return fmt.Errorf("[bce] ScaleUpCluster error: %v", err)
 	}
@@ -178,7 +183,7 @@ func (m *BaiducloudManager) ScaleUpCluster(delta int) error {
 	return nil
 }
 
-// ScaleDownCluster gets Scale Set size.
+// ScaleDownCluster decreases nodes belonging to cluster.
 func (m *BaiducloudManager) ScaleDownCluster(instances []string) error {
 	klog.V(4).Infof("scaleDownCluster: %v\n", instances)
 	if len(instances) == 0 {
@@ -201,7 +206,7 @@ func (m *BaiducloudManager) ScaleDownCluster(instances []string) error {
 // GetAsgNodes returns Asg nodes.
 func (m *BaiducloudManager) GetAsgNodes(asg *Asg) ([]string, error) {
 	result := make([]string, 0)
-	instanceList, err := m.cceClient.ListInstances(m.cloudConfig.ClusterID)
+	instanceList, err := m.cceClient.GetAsgNodes(asg.Name, m.cloudConfig.ClusterID)
 	if err != nil {
 		return []string{}, err
 	}
@@ -213,18 +218,24 @@ func (m *BaiducloudManager) GetAsgNodes(asg *Asg) ([]string, error) {
 }
 
 func (m *BaiducloudManager) getAsgTemplate(name string) (*asgTemplate, error) {
-	cceCluster, err := m.cceClient.DescribeCluster(m.cloudConfig.ClusterID)
+	cceGroup, err := m.cceClient.DescribeGroup(name, m.cloudConfig.ClusterID)
 	if err != nil {
 		klog.V(4).Infof("describeCluster err: %s\n", err)
 		return nil, err
 	}
 
+	tags := make(map[string]string)
+	for _, tag := range cceGroup.Tags {
+		tags[tag.Key] = tag.Value
+	}
+
 	return &asgTemplate{
-		InstanceType: cceCluster.NodeConfig.InstanceType,
+		InstanceType: cceGroup.InstanceType,
 		Region:       m.cloudConfig.Region,
-		CPU:          cceCluster.NodeConfig.CPU,
-		Memory:       cceCluster.NodeConfig.Memory,
-		GpuCount:     cceCluster.NodeConfig.GpuCount,
+		CPU:          cceGroup.CPU,
+		Memory:       cceGroup.Memory,
+		GpuCount:     cceGroup.GpuCount,
+		Tags:         tags,
 	}, nil
 }
 
@@ -242,8 +253,22 @@ func (m *BaiducloudManager) buildNodeFromTemplate(asg *Asg, template *asgTemplat
 	node.Status.Capacity[apiv1.ResourcePods] = *resource.NewQuantity(110, resource.DecimalSI)
 	node.Status.Capacity[apiv1.ResourceCPU] = *resource.NewQuantity(int64(template.CPU), resource.DecimalSI)
 	node.Status.Capacity[apiv1.ResourceMemory] = *resource.NewQuantity(int64(template.Memory*1024*1024*1024), resource.DecimalSI)
+
+	node.Labels = cloudprovider.JoinStringMaps(node.Labels, buildGenericLabels(template))
+
+	node.Status.Capacity[gpu.ResourceNvidiaGPU] = *resource.NewQuantity(int64(template.GpuCount), resource.DecimalSI)
+
 	node.Status.Allocatable = node.Status.Capacity
 
 	node.Status.Conditions = cloudprovider.BuildReadyConditions()
 	return &node, nil
+}
+
+func buildGenericLabels(template *asgTemplate) map[string]string {
+	result := make(map[string]string)
+	// append custom node labels
+	for key, value := range template.Tags {
+		result[key] = value
+	}
+	return result
 }

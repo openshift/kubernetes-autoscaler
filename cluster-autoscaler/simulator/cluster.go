@@ -22,18 +22,18 @@ import (
 	"math/rand"
 	"time"
 
-	"k8s.io/autoscaler/cluster-autoscaler/utils/drain"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/errors"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/glogx"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/gpu"
 	kube_util "k8s.io/autoscaler/cluster-autoscaler/utils/kubernetes"
+	pod_util "k8s.io/autoscaler/cluster-autoscaler/utils/pod"
 	scheduler_util "k8s.io/autoscaler/cluster-autoscaler/utils/scheduler"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/tpu"
-	"k8s.io/kubernetes/pkg/scheduler/algorithm/predicates"
 
 	apiv1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1beta1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/kubernetes/pkg/scheduler/algorithm/predicates"
 	schedulernodeinfo "k8s.io/kubernetes/pkg/scheduler/nodeinfo"
 
 	"k8s.io/klog"
@@ -201,11 +201,11 @@ func calculateUtilizationOfResource(node *apiv1.Node, nodeInfo *schedulernodeinf
 	podsRequest := resource.MustParse("0")
 	for _, pod := range nodeInfo.Pods() {
 		// factor daemonset pods out of the utilization calculations
-		if skipDaemonSetPods && isDaemonSet(pod) {
+		if skipDaemonSetPods && pod_util.IsDaemonSetPod(pod) {
 			continue
 		}
 		// factor mirror pods out of the utilization calculations
-		if skipMirrorPods && drain.IsMirrorPod(pod) {
+		if skipMirrorPods && pod_util.IsMirrorPod(pod) {
 			continue
 		}
 		for _, container := range pod.Spec.Containers {
@@ -233,7 +233,7 @@ func findPlaceFor(removedNode string, pods []*apiv1.Pod, nodes []*apiv1.Node, no
 
 	loggingQuota := glogx.PodsLoggingQuota()
 
-	tryNodeForPod := func(nodename string, pod *apiv1.Pod, predicateMeta predicates.PredicateMetadata) bool {
+	tryNodeForPod := func(nodename string, pod *apiv1.Pod, predicateMeta predicates.Metadata) bool {
 		nodeInfo, found := newNodeInfos[nodename]
 		if found {
 			if nodeInfo.Node() == nil {
@@ -317,13 +317,4 @@ func shuffleNodes(nodes []*apiv1.Node) []*apiv1.Node {
 		result[i], result[j] = result[j], result[i]
 	}
 	return result
-}
-
-func isDaemonSet(pod *apiv1.Pod) bool {
-	for _, ownerReference := range pod.ObjectMeta.OwnerReferences {
-		if ownerReference.Kind == "DaemonSet" {
-			return true
-		}
-	}
-	return false
 }

@@ -74,12 +74,13 @@ func selfRegistration(clientset *kubernetes.Clientset, caCert []byte, namespace 
 	} else {
 		RegisterClientConfig.URL = &url
 	}
+	sideEffects := v1beta1.SideEffectClassNone
 	RegisterClientConfig.CABundle = caCert
 	webhookConfig := &v1beta1.MutatingWebhookConfiguration{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: webhookConfigName,
 		},
-		Webhooks: []v1beta1.Webhook{
+		Webhooks: []v1beta1.MutatingWebhook{
 			{
 				Name: "vpa.k8s.io",
 				Rules: []v1beta1.RuleWithOperations{
@@ -101,6 +102,7 @@ func selfRegistration(clientset *kubernetes.Clientset, caCert []byte, namespace 
 					},
 				},
 				ClientConfig: RegisterClientConfig,
+				SideEffects:  &sideEffects,
 			},
 		},
 	}

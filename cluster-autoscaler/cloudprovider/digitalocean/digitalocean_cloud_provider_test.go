@@ -22,9 +22,9 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	apiv1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/digitalocean/godo"
 )
@@ -49,9 +49,7 @@ func testCloudProvider(t *testing.T, client *doClientMock) *digitaloceanCloudPro
 						{ID: "1", Status: &godo.KubernetesNodeStatus{State: "running"}},
 						{ID: "2", Status: &godo.KubernetesNodeStatus{State: "running"}},
 					},
-					Tags: []string{
-						"k8s-cluster-autoscaler-enabled:true",
-					},
+					AutoScale: true,
 				},
 				{
 					ID: "2",
@@ -59,9 +57,7 @@ func testCloudProvider(t *testing.T, client *doClientMock) *digitaloceanCloudPro
 						{ID: "3", Status: &godo.KubernetesNodeStatus{State: "deleting"}},
 						{ID: "4", Status: &godo.KubernetesNodeStatus{State: "running"}},
 					},
-					Tags: []string{
-						"k8s-cluster-autoscaler-enabled:true",
-					},
+					AutoScale: true,
 				},
 				{
 					ID: "3",
@@ -69,9 +65,7 @@ func testCloudProvider(t *testing.T, client *doClientMock) *digitaloceanCloudPro
 						{ID: "5", Status: &godo.KubernetesNodeStatus{State: "provisioning"}},
 						{ID: "6", Status: &godo.KubernetesNodeStatus{State: "running"}},
 					},
-					Tags: []string{
-						"k8s-cluster-autoscaler-enabled:true",
-					},
+					AutoScale: true,
 				},
 				{
 					ID: "4",
@@ -79,9 +73,7 @@ func testCloudProvider(t *testing.T, client *doClientMock) *digitaloceanCloudPro
 						{ID: "7", Status: &godo.KubernetesNodeStatus{State: "draining"}},
 						{ID: "8", Status: &godo.KubernetesNodeStatus{State: "running"}},
 					},
-					Tags: []string{
-						"k8s-cluster-autoscaler-enabled:true",
-					},
+					AutoScale: false,
 				},
 			},
 			&godo.Response{},
@@ -117,7 +109,7 @@ func TestDigitalOceanCloudProvider_NodeGroups(t *testing.T) {
 
 	t.Run("success", func(t *testing.T) {
 		nodes := provider.NodeGroups()
-		assert.Equal(t, len(nodes), 4, "number of nodes do not match")
+		assert.Equal(t, len(nodes), 3, "number of nodes do not match")
 	})
 
 	t.Run("zero groups", func(t *testing.T) {
@@ -139,22 +131,18 @@ func TestDigitalOceanCloudProvider_NodeGroupForNode(t *testing.T) {
 				{
 					ID: "1",
 					Nodes: []*godo.KubernetesNode{
-						{ID: "2", Status: &godo.KubernetesNodeStatus{State: "deleting"}},
-						{ID: "3", Status: &godo.KubernetesNodeStatus{State: "running"}},
+						{ID: "2", Status: &godo.KubernetesNodeStatus{State: "deleting"}, DropletID: "droplet-2"},
+						{ID: "3", Status: &godo.KubernetesNodeStatus{State: "running"}, DropletID: "droplet-3"},
 					},
-					Tags: []string{
-						"k8s-cluster-autoscaler-enabled:true",
-					},
+					AutoScale: true,
 				},
 				{
 					ID: "2",
 					Nodes: []*godo.KubernetesNode{
-						{ID: "4", Status: &godo.KubernetesNodeStatus{State: "provisioning"}},
-						{ID: "5", Status: &godo.KubernetesNodeStatus{State: "draining"}},
+						{ID: "4", Status: &godo.KubernetesNodeStatus{State: "provisioning"}, DropletID: "droplet-4"},
+						{ID: "5", Status: &godo.KubernetesNodeStatus{State: "draining"}, DropletID: "droplet-5"},
 					},
-					Tags: []string{
-						"k8s-cluster-autoscaler-enabled:true",
-					},
+					AutoScale: true,
 				},
 			},
 			&godo.Response{},
@@ -165,17 +153,15 @@ func TestDigitalOceanCloudProvider_NodeGroupForNode(t *testing.T) {
 
 		// let's get the nodeGroup for the node with ID 4
 		node := &apiv1.Node{
-			ObjectMeta: metav1.ObjectMeta{
-				Labels: map[string]string{
-					nodeIDLabel: "4",
-				},
+			Spec: apiv1.NodeSpec{
+				ProviderID: toProviderID("droplet-4"),
 			},
 		}
 
 		nodeGroup, err := provider.NodeGroupForNode(node)
-		assert.NoError(t, err)
-		assert.NotNil(t, nodeGroup)
-		assert.Equal(t, nodeGroup.Id(), "2", "node group ID does not match")
+		require.NoError(t, err)
+		require.NotNil(t, nodeGroup)
+		require.Equal(t, nodeGroup.Id(), "2", "node group ID does not match")
 	})
 
 	t.Run("node does not exist", func(t *testing.T) {
@@ -187,15 +173,15 @@ func TestDigitalOceanCloudProvider_NodeGroupForNode(t *testing.T) {
 				{
 					ID: "1",
 					Nodes: []*godo.KubernetesNode{
-						{ID: "2", Status: &godo.KubernetesNodeStatus{State: "deleting"}},
-						{ID: "3", Status: &godo.KubernetesNodeStatus{State: "running"}},
+						{ID: "2", Status: &godo.KubernetesNodeStatus{State: "deleting"}, DropletID: "droplet-2"},
+						{ID: "3", Status: &godo.KubernetesNodeStatus{State: "running"}, DropletID: "droplet-3"},
 					},
 				},
 				{
 					ID: "2",
 					Nodes: []*godo.KubernetesNode{
-						{ID: "4", Status: &godo.KubernetesNodeStatus{State: "provisioning"}},
-						{ID: "5", Status: &godo.KubernetesNodeStatus{State: "draining"}},
+						{ID: "4", Status: &godo.KubernetesNodeStatus{State: "provisioning"}, DropletID: "droplet-4"},
+						{ID: "5", Status: &godo.KubernetesNodeStatus{State: "draining"}, DropletID: "droplet-5"},
 					},
 				},
 			},
@@ -206,10 +192,8 @@ func TestDigitalOceanCloudProvider_NodeGroupForNode(t *testing.T) {
 		provider := testCloudProvider(t, client)
 
 		node := &apiv1.Node{
-			ObjectMeta: metav1.ObjectMeta{
-				Labels: map[string]string{
-					nodeIDLabel: "7",
-				},
+			Spec: apiv1.NodeSpec{
+				ProviderID: toProviderID("droplet-7"),
 			},
 		}
 

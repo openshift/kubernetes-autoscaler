@@ -1,6 +1,11 @@
 approvers:
-  - enxebre
-  - frobware
-  - bison
+- piosz
+- aleksandra-malinowska
+- losipiuk
 reviewers:
-  - spangenberg
+- feiskyer
+- piosz
+- aleksandra-malinowska
+- losipiuk
+- Jeffwan
+

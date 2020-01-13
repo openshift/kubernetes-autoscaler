@@ -28,11 +28,6 @@ import (
 )
 
 const (
-	// These are internal DO values, not publicly available and configurable at
-	// this point.
-	minNodePoolSize = 1
-	maxNodePoolSize = 200
-
 	doksLabelNamespace = "doks.digitalocean.com"
 	nodeIDLabel        = doksLabelNamespace + "/node-id"
 )
@@ -84,13 +79,13 @@ func (n *NodeGroup) IncreaseSize(delta int) error {
 
 	targetSize := n.nodePool.Count + delta
 
-	if targetSize >= n.MaxSize() {
+	if targetSize > n.MaxSize() {
 		return fmt.Errorf("size increase is too large. current: %d desired: %d max: %d",
 			n.nodePool.Count, targetSize, n.MaxSize())
 	}
 
 	req := &godo.KubernetesNodePoolUpdateRequest{
-		Count: targetSize,
+		Count: &targetSize,
 	}
 
 	ctx := context.Background()
@@ -154,7 +149,7 @@ func (n *NodeGroup) DecreaseTargetSize(delta int) error {
 	}
 
 	req := &godo.KubernetesNodePoolUpdateRequest{
-		Count: targetSize,
+		Count: &targetSize,
 	}
 
 	ctx := context.Background()
@@ -238,9 +233,9 @@ func (n *NodeGroup) Autoprovisioned() bool {
 // toInstances converts a slice of *godo.KubernetesNode to
 // cloudprovider.Instance
 func toInstances(nodes []*godo.KubernetesNode) []cloudprovider.Instance {
-	instances := make([]cloudprovider.Instance, len(nodes))
-	for i, nd := range nodes {
-		instances[i] = toInstance(nd)
+	instances := make([]cloudprovider.Instance, 0, len(nodes))
+	for _, nd := range nodes {
+		instances = append(instances, toInstance(nd))
 	}
 	return instances
 }
@@ -249,7 +244,7 @@ func toInstances(nodes []*godo.KubernetesNode) []cloudprovider.Instance {
 // cloudprovider.Instance
 func toInstance(node *godo.KubernetesNode) cloudprovider.Instance {
 	return cloudprovider.Instance{
-		Id:     node.ID,
+		Id:     toProviderID(node.DropletID),
 		Status: toInstanceStatus(node.Status),
 	}
 }

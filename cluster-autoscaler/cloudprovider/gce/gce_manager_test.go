@@ -332,9 +332,10 @@ func newTestGceManager(t *testing.T, testServerURL string, regional bool) *gceMa
 	gceService.operationPollInterval = 1 * time.Millisecond
 
 	cache := &GceCache{
-		migs:                make(map[GceRef]Mig),
-		GceService:          gceService,
-		instanceRefToMigRef: make(map[GceRef]GceRef),
+		migs:                     make(map[GceRef]Mig),
+		GceService:               gceService,
+		instanceRefToMigRef:      make(map[GceRef]GceRef),
+		instancesFromUnknownMigs: make(map[GceRef]struct{}),
 		machinesCache: map[MachineTypeKey]*gce.MachineType{
 			{"us-central1-b", "n1-standard-1"}: {GuestCpus: 1, MemoryMb: 1},
 			{"us-central1-c", "n1-standard-1"}: {GuestCpus: 1, MemoryMb: 1},
@@ -680,17 +681,29 @@ func TestGetMigForInstance(t *testing.T) {
 	g.cache.InvalidateAllMigBasenames()
 
 	server.On("handle", "/project1/zones/us-central1-b/instanceGroupManagers/gke-cluster-1-default-pool").Return(buildDefaultInstanceGroupManagerResponse(zoneB)).Once()
-	server.On("handle", "/project1/zones/us-central1-b/instanceGroupManagers/gke-cluster-1-default-pool/listManagedInstances").Return(buildFourRunningInstancesOnDefaultMigManagedInstancesResponse(zoneB)).Once()
-	gceRef := GceRef{
+	server.On("handle", "/project1/zones/us-central1-b/instanceGroupManagers/gke-cluster-1-default-pool/listManagedInstances").Return(buildFourRunningInstancesOnDefaultMigManagedInstancesResponse(zoneB)).Twice()
+	gceRef1 := GceRef{
 		Project: projectId,
 		Zone:    zoneB,
 		Name:    "gke-cluster-1-default-pool-f7607aac-f1hm",
 	}
 
-	mig, err := g.GetMigForInstance(gceRef)
+	mig, err := g.GetMigForInstance(gceRef1)
 	assert.NoError(t, err)
 	assert.NotNil(t, mig)
 	assert.Equal(t, "gke-cluster-1-default-pool", mig.GceRef().Name)
+
+	gceRef2 := GceRef{
+		Project: projectId,
+		Zone:    zoneB,
+		Name:    "gke-cluster-1-default-pool-f7607aac-0000", // instance from unknown MIG
+	}
+	mig, err = g.GetMigForInstance(gceRef2)
+	assert.NoError(t, err)
+	assert.Nil(t, mig)
+	_, found := g.cache.instancesFromUnknownMigs[gceRef2]
+	assert.True(t, found)
+
 	mock.AssertExpectationsForObjects(t, server)
 }
 
@@ -729,10 +742,10 @@ func TestGetMigNodesBasic(t *testing.T) {
 
 const managedInstancesResponseTemplate = `{"managedInstances": [%s]}`
 
-const runningManagedInstanceResponsePartTemplate = `{
+const managedInstanceWithInstanceStatusResponsePartTemplate = `{
    "instance": "https://www.googleapis.com/compute/v1/projects/project1/zones/%s/instances/%s",
    "id": "1776565833558018907",
-   "instanceStatus": "RUNNING",
+   "instanceStatus": "%s",
    "version": {
     "instanceTemplate": "https://www.googleapis.com/compute/beta/projects/project1/global/instanceTemplates/test-1-cpu-1-k80-2"
    },
@@ -740,9 +753,9 @@ const runningManagedInstanceResponsePartTemplate = `{
   }
 `
 
-const runningManagedInstanceWithCurrentActionResponsePartTemplate = `{
+const managedInstanceWithInstanceStatusAndCurrentActionResponsePartTemplate = `{
    "instance": "https://www.googleapis.com/compute/v1/projects/project1/zones/%s/instances/%s",
-   "instanceStatus": "RUNNING",
+   "instanceStatus": "%s",
    "version": {
     "instanceTemplate": "https://www.googleapis.com/compute/beta/projects/project1/global/instanceTemplates/test-1-cpu-1-k80-2"
    },
@@ -751,9 +764,9 @@ const runningManagedInstanceWithCurrentActionResponsePartTemplate = `{
    }
 `
 
-const runningManagedInstanceWithCurrentActionAndErrorResponsePartTemplate = `{
+const managedInstanceWithInstanceStatusAndWithCurrentActionAndErrorResponsePartTemplate = `{
    "instance": "https://www.googleapis.com/compute/v1/projects/project1/zones/%s/instances/%s",
-   "instanceStatus": "RUNNING",
+   "instanceStatus": "%s",
    "version": {
     "instanceTemplate": "https://www.googleapis.com/compute/beta/projects/project1/global/instanceTemplates/test-1-cpu-1-k80-2"
    },
@@ -833,28 +846,40 @@ func buildManagedInstancesResponse(managedInstanceParts ...string) string {
 	return fmt.Sprintf(managedInstancesResponseTemplate, partsString)
 }
 
-func buildRunningManagedInstanceResponsePart(zone string, instance string) string {
-	return fmt.Sprintf(runningManagedInstanceResponsePartTemplate, zone, instance)
+func buildRunningManagedInstanceResponsePart(zone string, instanceName string) string {
+	return buildManagedInstanceWithInstanceStatusResponsePart(zone, instanceName, "RUNNING")
 }
 
-func buildRunningManagedInstanceWithCurrentActionResponsePart(zone string, instanceGroup string, currentAction string) string {
-	return fmt.Sprintf(runningManagedInstanceWithCurrentActionResponsePartTemplate, zone, instanceGroup, currentAction)
+func buildRunningManagedInstanceWithCurrentActionResponsePart(zone string, instanceName string, currentAction string) string {
+	return buildManagedInstanceWithInstanceStatusAndCurrentActionResponsePart(zone, instanceName, "RUNNING", currentAction)
 }
 
-func buildRunningManagedInstanceWithCurrentActionAndErrorResponsePart(zone string, instanceGroup string, currentAction string, code string, message string) string {
-	return fmt.Sprintf(runningManagedInstanceWithCurrentActionAndErrorResponsePartTemplate, zone, instanceGroup, currentAction, code, message)
+func buildRunningManagedInstanceWithCurrentActionAndErrorResponsePart(zone string, instanceName string, currentAction string, code string, message string) string {
+	return buildManagedInstanceWithInstanceStatusAndCurrentActionAndErrorResponsePart(zone, instanceName, "RUNNING", currentAction, code, message)
 }
 
-func buildManagedInstanceWithCurrentActionResponsePart(zone string, instanceGroup string, currentAction string) string {
-	return fmt.Sprintf(managedInstanceWithCurrentActionResponsePartTemplate, zone, instanceGroup, currentAction)
+func buildManagedInstanceWithInstanceStatusResponsePart(zone string, instanceName string, instanceStatus string) string {
+	return fmt.Sprintf(managedInstanceWithInstanceStatusResponsePartTemplate, zone, instanceName, instanceStatus)
 }
 
-func buildManagedInstanceWithCurrentActionAndErrorResponsePart(zone string, instanceGroup string, currentAction string, code string, message string) string {
-	return fmt.Sprintf(managedInstanceWithCurrentActionAndErrorResponsePartTemplate, zone, instanceGroup, currentAction, code, message)
+func buildManagedInstanceWithInstanceStatusAndCurrentActionResponsePart(zone string, instanceName string, instanceStatus string, currentAction string) string {
+	return fmt.Sprintf(managedInstanceWithInstanceStatusAndCurrentActionResponsePartTemplate, zone, instanceName, instanceStatus, currentAction)
 }
 
-func buildManagedInstanceWithCurrentActionAndTwoErrorsResponsePart(zone string, instanceGroup string, currentAction string, code1 string, message1 string, code2 string, message2 string) string {
-	return fmt.Sprintf(managedInstanceWithCurrentActionAndTwoErrorsResponsePartTemplate, zone, instanceGroup, currentAction, code1, message1, code2, message2)
+func buildManagedInstanceWithInstanceStatusAndCurrentActionAndErrorResponsePart(zone string, instanceName string, instanceStatus string, currentAction string, code string, message string) string {
+	return fmt.Sprintf(managedInstanceWithInstanceStatusAndWithCurrentActionAndErrorResponsePartTemplate, zone, instanceName, instanceStatus, currentAction, code, message)
+}
+
+func buildManagedInstanceWithCurrentActionResponsePart(zone string, instanceName string, currentAction string) string {
+	return fmt.Sprintf(managedInstanceWithCurrentActionResponsePartTemplate, zone, instanceName, currentAction)
+}
+
+func buildManagedInstanceWithCurrentActionAndErrorResponsePart(zone string, instanceName string, currentAction string, code string, message string) string {
+	return fmt.Sprintf(managedInstanceWithCurrentActionAndErrorResponsePartTemplate, zone, instanceName, currentAction, code, message)
+}
+
+func buildManagedInstanceWithCurrentActionAndTwoErrorsResponsePart(zone string, instanceName string, currentAction string, code1 string, message1 string, code2 string, message2 string) string {
+	return fmt.Sprintf(managedInstanceWithCurrentActionAndTwoErrorsResponsePartTemplate, zone, instanceName, currentAction, code1, message1, code2, message2)
 }
 
 func TestGetMigNodesComplex(t *testing.T) {
@@ -871,108 +896,156 @@ func TestGetMigNodesComplex(t *testing.T) {
 		expectedErrorMessage string
 	}{
 		{
-			"instance-running",
-			buildRunningManagedInstanceResponsePart("europe-west1-b", "instance-running"),
+			"running-creating-no_error",
+			buildRunningManagedInstanceResponsePart("europe-west1-b", "running-creating-no_error"),
 			cloudprovider.InstanceRunning,
 			0,
 			"",
 			"",
 		},
 		{
-			"instance-creating-quota-exceeded",
-			buildManagedInstanceWithCurrentActionAndErrorResponsePart("europe-west1-b", "instance-creating-quota-exceeded", "CREATING", ErrorCodeQuotaExceeded, "We run out of quota while creating!"),
+			"none-creating-quota_exceeded",
+			buildManagedInstanceWithCurrentActionAndErrorResponsePart("europe-west1-b", "none-creating-quota_exceeded", "CREATING", ErrorCodeQuotaExceeded, "We run out of quota while creating!"),
 			cloudprovider.InstanceCreating,
 			cloudprovider.OutOfResourcesErrorClass,
 			ErrorCodeQuotaExceeded,
 			"We run out of quota while creating!",
 		},
 		{
-			"instance-recreating-quota-exceeded",
-			buildManagedInstanceWithCurrentActionAndErrorResponsePart("europe-west1-b", "instance-recreating-quota-exceeded", "RECREATING", ErrorCodeQuotaExceeded, "We run out of quota while recreating!"),
+			"none-recreating-quota_exceeded",
+			buildManagedInstanceWithCurrentActionAndErrorResponsePart("europe-west1-b", "none-recreating-quota_exceeded", "RECREATING", ErrorCodeQuotaExceeded, "We run out of quota while recreating!"),
 			cloudprovider.InstanceCreating,
 			cloudprovider.OutOfResourcesErrorClass,
 			ErrorCodeQuotaExceeded,
 			"We run out of quota while recreating!",
 		},
 		{
-			"instance-creating-no-retries-quota-exceeded",
-			buildManagedInstanceWithCurrentActionAndErrorResponsePart("europe-west1-b", "instance-creating-no-retries-quota-exceeded", "CREATING_WITHOUT_RETRIES", ErrorCodeQuotaExceeded, "We run out of quota while creating without retries!"),
+			"none-creating_no_retries-quota_exceeded",
+			buildManagedInstanceWithCurrentActionAndErrorResponsePart("europe-west1-b", "none-creating_no_retries-quota_exceeded", "CREATING_WITHOUT_RETRIES", ErrorCodeQuotaExceeded, "We run out of quota while creating without retries!"),
 			cloudprovider.InstanceCreating,
 			cloudprovider.OutOfResourcesErrorClass,
 			ErrorCodeQuotaExceeded,
 			"We run out of quota while creating without retries!",
 		},
 		{
-			"instance-creating-other-error",
-			buildManagedInstanceWithCurrentActionAndErrorResponsePart("europe-west1-b", "instance-creating-other-error", "CREATING", "SOME_ERROR", "Ojojojoj!"),
+			"none-creating-other_error",
+			buildManagedInstanceWithCurrentActionAndErrorResponsePart("europe-west1-b", "none-creating-other_error", "CREATING", "SOME_ERROR", "Ojojojoj!"),
 			cloudprovider.InstanceCreating,
 			cloudprovider.OtherErrorClass,
 			ErrorCodeOther,
 			"Ojojojoj!",
 		},
 		{
-			"instance-creating-other-error-and-quota-exceeded",
-			buildManagedInstanceWithCurrentActionAndTwoErrorsResponsePart("europe-west1-b", "instance-creating-other-error-and-quota-exceeded", "CREATING", "SOME_ERROR", "Ojojojoj!", ErrorCodeQuotaExceeded, "We run out of quota!"),
+			"none-creating-other_error_and_quota_exceeded",
+			buildManagedInstanceWithCurrentActionAndTwoErrorsResponsePart("europe-west1-b", "none-creating-other_error_and_quota_exceeded", "CREATING", "SOME_ERROR", "Ojojojoj!", ErrorCodeQuotaExceeded, "We run out of quota!"),
 			cloudprovider.InstanceCreating,
 			cloudprovider.OutOfResourcesErrorClass,
 			ErrorCodeQuotaExceeded,
 			"Ojojojoj!; We run out of quota!",
 		},
 		{
-			"instance-creating-quota-exceeded-and-other",
-			buildManagedInstanceWithCurrentActionAndTwoErrorsResponsePart("europe-west1-b", "instance-creating-quota-exceeded-and-other", "CREATING", ErrorCodeQuotaExceeded, "We run out of quota!", "SOME_ERROR", "Ojojojoj!"),
+			"none-creating-quota_exceeded_and_other_error",
+			buildManagedInstanceWithCurrentActionAndTwoErrorsResponsePart("europe-west1-b", "none-creating-quota_exceeded_and_other_error", "CREATING", ErrorCodeQuotaExceeded, "We run out of quota!", "SOME_ERROR", "Ojojojoj!"),
 			cloudprovider.InstanceCreating,
 			cloudprovider.OutOfResourcesErrorClass,
 			ErrorCodeQuotaExceeded,
 			"We run out of quota!; Ojojojoj!",
 		},
 		{
-			"instance-deleting",
-			buildManagedInstanceWithCurrentActionResponsePart("europe-west1-b", "instance-deleting", "DELETING"),
+			"none-deleting-no_error",
+			buildManagedInstanceWithCurrentActionResponsePart("europe-west1-b", "none-deleting-no_error", "DELETING"),
 			cloudprovider.InstanceDeleting,
 			0,
 			"",
 			"",
 		},
 		{
-			"instance-running-deleting",
-			buildRunningManagedInstanceWithCurrentActionResponsePart("europe-west1-b", "instance-running-deleting", "DELETING"),
+			"running-deleting-no_error",
+			buildRunningManagedInstanceWithCurrentActionResponsePart("europe-west1-b", "running-deleting-no_error", "DELETING"),
 			cloudprovider.InstanceDeleting,
 			0,
 			"",
 			"",
 		},
 		{
-			"instance-running-deleting-error",
-			buildRunningManagedInstanceWithCurrentActionAndErrorResponsePart("europe-west1-b", "instance-running-deleting-error", "DELETING", "SOME_ERROR", "Error while deleting"),
+			"running-deleting-other_error",
+			buildRunningManagedInstanceWithCurrentActionAndErrorResponsePart("europe-west1-b", "running-deleting-other_error", "DELETING", "SOME_ERROR", "Error while deleting"),
 			cloudprovider.InstanceDeleting,
 			0,
 			"",
 			"",
 		},
 		{
-			"instance-creating-stockout",
-			buildManagedInstanceWithCurrentActionAndErrorResponsePart("europe-west1-b", "instance-creating-stockout", "CREATING", "RESOURCE_POOL_EXHAUSTED", "No resources!"),
+			"none-creating-resource_pool_exhausted_error",
+			buildManagedInstanceWithCurrentActionAndErrorResponsePart("europe-west1-b", "none-creating-resource_pool_exhausted_error", "CREATING", "RESOURCE_POOL_EXHAUSTED", "No resources!"),
 			cloudprovider.InstanceCreating,
 			cloudprovider.OutOfResourcesErrorClass,
-			ErrorCodeStockout,
+			ErrorCodeResourcePoolExhausted,
 			"No resources!",
 		},
 		{
-			"instance-creating-stockout-zonal",
-			buildManagedInstanceWithCurrentActionAndErrorResponsePart("europe-west1-b", "instance-creating-stockout-zonal", "CREATING", "ZONE_RESOURCE_POOL_EXHAUSTED", "No resources!"),
+			"none-creating-zonal_resource_pool_exhausted_error",
+			buildManagedInstanceWithCurrentActionAndErrorResponsePart("europe-west1-b", "none-creating-zonal_resource_pool_exhausted_error", "CREATING", "ZONE_RESOURCE_POOL_EXHAUSTED", "No resources!"),
 			cloudprovider.InstanceCreating,
 			cloudprovider.OutOfResourcesErrorClass,
-			ErrorCodeStockout,
+			ErrorCodeResourcePoolExhausted,
 			"No resources!",
 		},
 		{
-			"instance-creating-stockout-zonal-details",
-			buildManagedInstanceWithCurrentActionAndErrorResponsePart("europe-west1-b", "instance-creating-stockout-zonal-details", "CREATING", "ZONE_RESOURCE_POOL_EXHAUSTED_WITH_DETAILS", "No resources!"),
+			"none-creating-zonal_resource_pool_exhausted_error_with_details",
+			buildManagedInstanceWithCurrentActionAndErrorResponsePart("europe-west1-b", "none-creating-zonal_resource_pool_exhausted_error_with_details", "CREATING", "ZONE_RESOURCE_POOL_EXHAUSTED_WITH_DETAILS", "No resources!"),
 			cloudprovider.InstanceCreating,
 			cloudprovider.OutOfResourcesErrorClass,
-			ErrorCodeStockout,
+			ErrorCodeResourcePoolExhausted,
 			"No resources!",
+		},
+		{
+			"running-creating-resource_pool_exhausted_error",
+			buildRunningManagedInstanceWithCurrentActionAndErrorResponsePart("europe-west1-b", "running-creating-resource_pool_exhausted_error", "CREATING", "RESOURCE_POOL_EXHAUSTED", "No resources!"),
+			cloudprovider.InstanceCreating,
+			cloudprovider.OutOfResourcesErrorClass,
+			ErrorCodeResourcePoolExhausted,
+			"No resources!",
+		},
+		{
+			"running-creating-quota_error",
+			buildRunningManagedInstanceWithCurrentActionAndErrorResponsePart("europe-west1-b", "running-creating-quota_error", "CREATING", ErrorCodeQuotaExceeded, "We run out of quota while creating!"),
+			cloudprovider.InstanceCreating,
+			cloudprovider.OutOfResourcesErrorClass,
+			ErrorCodeQuotaExceeded,
+			"We run out of quota while creating!",
+		},
+		{
+			"running-creating-other_error",
+			buildRunningManagedInstanceWithCurrentActionAndErrorResponsePart("europe-west1-b", "running-creating-other_error", "CREATING", "SOME_ERROR", "Ojojojoj!"),
+			cloudprovider.InstanceCreating,
+			0,
+			"",
+			"",
+		},
+		{
+			"repairing-creating-other_error",
+			buildManagedInstanceWithInstanceStatusAndCurrentActionAndErrorResponsePart("europe-west1-b", "repairing-creating-other_error", "REPAIRING", "CREATING", "SOME_ERROR", "Ojojojoj!"),
+			cloudprovider.InstanceCreating,
+			0,
+			"",
+			"",
+		},
+		{
+			"provisioning-creating-other_error",
+			buildManagedInstanceWithInstanceStatusAndCurrentActionAndErrorResponsePart("europe-west1-b", "provisioning-creating-other_error", "PROVISIONING", "CREATING", "SOME_ERROR", "Ojojojoj!"),
+			cloudprovider.InstanceCreating,
+			cloudprovider.OtherErrorClass,
+			ErrorCodeOther,
+			"Ojojojoj!",
+		},
+		{
+			"staging-creating-other_error",
+			buildManagedInstanceWithInstanceStatusAndCurrentActionAndErrorResponsePart("europe-west1-b", "staging-creating-other_error", "STAGING", "CREATING", "SOME_ERROR", "Ojojojoj!"),
+			cloudprovider.InstanceCreating,
+			cloudprovider.OtherErrorClass,
+			ErrorCodeOther,
+			"Ojojojoj!",
 		},
 	}
 
@@ -1080,7 +1153,7 @@ func TestFetchAutoMigsZonal(t *testing.T) {
 	g := newTestGceManager(t, server.URL, regional)
 
 	min, max := 0, 100
-	g.migAutoDiscoverySpecs = []cloudprovider.MIGAutoDiscoveryConfig{
+	g.migAutoDiscoverySpecs = []migAutoDiscoveryConfig{
 		{Re: regexp.MustCompile("UNUSED"), MinSize: min, MaxSize: max},
 	}
 
@@ -1153,7 +1226,7 @@ func TestFetchAutoMigsRegional(t *testing.T) {
 	g := newTestGceManager(t, server.URL, regional)
 
 	min, max := 0, 100
-	g.migAutoDiscoverySpecs = []cloudprovider.MIGAutoDiscoveryConfig{
+	g.migAutoDiscoverySpecs = []migAutoDiscoveryConfig{
 		{Re: regexp.MustCompile("UNUSED"), MinSize: min, MaxSize: max},
 	}
 
@@ -1326,9 +1399,9 @@ func TestParseCustomMachineType(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, int64(2), cpu)
 	assert.Equal(t, int64(2816*units.MiB), mem)
-	cpu, mem, err = parseCustomMachineType("other-a2-2816")
+	_, _, err = parseCustomMachineType("other-a2-2816")
 	assert.Error(t, err)
-	cpu, mem, err = parseCustomMachineType("other-2-2816")
+	_, _, err = parseCustomMachineType("other-2-2816")
 	assert.Error(t, err)
 }
 
@@ -1350,4 +1423,108 @@ func validateMigExists(t *testing.T, migs []Mig, zone string, name string, minSi
 		allRefs = append(allRefs, mig.GceRef())
 	}
 	assert.Failf(t, "Mig not found", "Mig %v not found among %v", ref, allRefs)
+}
+
+func TestParseMIGAutoDiscoverySpecs(t *testing.T) {
+	cases := []struct {
+		name    string
+		specs   []string
+		want    []migAutoDiscoveryConfig
+		wantErr bool
+	}{
+		{
+			name: "GoodSpecs",
+			specs: []string{
+				"mig:namePrefix=pfx,min=0,max=10",
+				"mig:namePrefix=anotherpfx,min=1,max=2",
+			},
+			want: []migAutoDiscoveryConfig{
+				{Re: regexp.MustCompile("^pfx.+"), MinSize: 0, MaxSize: 10},
+				{Re: regexp.MustCompile("^anotherpfx.+"), MinSize: 1, MaxSize: 2},
+			},
+		},
+		{
+			name:    "MissingMIGType",
+			specs:   []string{"namePrefix=pfx,min=0,max=10"},
+			wantErr: true,
+		},
+		{
+			name:    "WrongType",
+			specs:   []string{"asg:namePrefix=pfx,min=0,max=10"},
+			wantErr: true,
+		},
+		{
+			name:    "UnknownKey",
+			specs:   []string{"mig:namePrefix=pfx,min=0,max=10,unknown=hi"},
+			wantErr: true,
+		},
+		{
+			name:    "NonIntegerMin",
+			specs:   []string{"mig:namePrefix=pfx,min=a,max=10"},
+			wantErr: true,
+		},
+		{
+			name:    "NonIntegerMax",
+			specs:   []string{"mig:namePrefix=pfx,min=1,max=donkey"},
+			wantErr: true,
+		},
+		{
+			name:    "PrefixDoesNotCompileToRegexp",
+			specs:   []string{"mig:namePrefix=a),min=1,max=10"},
+			wantErr: true,
+		},
+		{
+			name:    "KeyMissingValue",
+			specs:   []string{"mig:namePrefix=prefix,min=,max=10"},
+			wantErr: true,
+		},
+		{
+			name:    "ValueMissingKey",
+			specs:   []string{"mig:namePrefix=prefix,=0,max=10"},
+			wantErr: true,
+		},
+		{
+			name:    "KeyMissingSeparator",
+			specs:   []string{"mig:namePrefix=prefix,min,max=10"},
+			wantErr: true,
+		},
+		{
+			name:    "TooManySeparators",
+			specs:   []string{"mig:namePrefix=prefix,min=0,max=10=20"},
+			wantErr: true,
+		},
+		{
+			name:    "PrefixIsEmpty",
+			specs:   []string{"mig:namePrefix=,min=0,max=10"},
+			wantErr: true,
+		},
+		{
+			name:    "PrefixIsMissing",
+			specs:   []string{"mig:min=0,max=10"},
+			wantErr: true,
+		},
+		{
+			name:    "MaxBelowMin",
+			specs:   []string{"mig:namePrefix=prefix,min=10,max=1"},
+			wantErr: true,
+		},
+		{
+			name:    "MaxIsZero",
+			specs:   []string{"mig:namePrefix=prefix,min=0,max=0"},
+			wantErr: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			do := cloudprovider.NodeGroupDiscoveryOptions{NodeGroupAutoDiscoverySpecs: tc.specs}
+			got, err := parseMIGAutoDiscoverySpecs(do)
+			if tc.wantErr {
+				assert.Error(t, err)
+				return
+			}
+			assert.NoError(t, err)
+			assert.True(t, assert.ObjectsAreEqualValues(tc.want, got), "\ngot: %#v\nwant: %#v", got, tc.want)
+		})
+	}
 }
