@@ -139,6 +139,8 @@ type AutoscalingOptions struct {
 	FilterOutSchedulablePodsUsesPacking bool
 	// IgnoredTaints is a list of taints to ignore when considering a node template for scheduling.
 	IgnoredTaints []string
+	// AWSUseStaticInstanceList tells if AWS cloud provider use static instance type list or dynamically fetch from remote APIs.
+	AWSUseStaticInstanceList bool
 	// Path to kube configuration if available
 	KubeConfigPath string
 }

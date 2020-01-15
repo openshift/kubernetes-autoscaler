@@ -34,14 +34,16 @@ import (
 
 const (
 	// GPULabel is the label added to nodes with GPU resource.
-	GPULabel = "cloud.google.com/gke-accelerator"
+	GPULabel = "baidu/nvidia_name"
 )
 
 var (
 	availableGPUTypes = map[string]struct{}{
-		"nvidia-tesla-k80":  {},
-		"nvidia-tesla-p100": {},
-		"nvidia-tesla-v100": {},
+		"nTeslaV100":    {},
+		"nTeslaP40":     {},
+		"nTeslaP4":      {},
+		"nTeslaV100-16": {},
+		"nTeslaV100-32": {},
 	}
 )
 
@@ -93,8 +95,8 @@ func buildStaticallyDiscoveringProvider(manager *BaiducloudManager, specs []stri
 		asgs:              make([]*Asg, 0),
 		resourceLimiter:   resourceLimiter,
 	}
-	if len(specs) > 1 {
-		return nil, fmt.Errorf("currently, baiducloud cloud provider not support Multiple ASG")
+	if len(specs) > 200 {
+		return nil, fmt.Errorf("currently, baiducloud cloud provider not support ASG‘s number > 200")
 	}
 	for _, spec := range specs {
 		if err := bcp.addNodeGroup(spec); err != nil {
@@ -136,7 +138,7 @@ func buildAsg(baiducloudManager *BaiducloudManager, minSize int, maxSize int, na
 	}
 }
 
-// addAsg adds and registers an Asg to this cloud provider
+// addAsg adds and registers an Asg to this cloud provider.
 func (baiducloud *baiducloudCloudProvider) addAsg(asg *Asg) {
 	baiducloud.asgs = append(baiducloud.asgs, asg)
 	baiducloud.baiducloudManager.RegisterAsg(asg)
@@ -161,7 +163,7 @@ func (baiducloud *baiducloudCloudProvider) GPULabel() string {
 	return GPULabel
 }
 
-// GetAvailableGPUTypes return all available GPU types cloud provider supports
+// GetAvailableGPUTypes returns all available GPU types cloud provider supports.
 func (baiducloud *baiducloudCloudProvider) GetAvailableGPUTypes() map[string]struct{} {
 	return availableGPUTypes
 }
@@ -174,7 +176,7 @@ func (baiducloud *baiducloudCloudProvider) NodeGroupForNode(node *apiv1.Node) (c
 	if len(splitted) != 2 {
 		return nil, fmt.Errorf("parse ProviderID failed: %v", node.Spec.ProviderID)
 	}
-	asg, err := baiducloud.baiducloudManager.GetAsgForInstance(&BaiducloudRef{Name: splitted[1]})
+	asg, err := baiducloud.baiducloudManager.GetAsgForInstance(splitted[1])
 	return asg, err
 }
 
@@ -261,7 +263,7 @@ func (asg *Asg) IncreaseSize(delta int) error {
 	if int(size)+delta > asg.MaxSize() {
 		return fmt.Errorf("size increase too large - desired:%d max:%d", int(size)+delta, asg.MaxSize())
 	}
-	return asg.baiducloudManager.ScaleUpCluster(delta)
+	return asg.baiducloudManager.ScaleUpCluster(delta, asg.Name)
 }
 
 // DeleteNodes deletes nodes from this node group. Error is returned either on
@@ -282,9 +284,33 @@ func (asg *Asg) DeleteNodes(nodes []*apiv1.Node) error {
 		if len(splitted) != 2 {
 			return fmt.Errorf("Not expected name: %s\n", node.Spec.ProviderID)
 		}
+		belong, err := asg.Belongs(splitted[1])
+		if err != nil {
+			klog.Errorf("failed to check whether node:%s is belong to asg:%s", node.GetName(), asg.Id())
+			return err
+		}
+		if !belong {
+			return fmt.Errorf("%s belongs to a different asg than %s", node.Name, asg.Id())
+		}
+		// todo: if the node exists.
 		nodeID = append(nodeID, splitted[1])
 	}
 	return asg.baiducloudManager.ScaleDownCluster(nodeID)
+}
+
+// Belongs returns true if the given node belongs to the NodeGroup.
+func (asg *Asg) Belongs(instanceID string) (bool, error) {
+	targetAsg, err := asg.baiducloudManager.GetAsgForInstance(instanceID)
+	if err != nil {
+		return false, err
+	}
+	if targetAsg == nil {
+		return false, fmt.Errorf("%s doesn't belong to a known Asg", instanceID)
+	}
+	if targetAsg.Id() != asg.Id() {
+		return false, nil
+	}
+	return true, nil
 }
 
 // DecreaseTargetSize decreases the target size of the node group. This function

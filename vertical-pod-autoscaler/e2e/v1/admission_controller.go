@@ -20,9 +20,12 @@ import (
 	"fmt"
 
 	appsv1 "k8s.io/api/apps/v1"
+	autoscalingv1 "k8s.io/api/autoscaling/v1"
 	apiv1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	vpa_types "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/apis/autoscaling.k8s.io/v1"
 	"k8s.io/kubernetes/test/e2e/framework"
+	framework_deployment "k8s.io/kubernetes/test/e2e/framework/deployment"
 
 	"github.com/onsi/ginkgo"
 	"github.com/onsi/gomega"
@@ -77,11 +80,13 @@ var _ = AdmissionControllerE2eDescribe("Admission-controller", func() {
 		ginkgo.By("Setting up a hamster deployment")
 		podList := startDeploymentPods(f, d)
 
-		// Originally Pods had 100m CPU, 100Mi of memory, but admission controller
-		// should change it to recommended 250m CPU and 200Mi of memory.
-		for _, pod := range podList.Items {
-			gomega.Expect(pod.Spec.Containers[0].Resources.Requests[apiv1.ResourceCPU]).To(gomega.Equal(ParseQuantityOrDie("250m")))
-			gomega.Expect(pod.Spec.Containers[0].Resources.Requests[apiv1.ResourceMemory]).To(gomega.Equal(ParseQuantityOrDie("200Mi")))
+		ginkgo.By("Verifying hamster deployment")
+		for i, pod := range podList.Items {
+			podInfo := fmt.Sprintf("pod at index %d", i)
+			cpuDescription := fmt.Sprintf("%s: originally Pods had 100m CPU, admission controller should change it to recommended 250m CPU", podInfo)
+			gomega.Expect(pod.Spec.Containers[0].Resources.Requests[apiv1.ResourceCPU]).To(gomega.Equal(ParseQuantityOrDie("250m")), cpuDescription)
+			memDescription := fmt.Sprintf("%s: originally Pods had 100Mi of memory, admission controller should change it to recommended 200Mi memory", podInfo)
+			gomega.Expect(pod.Spec.Containers[0].Resources.Requests[apiv1.ResourceMemory]).To(gomega.Equal(ParseQuantityOrDie("200Mi")), memDescription)
 		}
 
 		ginkgo.By("Modifying recommendation.")
@@ -161,9 +166,14 @@ var _ = AdmissionControllerE2eDescribe("Admission-controller", func() {
 	})
 
 	ginkgo.It("caps request according to container max limit set in LimitRange", func() {
-		d := NewHamsterDeploymentWithResourcesAndLimits(f,
-			ParseQuantityOrDie("100m") /*cpu request*/, ParseQuantityOrDie("100Mi"), /*memory request*/
-			ParseQuantityOrDie("150m") /*cpu limit*/, ParseQuantityOrDie("200Mi") /*memory limit*/)
+		startCpuRequest := ParseQuantityOrDie("100m")
+		startCpuLimit := ParseQuantityOrDie("150m")
+		startMemRequest := ParseQuantityOrDie("100Mi")
+		startMemLimit := ParseQuantityOrDie("200Mi")
+		cpuRecommendation := ParseQuantityOrDie("250m")
+		memRecommendation := ParseQuantityOrDie("200Mi")
+
+		d := NewHamsterDeploymentWithResourcesAndLimits(f, startCpuRequest, startMemRequest, startCpuLimit, startMemLimit)
 
 		ginkgo.By("Setting up a VPA CRD")
 		vpaCRD := NewVPA(f, "hamster-vpa", hamsterTargetRef)
@@ -171,8 +181,8 @@ var _ = AdmissionControllerE2eDescribe("Admission-controller", func() {
 			ContainerRecommendations: []vpa_types.RecommendedContainerResources{{
 				ContainerName: "hamster",
 				Target: apiv1.ResourceList{
-					apiv1.ResourceCPU:    ParseQuantityOrDie("250m"),
-					apiv1.ResourceMemory: ParseQuantityOrDie("200Mi"),
+					apiv1.ResourceCPU:    cpuRecommendation,
+					apiv1.ResourceMemory: memRecommendation,
 				},
 			}},
 		}
@@ -181,22 +191,35 @@ var _ = AdmissionControllerE2eDescribe("Admission-controller", func() {
 		// Max CPU limit is 300m and ratio is 1.5, so max request is 200m, while
 		// recommendation is 250m
 		// Max memory limit is 1Gi and ratio is 2., so max request is 0.5Gi
-		InstallLimitRangeWithMax(f, "300m", "1Gi", apiv1.LimitTypeContainer)
+		maxCpu := ParseQuantityOrDie("300m")
+		InstallLimitRangeWithMax(f, maxCpu.String(), "1Gi", apiv1.LimitTypeContainer)
 
 		ginkgo.By("Setting up a hamster deployment")
 		podList := startDeploymentPods(f, d)
 
-		// Originally Pods had 100m CPU, 100Mi of memory, but admission controller
-		// should change it to 200m CPU (as this is the recommendation
-		// capped according to max limit in LimitRange) and 200Mi of memory,
-		// which is uncapped. Limit to request ratio should stay unchanged.
-		for _, pod := range podList.Items {
-			gomega.Expect(*pod.Spec.Containers[0].Resources.Requests.Cpu()).To(gomega.Equal(ParseQuantityOrDie("200m")))
-			gomega.Expect(*pod.Spec.Containers[0].Resources.Requests.Memory()).To(gomega.Equal(ParseQuantityOrDie("200Mi")))
-			gomega.Expect(pod.Spec.Containers[0].Resources.Limits.Cpu().MilliValue()).To(gomega.BeNumerically("<=", 300))
-			gomega.Expect(pod.Spec.Containers[0].Resources.Limits.Memory().Value()).To(gomega.BeNumerically("<=", 1024*1024*1024))
-			gomega.Expect(float64(pod.Spec.Containers[0].Resources.Limits.Cpu().MilliValue()) / float64(pod.Spec.Containers[0].Resources.Requests.Cpu().MilliValue())).To(gomega.BeNumerically("~", 1.5))
-			gomega.Expect(float64(pod.Spec.Containers[0].Resources.Limits.Memory().Value()) / float64(pod.Spec.Containers[0].Resources.Requests.Memory().Value())).To(gomega.BeNumerically("~", 2.))
+		ginkgo.By("Verifying hamster deployment")
+		for i, pod := range podList.Items {
+			podInfo := fmt.Sprintf("pod %s at index %d", pod.Name, i)
+
+			cpuRequestMsg := fmt.Sprintf("%s: CPU request didn't increase to the recommendation capped to max limit in LimitRange", podInfo)
+			gomega.Expect(*pod.Spec.Containers[0].Resources.Requests.Cpu()).To(gomega.Equal(ParseQuantityOrDie("200m")), cpuRequestMsg)
+
+			cpuLimitMsg := fmt.Sprintf("%s: CPU limit above max in LimitRange", podInfo)
+			gomega.Expect(pod.Spec.Containers[0].Resources.Limits.Cpu().MilliValue()).To(gomega.BeNumerically("<=", maxCpu.MilliValue()), cpuLimitMsg)
+
+			cpuRatioMsg := fmt.Sprintf("%s: CPU limit / request ratio isn't approximately equal to the original ratio", podInfo)
+			cpuRatio := float64(pod.Spec.Containers[0].Resources.Limits.Cpu().MilliValue()) / float64(pod.Spec.Containers[0].Resources.Requests.Cpu().MilliValue())
+			gomega.Expect(cpuRatio).To(gomega.BeNumerically("~", 1.5), cpuRatioMsg)
+
+			memRequestMsg := fmt.Sprintf("%s: memory request didn't increase to the recommendation capped to max limit in LimitRange", podInfo)
+			gomega.Expect(pod.Spec.Containers[0].Resources.Requests.Memory().Value()).To(gomega.Equal(memRecommendation.Value()), memRequestMsg)
+
+			memLimitMsg := fmt.Sprintf("%s: memory limit above max limit in LimitRange", podInfo)
+			gomega.Expect(pod.Spec.Containers[0].Resources.Limits.Memory().Value()).To(gomega.BeNumerically("<=", 1024*1024*1024), memLimitMsg)
+
+			memRatioMsg := fmt.Sprintf("%s: memory limit / request ratio isn't approximately equal to the original ratio", podInfo)
+			memRatio := float64(pod.Spec.Containers[0].Resources.Limits.Memory().Value()) / float64(pod.Spec.Containers[0].Resources.Requests.Memory().Value())
+			gomega.Expect(memRatio).To(gomega.BeNumerically("~", 2.), memRatioMsg)
 		}
 	})
 
@@ -488,19 +511,45 @@ var _ = AdmissionControllerE2eDescribe("Admission-controller", func() {
 		}`)
 		err2 := InstallRawVPA(f, invalidVPA)
 		gomega.Expect(err2).To(gomega.HaveOccurred(), "Invalid VPA object accepted")
-		gomega.Expect(err2.Error()).To(gomega.MatchRegexp(`Internal error occurred: admission webhook .*vpa.* denied the request: .*`))
+		gomega.Expect(err2.Error()).To(gomega.MatchRegexp(`.*admission webhook .*vpa.* denied the request: .*`))
 	})
 
 })
 
 func startDeploymentPods(f *framework.Framework, deployment *appsv1.Deployment) *apiv1.PodList {
+	// In admission controller e2e tests a recommendation is created before deployment.
+	// Creating deployment with size greater than 0 would create a race between information
+	// about pods and information about deployment getting to the admission controller.
+	// Any pods that get processed by AC before it receives information about the deployment
+	// don't receive recommendation.
+	// To avoid this create deployment with size 0, then scale it up to the desired size.
+	desiredPodCount := *deployment.Spec.Replicas
+	zero := int32(0)
+	deployment.Spec.Replicas = &zero
 	c, ns := f.ClientSet, f.Namespace.Name
 	deployment, err := c.AppsV1().Deployments(ns).Create(deployment)
-	gomega.Expect(err).NotTo(gomega.HaveOccurred())
-	err = framework.WaitForDeploymentComplete(c, deployment)
-	gomega.Expect(err).NotTo(gomega.HaveOccurred())
+	gomega.Expect(err).NotTo(gomega.HaveOccurred(), "when creating deployment with size 0")
 
-	podList, err := framework.GetPodsForDeployment(c, deployment)
+	err = framework_deployment.WaitForDeploymentComplete(c, deployment)
+	gomega.Expect(err).NotTo(gomega.HaveOccurred(), "when waiting for empty deployment to create")
+
+	scale := autoscalingv1.Scale{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      deployment.ObjectMeta.Name,
+			Namespace: deployment.ObjectMeta.Namespace,
+		},
+		Spec: autoscalingv1.ScaleSpec{
+			Replicas: desiredPodCount,
+		},
+	}
+	afterScale, err := c.AppsV1().Deployments(ns).UpdateScale(deployment.Name, &scale)
 	gomega.Expect(err).NotTo(gomega.HaveOccurred())
+	gomega.Expect(afterScale.Spec.Replicas).To(gomega.Equal(desiredPodCount), fmt.Sprintf("expected %d replicas after scaling", desiredPodCount))
+
+	err = framework_deployment.WaitForDeploymentComplete(c, deployment)
+	gomega.Expect(err).NotTo(gomega.HaveOccurred(), "when waiting for deployment to resize")
+
+	podList, err := framework_deployment.GetPodsForDeployment(c, deployment)
+	gomega.Expect(err).NotTo(gomega.HaveOccurred(), "when listing pods after deployment resize")
 	return podList
 }

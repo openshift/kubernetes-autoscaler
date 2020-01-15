@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"math/rand"
 	"net/http"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -42,7 +43,14 @@ import (
 var (
 	vmssSizeRefreshPeriod      = 15 * time.Second
 	vmssInstancesRefreshPeriod = 5 * time.Minute
+	vmssSizeMutex              sync.Mutex
 )
+
+var scaleSetStatusCache struct {
+	lastRefresh time.Time
+	mutex       sync.Mutex
+	scaleSets   map[string]compute.VirtualMachineScaleSet
+}
 
 func init() {
 	// In go-autorest SDK https://github.com/Azure/go-autorest/blob/master/autorest/sender.go#L242,
@@ -124,13 +132,42 @@ func (scaleSet *ScaleSet) MaxSize() int {
 }
 
 func (scaleSet *ScaleSet) getVMSSInfo() (compute.VirtualMachineScaleSet, error) {
+	scaleSetStatusCache.mutex.Lock()
+	defer scaleSetStatusCache.mutex.Unlock()
+
+	if scaleSetStatusCache.lastRefresh.Add(vmssSizeRefreshPeriod).After(time.Now()) {
+		if status, exists := scaleSetStatusCache.scaleSets[scaleSet.Name]; exists {
+			return status, nil
+		}
+	}
+
+	var allVMSS []compute.VirtualMachineScaleSet
+	var err error
+
+	allVMSS, err = scaleSet.getAllVMSSInfo()
+	if err != nil {
+		return compute.VirtualMachineScaleSet{}, err
+	}
+
+	var newStatus = make(map[string]compute.VirtualMachineScaleSet)
+	for _, vmss := range allVMSS {
+		newStatus[*vmss.Name] = vmss
+	}
+
+	scaleSetStatusCache.lastRefresh = time.Now()
+	scaleSetStatusCache.scaleSets = newStatus
+
+	return scaleSetStatusCache.scaleSets[scaleSet.Name], nil
+}
+
+func (scaleSet *ScaleSet) getAllVMSSInfo() ([]compute.VirtualMachineScaleSet, error) {
 	ctx, cancel := getContextWithCancel()
 	defer cancel()
 
 	resourceGroup := scaleSet.manager.config.ResourceGroup
-	setInfo, err := scaleSet.manager.azClient.virtualMachineScaleSetsClient.Get(ctx, resourceGroup, scaleSet.Name)
+	setInfo, err := scaleSet.manager.azClient.virtualMachineScaleSetsClient.List(ctx, resourceGroup)
 	if err != nil {
-		return compute.VirtualMachineScaleSet{}, err
+		return []compute.VirtualMachineScaleSet{}, err
 	}
 
 	return setInfo, nil
@@ -155,14 +192,19 @@ func (scaleSet *ScaleSet) getCurSize() (int64, error) {
 		}
 		return -1, err
 	}
-	klog.V(5).Infof("Getting scale set (%q) capacity: %d\n", scaleSet.Name, *set.Sku.Capacity)
 
-	if scaleSet.curSize != *set.Sku.Capacity {
+	vmssSizeMutex.Lock()
+	curSize := *set.Sku.Capacity
+	vmssSizeMutex.Unlock()
+
+	klog.V(5).Infof("Getting scale set (%q) capacity: %d\n", scaleSet.Name, curSize)
+
+	if scaleSet.curSize != curSize {
 		// Invalidate the instance cache if the capacity has changed.
 		scaleSet.invalidateInstanceCache()
 	}
 
-	scaleSet.curSize = *set.Sku.Capacity
+	scaleSet.curSize = curSize
 	scaleSet.lastSizeRefresh = time.Now()
 	return scaleSet.curSize, nil
 }
@@ -196,7 +238,9 @@ func (scaleSet *ScaleSet) updateVMSSCapacity(size int64) {
 		return
 	}
 
+	vmssSizeMutex.Lock()
 	op.Sku.Capacity = &size
+	vmssSizeMutex.Unlock()
 	op.Identity = nil
 	op.VirtualMachineScaleSetProperties.ProvisioningState = nil
 	ctx, cancel := getContextWithCancel()
@@ -498,8 +542,56 @@ func (scaleSet *ScaleSet) buildNodeFromTemplate(template compute.VirtualMachineS
 
 	// GenericLabels
 	node.Labels = cloudprovider.JoinStringMaps(node.Labels, buildGenericLabels(template, nodeName))
+	// Labels from the Scale Set's Tags
+	node.Labels = cloudprovider.JoinStringMaps(node.Labels, extractLabelsFromScaleSet(template.Tags))
+
+	// Taints from the Scale Set's Tags
+	node.Spec.Taints = extractTaintsFromScaleSet(template.Tags)
+
 	node.Status.Conditions = cloudprovider.BuildReadyConditions()
 	return &node, nil
+}
+
+func extractLabelsFromScaleSet(tags map[string]*string) map[string]string {
+	result := make(map[string]string)
+
+	for tagName, tagValue := range tags {
+		splits := strings.Split(tagName, nodeLabelTagName)
+		if len(splits) > 1 {
+			label := strings.Replace(splits[1], "_", "/", -1)
+			if label != "" {
+				result[label] = *tagValue
+			}
+		}
+	}
+
+	return result
+}
+
+func extractTaintsFromScaleSet(tags map[string]*string) []apiv1.Taint {
+	taints := make([]apiv1.Taint, 0)
+
+	for tagName, tagValue := range tags {
+		// The tag value must be in the format <tag>:NoSchedule
+		r, _ := regexp.Compile("(.*):(?:NoSchedule|NoExecute|PreferNoSchedule)")
+
+		if r.MatchString(*tagValue) {
+			splits := strings.Split(tagName, nodeTaintTagName)
+			if len(splits) > 1 {
+				values := strings.SplitN(*tagValue, ":", 2)
+				if len(values) > 1 {
+					taintKey := strings.Replace(splits[1], "_", "/", -1)
+					taints = append(taints, apiv1.Taint{
+						Key:    taintKey,
+						Value:  values[0],
+						Effect: apiv1.TaintEffect(values[1]),
+					})
+				}
+			}
+		}
+	}
+
+	return taints
 }
 
 // TemplateNodeInfo returns a node template for this scale set.

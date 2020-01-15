@@ -29,7 +29,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus"
 	"github.com/spf13/pflag"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -53,6 +52,7 @@ import (
 	"k8s.io/client-go/tools/leaderelection/resourcelock"
 	kube_flag "k8s.io/component-base/cli/flag"
 	componentbaseconfig "k8s.io/component-base/config"
+	"k8s.io/component-base/metrics/legacyregistry"
 	"k8s.io/klog"
 	"k8s.io/kubernetes/pkg/client/leaderelectionconfig"
 )
@@ -170,7 +170,8 @@ var (
 			"Setting it to false employs a more lenient filtering approach that does not try to pack the pods on the nodes."+
 			"Pods with nominatedNodeName set are always filtered out.")
 
-	ignoreTaintsFlag = multiStringFlag("ignore-taint", "Specifies a taint to ignore in node templates when considering to scale a node group")
+	ignoreTaintsFlag         = multiStringFlag("ignore-taint", "Specifies a taint to ignore in node templates when considering to scale a node group")
+	awsUseStaticInstanceList = flag.Bool("aws-use-static-instance-list", false, "Should CA fetch instance types in runtime or use a static list. AWS only")
 )
 
 func createAutoscalingOptions() config.AutoscalingOptions {
@@ -237,6 +238,7 @@ func createAutoscalingOptions() config.AutoscalingOptions {
 		FilterOutSchedulablePodsUsesPacking: *filterOutSchedulablePodsUsesPacking,
 		IgnoredTaints:                       *ignoreTaintsFlag,
 		NodeDeletionDelayTimeout:            *nodeDeletionDelayTimeout,
+		AWSUseStaticInstanceList:            *awsUseStaticInstanceList,
 		KubeConfigPath:                      *kubeConfigFile,
 	}
 }
@@ -294,6 +296,9 @@ func buildAutoscaler() (core.Autoscaler, error) {
 	if autoscalingOptions.CloudProviderName == cloudprovider.AzureProviderName {
 		processors.NodeGroupSetProcessor = &nodegroupset.BalancingNodeGroupSetProcessor{
 			Comparator: nodegroupset.IsAzureNodeInfoSimilar}
+	} else if autoscalingOptions.CloudProviderName == cloudprovider.AwsProviderName {
+		processors.NodeGroupSetProcessor = &nodegroupset.BalancingNodeGroupSetProcessor{
+			Comparator: nodegroupset.IsAwsNodeInfoSimilar}
 	}
 
 	opts := core.AutoscalerOptions{
@@ -364,7 +369,7 @@ func main() {
 	klog.V(1).Infof("Cluster Autoscaler %s", version.ClusterAutoscalerVersion)
 
 	go func() {
-		http.Handle("/metrics", prometheus.Handler())
+		http.Handle("/metrics", legacyregistry.Handler())
 		http.Handle("/health-check", healthCheck)
 		err := http.ListenAndServe(*address, nil)
 		klog.Fatalf("Failed to start metrics: %v", err)
@@ -426,7 +431,7 @@ func defaultLeaderElectionConfiguration() componentbaseconfig.LeaderElectionConf
 		LeaseDuration: metav1.Duration{Duration: defaultLeaseDuration},
 		RenewDeadline: metav1.Duration{Duration: defaultRenewDeadline},
 		RetryPeriod:   metav1.Duration{Duration: defaultRetryPeriod},
-		ResourceLock:  resourcelock.EndpointsResourceLock,
+		ResourceLock:  resourcelock.LeasesResourceLock,
 	}
 }
 

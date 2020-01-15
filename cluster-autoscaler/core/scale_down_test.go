@@ -32,6 +32,7 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/clusterstate"
 	"k8s.io/autoscaler/cluster-autoscaler/config"
 	"k8s.io/autoscaler/cluster-autoscaler/context"
+	"k8s.io/autoscaler/cluster-autoscaler/core/utils"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/kubernetes"
 	kube_util "k8s.io/autoscaler/cluster-autoscaler/utils/kubernetes"
 	. "k8s.io/autoscaler/cluster-autoscaler/utils/test"
@@ -48,8 +49,6 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/utils/gpu"
 	"k8s.io/klog"
 )
-
-const nothingReturned = "Nothing returned"
 
 func TestFindUnneededNodes(t *testing.T) {
 	p1 := BuildTestPod("p1", 100, 0)
@@ -134,14 +133,14 @@ func TestFindUnneededNodes(t *testing.T) {
 	sd := NewScaleDown(&context, clusterStateRegistry)
 	allNodes := []*apiv1.Node{n1, n2, n3, n4, n5, n7, n8, n9}
 	sd.UpdateUnneededNodes(allNodes, allNodes, allNodes,
-		[]*apiv1.Pod{p1, p2, p3, p4, p5, p6}, time.Now(), nil, nil)
+		[]*apiv1.Pod{p1, p2, p3, p4, p5, p6}, time.Now(), nil)
 
 	assert.Equal(t, 3, len(sd.unneededNodes))
-	addTime, found := sd.unneededNodes["n2"]
+	_, found := sd.unneededNodes["n2"]
 	assert.True(t, found)
-	addTime, found = sd.unneededNodes["n7"]
+	_, found = sd.unneededNodes["n7"]
 	assert.True(t, found)
-	addTime, found = sd.unneededNodes["n8"]
+	addTime, found := sd.unneededNodes["n8"]
 	assert.True(t, found)
 	assert.Contains(t, sd.podLocationHints, p2.Namespace+"/"+p2.Name)
 	assert.Equal(t, 6, len(sd.nodeUtilizationMap))
@@ -149,7 +148,7 @@ func TestFindUnneededNodes(t *testing.T) {
 	sd.unremovableNodes = make(map[string]time.Time)
 	sd.unneededNodes["n1"] = time.Now()
 	allNodes = []*apiv1.Node{n1, n2, n3, n4}
-	sd.UpdateUnneededNodes(allNodes, allNodes, allNodes, []*apiv1.Pod{p1, p2, p3, p4}, time.Now(), nil, nil)
+	sd.UpdateUnneededNodes(allNodes, allNodes, allNodes, []*apiv1.Pod{p1, p2, p3, p4}, time.Now(), nil)
 	sd.unremovableNodes = make(map[string]time.Time)
 
 	assert.Equal(t, 1, len(sd.unneededNodes))
@@ -160,18 +159,18 @@ func TestFindUnneededNodes(t *testing.T) {
 
 	sd.unremovableNodes = make(map[string]time.Time)
 	scaleDownCandidates := []*apiv1.Node{n1, n3, n4}
-	sd.UpdateUnneededNodes(allNodes, allNodes, scaleDownCandidates, []*apiv1.Pod{p1, p2, p3, p4}, time.Now(), nil, nil)
+	sd.UpdateUnneededNodes(allNodes, allNodes, scaleDownCandidates, []*apiv1.Pod{p1, p2, p3, p4}, time.Now(), nil)
 	assert.Equal(t, 0, len(sd.unneededNodes))
 
 	// Node n1 is unneeded, but should be skipped because it has just recently been found to be unremovable
 	allNodes = []*apiv1.Node{n1}
-	sd.UpdateUnneededNodes(allNodes, allNodes, allNodes, []*apiv1.Pod{}, time.Now(), nil, nil)
+	sd.UpdateUnneededNodes(allNodes, allNodes, allNodes, []*apiv1.Pod{}, time.Now(), nil)
 	assert.Equal(t, 0, len(sd.unneededNodes))
 	// Verify that no other nodes are in unremovable map.
 	assert.Equal(t, 1, len(sd.unremovableNodes))
 
 	// But it should be checked after timeout
-	sd.UpdateUnneededNodes(allNodes, allNodes, allNodes, []*apiv1.Pod{}, time.Now().Add(context.UnremovableNodeRecheckTimeout+time.Second), nil, nil)
+	sd.UpdateUnneededNodes(allNodes, allNodes, allNodes, []*apiv1.Pod{}, time.Now().Add(context.UnremovableNodeRecheckTimeout+time.Second), nil)
 	assert.Equal(t, 1, len(sd.unneededNodes))
 	// Verify that nodes that are no longer unremovable are removed.
 	assert.Equal(t, 0, len(sd.unremovableNodes))
@@ -228,7 +227,7 @@ func TestFindUnneededGPUNodes(t *testing.T) {
 	sd := NewScaleDown(&context, clusterStateRegistry)
 	allNodes := []*apiv1.Node{n1, n2, n3}
 	sd.UpdateUnneededNodes(allNodes, allNodes, allNodes,
-		[]*apiv1.Pod{p1, p2, p3}, time.Now(), nil, nil)
+		[]*apiv1.Pod{p1, p2, p3}, time.Now(), nil)
 
 	assert.Equal(t, 1, len(sd.unneededNodes))
 	_, found := sd.unneededNodes["n2"]
@@ -311,7 +310,7 @@ func TestPodsWithPrioritiesFindUnneededNodes(t *testing.T) {
 
 	allNodes := []*apiv1.Node{n1, n2, n3, n4}
 	sd.UpdateUnneededNodes(allNodes, allNodes, allNodes,
-		[]*apiv1.Pod{p1, p2, p3, p4, p5, p6, p7}, time.Now(), nil, nil)
+		[]*apiv1.Pod{p1, p2, p3, p4, p5, p6, p7}, time.Now(), nil)
 	assert.Equal(t, 2, len(sd.unneededNodes))
 	klog.Warningf("Unneeded nodes %v", sd.unneededNodes)
 	_, found := sd.unneededNodes["n2"]
@@ -360,7 +359,7 @@ func TestFindUnneededMaxCandidates(t *testing.T) {
 	clusterStateRegistry := clusterstate.NewClusterStateRegistry(provider, clusterstate.ClusterStateRegistryConfig{}, context.LogRecorder, newBackoff())
 	sd := NewScaleDown(&context, clusterStateRegistry)
 
-	sd.UpdateUnneededNodes(nodes, nodes, nodes, pods, time.Now(), nil, nil)
+	sd.UpdateUnneededNodes(nodes, nodes, nodes, pods, time.Now(), nil)
 	assert.Equal(t, numCandidates, len(sd.unneededNodes))
 	// Simulate one of the unneeded nodes got deleted
 	deleted := sd.unneededNodesList[len(sd.unneededNodesList)-1]
@@ -381,7 +380,7 @@ func TestFindUnneededMaxCandidates(t *testing.T) {
 		}
 	}
 
-	sd.UpdateUnneededNodes(nodes, nodes, nodes, pods, time.Now(), nil, nil)
+	sd.UpdateUnneededNodes(nodes, nodes, nodes, pods, time.Now(), nil)
 	// Check that the deleted node was replaced
 	assert.Equal(t, numCandidates, len(sd.unneededNodes))
 	assert.NotContains(t, sd.unneededNodes, deleted)
@@ -426,7 +425,7 @@ func TestFindUnneededEmptyNodes(t *testing.T) {
 	clusterStateRegistry := clusterstate.NewClusterStateRegistry(provider, clusterstate.ClusterStateRegistryConfig{}, context.LogRecorder, newBackoff())
 	sd := NewScaleDown(&context, clusterStateRegistry)
 
-	sd.UpdateUnneededNodes(nodes, nodes, nodes, pods, time.Now(), nil, nil)
+	sd.UpdateUnneededNodes(nodes, nodes, nodes, pods, time.Now(), nil)
 	for _, node := range sd.unneededNodesList {
 		t.Log(node.Name)
 	}
@@ -470,7 +469,7 @@ func TestFindUnneededNodePool(t *testing.T) {
 	clusterStateRegistry := clusterstate.NewClusterStateRegistry(provider, clusterstate.ClusterStateRegistryConfig{}, context.LogRecorder, newBackoff())
 	sd := NewScaleDown(&context, clusterStateRegistry)
 
-	sd.UpdateUnneededNodes(nodes, nodes, nodes, pods, time.Now(), nil, nil)
+	sd.UpdateUnneededNodes(nodes, nodes, nodes, pods, time.Now(), nil)
 	assert.NotEmpty(t, sd.unneededNodes)
 }
 
@@ -618,20 +617,20 @@ func TestDeleteNode(t *testing.T) {
 			// verify
 			if scenario.expectedDeletion {
 				assert.NoError(t, result.Err)
-				assert.Equal(t, n1.Name, getStringFromChanImmediately(deletedNodes))
+				assert.Equal(t, n1.Name, utils.GetStringFromChanImmediately(deletedNodes))
 			} else {
 				assert.NotNil(t, result.Err)
 			}
-			assert.Equal(t, nothingReturned, getStringFromChanImmediately(deletedNodes))
+			assert.Equal(t, utils.NothingReturned, utils.GetStringFromChanImmediately(deletedNodes))
 			assert.Equal(t, scenario.expectedResultType, result.ResultType)
 
 			taintedUpdate := fmt.Sprintf("%s-%s", n1.Name, []string{deletetaint.ToBeDeletedTaint})
-			assert.Equal(t, taintedUpdate, getStringFromChan(updatedNodes))
+			assert.Equal(t, taintedUpdate, utils.GetStringFromChan(updatedNodes))
 			if !scenario.expectedDeletion {
 				untaintedUpdate := fmt.Sprintf("%s-%s", n1.Name, []string{})
-				assert.Equal(t, untaintedUpdate, getStringFromChanImmediately(updatedNodes))
+				assert.Equal(t, untaintedUpdate, utils.GetStringFromChanImmediately(updatedNodes))
 			}
-			assert.Equal(t, nothingReturned, getStringFromChanImmediately(updatedNodes))
+			assert.Equal(t, utils.NothingReturned, utils.GetStringFromChanImmediately(updatedNodes))
 		})
 	}
 }
@@ -663,8 +662,8 @@ func TestDrainNode(t *testing.T) {
 	_, err := drainNode(n1, []*apiv1.Pod{p1, p2}, fakeClient, kube_util.CreateEventRecorder(fakeClient), 20, 5*time.Second, 0*time.Second, PodEvictionHeadroom)
 	assert.NoError(t, err)
 	deleted := make([]string, 0)
-	deleted = append(deleted, getStringFromChan(deletedPods))
-	deleted = append(deleted, getStringFromChan(deletedPods))
+	deleted = append(deleted, utils.GetStringFromChan(deletedPods))
+	deleted = append(deleted, utils.GetStringFromChan(deletedPods))
 	sort.Strings(deleted)
 	assert.Equal(t, p1.Name, deleted[0])
 	assert.Equal(t, p2.Name, deleted[1])
@@ -706,8 +705,8 @@ func TestDrainNodeWithRescheduled(t *testing.T) {
 	_, err := drainNode(n1, []*apiv1.Pod{p1, p2}, fakeClient, kube_util.CreateEventRecorder(fakeClient), 20, 5*time.Second, 0*time.Second, PodEvictionHeadroom)
 	assert.NoError(t, err)
 	deleted := make([]string, 0)
-	deleted = append(deleted, getStringFromChan(deletedPods))
-	deleted = append(deleted, getStringFromChan(deletedPods))
+	deleted = append(deleted, utils.GetStringFromChan(deletedPods))
+	deleted = append(deleted, utils.GetStringFromChan(deletedPods))
 	sort.Strings(deleted)
 	assert.Equal(t, p1.Name, deleted[0])
 	assert.Equal(t, p2.Name, deleted[1])
@@ -755,9 +754,9 @@ func TestDrainNodeWithRetries(t *testing.T) {
 	_, err := drainNode(n1, []*apiv1.Pod{p1, p2, p3}, fakeClient, kube_util.CreateEventRecorder(fakeClient), 20, 5*time.Second, 0*time.Second, PodEvictionHeadroom)
 	assert.NoError(t, err)
 	deleted := make([]string, 0)
-	deleted = append(deleted, getStringFromChan(deletedPods))
-	deleted = append(deleted, getStringFromChan(deletedPods))
-	deleted = append(deleted, getStringFromChan(deletedPods))
+	deleted = append(deleted, utils.GetStringFromChan(deletedPods))
+	deleted = append(deleted, utils.GetStringFromChan(deletedPods))
+	deleted = append(deleted, utils.GetStringFromChan(deletedPods))
 	sort.Strings(deleted)
 	assert.Equal(t, p1.Name, deleted[0])
 	assert.Equal(t, p2.Name, deleted[1])
@@ -947,13 +946,13 @@ func TestScaleDown(t *testing.T) {
 
 	clusterStateRegistry := clusterstate.NewClusterStateRegistry(provider, clusterstate.ClusterStateRegistryConfig{}, context.LogRecorder, newBackoff())
 	scaleDown := NewScaleDown(&context, clusterStateRegistry)
-	scaleDown.UpdateUnneededNodes(nodes, nodes, nodes, []*apiv1.Pod{p1, p2, p3}, time.Now().Add(-5*time.Minute), nil, nil)
-	scaleDownStatus, err := scaleDown.TryToScaleDown(nodes, []*apiv1.Pod{p1, p2, p3}, nil, time.Now(), nil, nil)
+	scaleDown.UpdateUnneededNodes(nodes, nodes, nodes, []*apiv1.Pod{p1, p2, p3}, time.Now().Add(-5*time.Minute), nil)
+	scaleDownStatus, err := scaleDown.TryToScaleDown(nodes, []*apiv1.Pod{p1, p2, p3}, nil, time.Now())
 	waitForDeleteToFinish(t, scaleDown)
 	assert.NoError(t, err)
 	assert.Equal(t, status.ScaleDownNodeDeleteStarted, scaleDownStatus.Result)
-	assert.Equal(t, n1.Name, getStringFromChan(deletedNodes))
-	assert.Equal(t, n1.Name, getStringFromChan(updatedNodes))
+	assert.Equal(t, n1.Name, utils.GetStringFromChan(deletedNodes))
+	assert.Equal(t, n1.Name, utils.GetStringFromChan(updatedNodes))
 }
 
 func waitForDeleteToFinish(t *testing.T, sd *ScaleDown) {
@@ -1051,66 +1050,16 @@ func TestScaleDownEmptyMinCoresLimitHit(t *testing.T) {
 
 func TestScaleDownEmptyMinMemoryLimitHit(t *testing.T) {
 	options := defaultScaleDownOptions
-	options.MinMemoryTotal = 4000 * MiB
+	options.MinMemoryTotal = 4000 * utils.MiB
 	config := &scaleTestConfig{
 		nodes: []nodeConfig{
-			{"n1", 2000, 1000 * MiB, 0, true, "ng1"},
-			{"n2", 1000, 1000 * MiB, 0, true, "ng1"},
-			{"n3", 1000, 1000 * MiB, 0, true, "ng1"},
-			{"n4", 1000, 3000 * MiB, 0, true, "ng1"},
+			{"n1", 2000, 1000 * utils.MiB, 0, true, "ng1"},
+			{"n2", 1000, 1000 * utils.MiB, 0, true, "ng1"},
+			{"n3", 1000, 1000 * utils.MiB, 0, true, "ng1"},
+			{"n4", 1000, 3000 * utils.MiB, 0, true, "ng1"},
 		},
 		options:            options,
 		expectedScaleDowns: []string{"n1", "n2"},
-	}
-	simpleScaleDownEmpty(t, config)
-}
-
-func TestScaleDownEmptyTempNodesLimits(t *testing.T) {
-	options := defaultScaleDownOptions
-	options.MinMemoryTotal = 4000 * MiB
-	config := &scaleTestConfig{
-		nodes: []nodeConfig{
-			{"n1", 1000, 1000 * MiB, 0, true, "ng1"},
-			{"n2", 1000, 1000 * MiB, 0, true, "ng1"},
-			{"n3", 1000, 1000 * MiB, 0, true, "ng1"},
-			{"n4", 1000, 1000 * MiB, 0, true, "ng1"},
-			{"n5", 1000, 1000 * MiB, 0, true, "ng1"},
-			{"n6", 1000, 1000 * MiB, 0, true, "ng1"},
-
-			{"n7", 1000, 1000 * MiB, 0, true, "ng2"},
-			{"n8", 1000, 1000 * MiB, 0, true, "ng2"},
-			{"n9", 1000, 1000 * MiB, 0, true, "ng2"},
-			{"n10", 1000, 1000 * MiB, 0, true, "ng2"},
-		},
-		options:            options,
-		expectedScaleDowns: []string{"n1", "n2", "n3", "n7"},
-		tempNodeNames:      []string{"n5", "n6"},
-	}
-	simpleScaleDownEmpty(t, config)
-}
-
-func TestScaleDownEmptyTempNodesMinSize(t *testing.T) {
-	options := defaultScaleDownOptions
-	options.MinMemoryTotal = 1000 * MiB
-	config := &scaleTestConfig{
-		nodes: []nodeConfig{
-			{"n1", 1000, 1000 * MiB, 0, true, "ng1"},
-			{"n2", 1000, 1000 * MiB, 0, true, "ng1"},
-			{"n3", 1000, 1000 * MiB, 0, true, "ng1"},
-			{"n4", 1000, 1000 * MiB, 0, true, "ng1"},
-
-			{"n6", 1000, 1000 * MiB, 0, true, "ng2"},
-			{"n7", 1000, 1000 * MiB, 0, true, "ng2"},
-			{"n8", 1000, 1000 * MiB, 0, true, "ng2"},
-			{"n9", 1000, 1000 * MiB, 0, true, "ng2"},
-
-			{"n10", 1000, 1000 * MiB, 0, true, "ng3"},
-			{"n11", 1000, 1000 * MiB, 0, true, "ng3"},
-			{"n12", 1000, 1000 * MiB, 0, true, "ng3"},
-		},
-		options:            options,
-		expectedScaleDowns: []string{"n7", "n8", "n10", "n11"},
-		tempNodeNames:      []string{"n1", "n2", "n3", "n6"},
 	}
 	simpleScaleDownEmpty(t, config)
 }
@@ -1131,12 +1080,12 @@ func TestScaleDownEmptyMinGpuLimitHit(t *testing.T) {
 	}
 	config := &scaleTestConfig{
 		nodes: []nodeConfig{
-			{"n1", 1000, 1000 * MiB, 1, true, "ng1"},
-			{"n2", 1000, 1000 * MiB, 1, true, "ng1"},
-			{"n3", 1000, 1000 * MiB, 1, true, "ng1"},
-			{"n4", 1000, 1000 * MiB, 1, true, "ng1"},
-			{"n5", 1000, 1000 * MiB, 1, true, "ng1"},
-			{"n6", 1000, 1000 * MiB, 1, true, "ng1"},
+			{"n1", 1000, 1000 * utils.MiB, 1, true, "ng1"},
+			{"n2", 1000, 1000 * utils.MiB, 1, true, "ng1"},
+			{"n3", 1000, 1000 * utils.MiB, 1, true, "ng1"},
+			{"n4", 1000, 1000 * utils.MiB, 1, true, "ng1"},
+			{"n5", 1000, 1000 * utils.MiB, 1, true, "ng1"},
+			{"n6", 1000, 1000 * utils.MiB, 1, true, "ng1"},
 		},
 		options:            options,
 		expectedScaleDowns: []string{"n1", "n2"},
@@ -1182,8 +1131,6 @@ func simpleScaleDownEmpty(t *testing.T, config *scaleTestConfig) {
 	nodes := make([]*apiv1.Node, len(config.nodes))
 	nodesMap := make(map[string]*apiv1.Node)
 	groups := make(map[string][]*apiv1.Node)
-	tempNodesPerGroup := make(map[string]int)
-	var tempNodes []*apiv1.Node
 
 	provider := testprovider.NewTestCloudProvider(nil, func(nodeGroup string, node string) error {
 		deletedNodes <- node
@@ -1200,12 +1147,6 @@ func simpleScaleDownEmpty(t *testing.T, config *scaleTestConfig) {
 		nodesMap[n.name] = node
 		nodes[i] = node
 		groups[n.group] = append(groups[n.group], node)
-		for _, tempNode := range config.tempNodeNames {
-			if tempNode == node.Name {
-				tempNodes = append(tempNodes, node)
-				tempNodesPerGroup[n.group]++
-			}
-		}
 	}
 
 	fakeClient.Fake.AddReactor("list", "pods", func(action core.Action) (bool, runtime.Object, error) {
@@ -1250,8 +1191,8 @@ func simpleScaleDownEmpty(t *testing.T, config *scaleTestConfig) {
 		scaleDown.nodeDeletionTracker = config.nodeDeletionTracker
 	}
 
-	scaleDown.UpdateUnneededNodes(nodes, nodes, nodes, []*apiv1.Pod{}, time.Now().Add(-5*time.Minute), nil, tempNodesPerGroup)
-	scaleDownStatus, err := scaleDown.TryToScaleDown(nodes, []*apiv1.Pod{}, nil, time.Now(), tempNodes, tempNodesPerGroup)
+	scaleDown.UpdateUnneededNodes(nodes, nodes, nodes, []*apiv1.Pod{}, time.Now().Add(-5*time.Minute), nil)
+	scaleDownStatus, err := scaleDown.TryToScaleDown(nodes, []*apiv1.Pod{}, nil, time.Now())
 	assert.False(t, scaleDown.nodeDeletionTracker.IsNonEmptyNodeDeleteInProgress())
 
 	assert.NoError(t, err)
@@ -1267,8 +1208,8 @@ func simpleScaleDownEmpty(t *testing.T, config *scaleTestConfig) {
 	// Report only up to 10 extra nodes found.
 	deleted := make([]string, 0, len(config.expectedScaleDowns)+10)
 	for i := 0; i < len(config.expectedScaleDowns)+10; i++ {
-		d := getStringFromChan(deletedNodes)
-		if d == nothingReturned { // a closed channel yields empty value
+		d := utils.GetStringFromChan(deletedNodes)
+		if d == utils.NothingReturned { // a closed channel yields empty value
 			break
 		}
 		deleted = append(deleted, d)
@@ -1326,8 +1267,8 @@ func TestNoScaleDownUnready(t *testing.T) {
 	clusterStateRegistry := clusterstate.NewClusterStateRegistry(provider, clusterstate.ClusterStateRegistryConfig{}, context.LogRecorder, newBackoff())
 	scaleDown := NewScaleDown(&context, clusterStateRegistry)
 	scaleDown.UpdateUnneededNodes(nodes, nodes, nodes,
-		[]*apiv1.Pod{p2}, time.Now().Add(-5*time.Minute), nil, nil)
-	scaleDownStatus, err := scaleDown.TryToScaleDown([]*apiv1.Node{n1, n2}, []*apiv1.Pod{p2}, nil, time.Now(), nil, nil)
+		[]*apiv1.Pod{p2}, time.Now().Add(-5*time.Minute), nil)
+	scaleDownStatus, err := scaleDown.TryToScaleDown([]*apiv1.Node{n1, n2}, []*apiv1.Pod{p2}, nil, time.Now())
 	waitForDeleteToFinish(t, scaleDown)
 
 	assert.NoError(t, err)
@@ -1348,14 +1289,13 @@ func TestNoScaleDownUnready(t *testing.T) {
 	context.CloudProvider = provider
 	scaleDown = NewScaleDown(&context, clusterStateRegistry)
 	scaleDown.UpdateUnneededNodes(nodes, nodes, nodes,
-		[]*apiv1.Pod{p2}, time.Now().Add(-2*time.Hour), nil, nil)
-	scaleDownStatus, err = scaleDown.TryToScaleDown([]*apiv1.Node{n1, n2}, []*apiv1.Pod{p2}, nil,
-		time.Now(), nil, nil)
+		[]*apiv1.Pod{p2}, time.Now().Add(-2*time.Hour), nil)
+	scaleDownStatus, err = scaleDown.TryToScaleDown([]*apiv1.Node{n1, n2}, []*apiv1.Pod{p2}, nil, time.Now())
 	waitForDeleteToFinish(t, scaleDown)
 
 	assert.NoError(t, err)
 	assert.Equal(t, status.ScaleDownNodeDeleteStarted, scaleDownStatus.Result)
-	assert.Equal(t, n1.Name, getStringFromChan(deletedNodes))
+	assert.Equal(t, n1.Name, utils.GetStringFromChan(deletedNodes))
 }
 
 func TestScaleDownNoMove(t *testing.T) {
@@ -1432,30 +1372,12 @@ func TestScaleDownNoMove(t *testing.T) {
 	clusterStateRegistry := clusterstate.NewClusterStateRegistry(provider, clusterstate.ClusterStateRegistryConfig{}, context.LogRecorder, newBackoff())
 	scaleDown := NewScaleDown(&context, clusterStateRegistry)
 	scaleDown.UpdateUnneededNodes(nodes, nodes, nodes,
-		[]*apiv1.Pod{p1, p2}, time.Now().Add(5*time.Minute), nil, nil)
-	scaleDownStatus, err := scaleDown.TryToScaleDown(nodes, []*apiv1.Pod{p1, p2}, nil, time.Now(), nil, nil)
+		[]*apiv1.Pod{p1, p2}, time.Now().Add(5*time.Minute), nil)
+	scaleDownStatus, err := scaleDown.TryToScaleDown(nodes, []*apiv1.Pod{p1, p2}, nil, time.Now())
 	waitForDeleteToFinish(t, scaleDown)
 
 	assert.NoError(t, err)
 	assert.Equal(t, status.ScaleDownNoUnneeded, scaleDownStatus.Result)
-}
-
-func getStringFromChan(c chan string) string {
-	select {
-	case val := <-c:
-		return val
-	case <-time.After(100 * time.Millisecond):
-		return nothingReturned
-	}
-}
-
-func getStringFromChanImmediately(c chan string) string {
-	select {
-	case val := <-c:
-		return val
-	default:
-		return nothingReturned
-	}
 }
 
 func getCountOfChan(c chan string) int {
@@ -1472,13 +1394,13 @@ func getCountOfChan(c chan string) int {
 
 func TestCalculateCoresAndMemoryTotal(t *testing.T) {
 	nodeConfigs := []nodeConfig{
-		{"n1", 2000, 7500 * MiB, 0, true, "ng1"},
-		{"n2", 2000, 7500 * MiB, 0, true, "ng1"},
-		{"n3", 2000, 7500 * MiB, 0, true, "ng1"},
-		{"n4", 12000, 8000 * MiB, 0, true, "ng1"},
-		{"n5", 16000, 7500 * MiB, 0, true, "ng1"},
-		{"n6", 8000, 6000 * MiB, 0, true, "ng1"},
-		{"n7", 6000, 16000 * MiB, 0, true, "ng1"},
+		{"n1", 2000, 7500 * utils.MiB, 0, true, "ng1"},
+		{"n2", 2000, 7500 * utils.MiB, 0, true, "ng1"},
+		{"n3", 2000, 7500 * utils.MiB, 0, true, "ng1"},
+		{"n4", 12000, 8000 * utils.MiB, 0, true, "ng1"},
+		{"n5", 16000, 7500 * utils.MiB, 0, true, "ng1"},
+		{"n6", 8000, 6000 * utils.MiB, 0, true, "ng1"},
+		{"n7", 6000, 16000 * utils.MiB, 0, true, "ng1"},
 	}
 	nodes := make([]*apiv1.Node, len(nodeConfigs))
 	for i, n := range nodeConfigs {
@@ -1498,7 +1420,7 @@ func TestCalculateCoresAndMemoryTotal(t *testing.T) {
 	coresTotal, memoryTotal := calculateScaleDownCoresMemoryTotal(nodes, time.Now())
 
 	assert.Equal(t, int64(42), coresTotal)
-	assert.Equal(t, int64(44000*MiB), memoryTotal)
+	assert.Equal(t, int64(44000*utils.MiB), memoryTotal)
 }
 
 func TestFilterOutMasters(t *testing.T) {
@@ -1684,7 +1606,7 @@ func TestSoftTaint(t *testing.T) {
 	// Test no superfluous nodes
 	nodes := []*apiv1.Node{n1000, n2000}
 	scaleDown.UpdateUnneededNodes(nodes, nodes, nodes,
-		[]*apiv1.Pod{p500, p700, p1200}, time.Now().Add(-5*time.Minute), nil, nil)
+		[]*apiv1.Pod{p500, p700, p1200}, time.Now().Add(-5*time.Minute), nil)
 	errs := scaleDown.SoftTaintUnneededNodes(getAllNodes(t, fakeClient))
 	assert.Empty(t, errs)
 	assert.False(t, hasDeletionCandidateTaint(t, fakeClient, n1000.Name))
@@ -1692,7 +1614,7 @@ func TestSoftTaint(t *testing.T) {
 
 	// Test one unneeded node
 	scaleDown.UpdateUnneededNodes(nodes, nodes, nodes,
-		[]*apiv1.Pod{p500, p1200}, time.Now().Add(-5*time.Minute), nil, nil)
+		[]*apiv1.Pod{p500, p1200}, time.Now().Add(-5*time.Minute), nil)
 	errs = scaleDown.SoftTaintUnneededNodes(getAllNodes(t, fakeClient))
 	assert.Empty(t, errs)
 	assert.True(t, hasDeletionCandidateTaint(t, fakeClient, n1000.Name))
@@ -1700,7 +1622,7 @@ func TestSoftTaint(t *testing.T) {
 
 	// Test remove soft taint
 	scaleDown.UpdateUnneededNodes(nodes, nodes, nodes,
-		[]*apiv1.Pod{p500, p700, p1200}, time.Now().Add(-5*time.Minute), nil, nil)
+		[]*apiv1.Pod{p500, p700, p1200}, time.Now().Add(-5*time.Minute), nil)
 	errs = scaleDown.SoftTaintUnneededNodes(getAllNodes(t, fakeClient))
 	assert.Empty(t, errs)
 	assert.False(t, hasDeletionCandidateTaint(t, fakeClient, n1000.Name))
@@ -1708,7 +1630,7 @@ func TestSoftTaint(t *testing.T) {
 
 	// Test bulk update taint limit
 	scaleDown.UpdateUnneededNodes(nodes, nodes, nodes,
-		[]*apiv1.Pod{}, time.Now().Add(-5*time.Minute), nil, nil)
+		[]*apiv1.Pod{}, time.Now().Add(-5*time.Minute), nil)
 	errs = scaleDown.SoftTaintUnneededNodes(getAllNodes(t, fakeClient))
 	assert.Empty(t, errs)
 	assert.Equal(t, 1, countDeletionCandidateTaints(t, fakeClient))
@@ -1718,7 +1640,7 @@ func TestSoftTaint(t *testing.T) {
 
 	// Test bulk update untaint limit
 	scaleDown.UpdateUnneededNodes(nodes, nodes, nodes,
-		[]*apiv1.Pod{p500, p700, p1200}, time.Now().Add(-5*time.Minute), nil, nil)
+		[]*apiv1.Pod{p500, p700, p1200}, time.Now().Add(-5*time.Minute), nil)
 	errs = scaleDown.SoftTaintUnneededNodes(getAllNodes(t, fakeClient))
 	assert.Empty(t, errs)
 	assert.Equal(t, 1, countDeletionCandidateTaints(t, fakeClient))
@@ -1795,7 +1717,7 @@ func TestSoftTaintTimeLimit(t *testing.T) {
 	// Test bulk taint
 	nodes := []*apiv1.Node{n1, n2}
 	scaleDown.UpdateUnneededNodes(nodes, nodes, nodes,
-		[]*apiv1.Pod{}, time.Now().Add(-5*time.Minute), nil, nil)
+		[]*apiv1.Pod{}, time.Now().Add(-5*time.Minute), nil)
 	errs := scaleDown.SoftTaintUnneededNodes(getAllNodes(t, fakeClient))
 	assert.Empty(t, errs)
 	assert.Equal(t, 2, countDeletionCandidateTaints(t, fakeClient))
@@ -1804,7 +1726,7 @@ func TestSoftTaintTimeLimit(t *testing.T) {
 
 	// Test bulk untaint
 	scaleDown.UpdateUnneededNodes(nodes, nodes, nodes,
-		[]*apiv1.Pod{p1, p2}, time.Now().Add(-5*time.Minute), nil, nil)
+		[]*apiv1.Pod{p1, p2}, time.Now().Add(-5*time.Minute), nil)
 	errs = scaleDown.SoftTaintUnneededNodes(getAllNodes(t, fakeClient))
 	assert.Empty(t, errs)
 	assert.Equal(t, 0, countDeletionCandidateTaints(t, fakeClient))
@@ -1815,7 +1737,7 @@ func TestSoftTaintTimeLimit(t *testing.T) {
 
 	// Test duration limit of bulk taint
 	scaleDown.UpdateUnneededNodes(nodes, nodes, nodes,
-		[]*apiv1.Pod{}, time.Now().Add(-5*time.Minute), nil, nil)
+		[]*apiv1.Pod{}, time.Now().Add(-5*time.Minute), nil)
 	errs = scaleDown.SoftTaintUnneededNodes(getAllNodes(t, fakeClient))
 	assert.Empty(t, errs)
 	assert.Equal(t, 1, countDeletionCandidateTaints(t, fakeClient))
@@ -1825,7 +1747,7 @@ func TestSoftTaintTimeLimit(t *testing.T) {
 
 	// Test duration limit of bulk untaint
 	scaleDown.UpdateUnneededNodes(nodes, nodes, nodes,
-		[]*apiv1.Pod{p1, p2}, time.Now().Add(-5*time.Minute), nil, nil)
+		[]*apiv1.Pod{p1, p2}, time.Now().Add(-5*time.Minute), nil)
 	errs = scaleDown.SoftTaintUnneededNodes(getAllNodes(t, fakeClient))
 	assert.Empty(t, errs)
 	assert.Equal(t, 1, countDeletionCandidateTaints(t, fakeClient))

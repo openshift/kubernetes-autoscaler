@@ -27,6 +27,7 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	"k8s.io/autoscaler/cluster-autoscaler/clusterstate"
 	"k8s.io/autoscaler/cluster-autoscaler/context"
+	core_utils "k8s.io/autoscaler/cluster-autoscaler/core/utils"
 	"k8s.io/autoscaler/cluster-autoscaler/metrics"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator"
 	"k8s.io/autoscaler/cluster-autoscaler/utils"
@@ -214,7 +215,7 @@ func calculateScaleDownCoresMemoryTotal(nodes []*apiv1.Node, timestamp time.Time
 			// Nodes being deleted do not count towards total cluster resources
 			continue
 		}
-		cores, memory := getNodeCoresAndMemory(node)
+		cores, memory := core_utils.GetNodeCoresAndMemory(node)
 
 		coresTotal += cores
 		memoryTotal += memory
@@ -297,7 +298,7 @@ func copyScaleDownResourcesLimits(source scaleDownResourcesLimits) scaleDownReso
 func computeScaleDownResourcesDelta(cp cloudprovider.CloudProvider, node *apiv1.Node, nodeGroup cloudprovider.NodeGroup, resourcesWithLimits []string) (scaleDownResourcesDelta, errors.AutoscalerError) {
 	resultScaleDownDelta := make(scaleDownResourcesDelta)
 
-	nodeCPU, nodeMemory := getNodeCoresAndMemory(node)
+	nodeCPU, nodeMemory := core_utils.GetNodeCoresAndMemory(node)
 	resultScaleDownDelta[cloudprovider.ResourceNameCores] = nodeCPU
 	resultScaleDownDelta[cloudprovider.ResourceNameMemory] = nodeMemory
 
@@ -384,11 +385,6 @@ func (sd *ScaleDown) CleanUp(timestamp time.Time) {
 	sd.usageTracker.CleanUp(timestamp.Add(-sd.context.ScaleDownUnneededTime))
 }
 
-// GetCandidatesForScaleDown gets candidates for scale down.
-func (sd *ScaleDown) GetCandidatesForScaleDown() []*apiv1.Node {
-	return sd.unneededNodesList
-}
-
 // CleanUpUnneededNodes clears the list of unneeded nodes.
 func (sd *ScaleDown) CleanUpUnneededNodes() {
 	sd.unneededNodesList = make([]*apiv1.Node, 0)
@@ -404,19 +400,17 @@ func (sd *ScaleDown) CleanUpUnneededNodes() {
 // * pods are the all scheduled pods.
 // * timestamp is the current timestamp.
 // * pdbs is a list of pod disruption budgets.
-// * tempNodesPerNodeGroup is a map of node group id and the number of temporary nodes that node group contains.
 func (sd *ScaleDown) UpdateUnneededNodes(
 	allNodes []*apiv1.Node,
 	destinationNodes []*apiv1.Node,
 	scaleDownCandidates []*apiv1.Node,
 	pods []*apiv1.Pod,
 	timestamp time.Time,
-	pdbs []*policyv1.PodDisruptionBudget,
-	tempNodesPerNodeGroup map[string]int) errors.AutoscalerError {
+	pdbs []*policyv1.PodDisruptionBudget) errors.AutoscalerError {
 
 	currentlyUnneededNodes := make([]*apiv1.Node, 0)
 	// Only scheduled non expendable pods and pods waiting for lower priority pods preemption can prevent node delete.
-	nonExpendablePods := filterOutExpendablePods(pods, sd.context.ExpendablePodsPriorityCutoff)
+	nonExpendablePods := core_utils.FilterOutExpendablePods(pods, sd.context.ExpendablePodsPriorityCutoff)
 	nodeNameToNodeInfo := scheduler_util.CreateNodeNameToInfoMap(nonExpendablePods, destinationNodes)
 	utilizationMap := make(map[string]simulator.UtilizationInfo)
 
@@ -445,7 +439,7 @@ func (sd *ScaleDown) UpdateUnneededNodes(
 		// Old-time marked nodes are again eligible for deletion - something went wrong with them
 		// and they have not been deleted.
 		if isNodeBeingDeleted(node, timestamp) {
-			klog.V(1).Infof("Skipping %s from delete considerations - the node is currently being deleted", node.Name)
+			klog.V(1).Infof("Skipping %s from delete consideration - the node is currently being deleted", node.Name)
 			continue
 		}
 
@@ -477,7 +471,7 @@ func (sd *ScaleDown) UpdateUnneededNodes(
 
 	emptyNodes := make(map[string]bool)
 
-	emptyNodesList := sd.getEmptyNodesNoResourceLimits(currentlyUnneededNodes, pods, len(currentlyUnneededNodes), tempNodesPerNodeGroup)
+	emptyNodesList := sd.getEmptyNodesNoResourceLimits(currentlyUnneededNodes, pods, len(currentlyUnneededNodes))
 	for _, node := range emptyNodesList {
 		emptyNodes[node.Name] = true
 	}
@@ -694,7 +688,7 @@ func (sd *ScaleDown) SoftTaintUnneededNodes(allNodes []*apiv1.Node) (errors []er
 // TryToScaleDown tries to scale down the cluster. It returns a result inside a ScaleDownStatus indicating if any node was
 // removed and error if such occurred.
 func (sd *ScaleDown) TryToScaleDown(allNodes []*apiv1.Node, pods []*apiv1.Pod, pdbs []*policyv1.PodDisruptionBudget,
-	currentTime time.Time, tempNodes []*apiv1.Node, tempNodesPerNodeGroup map[string]int) (*status.ScaleDownStatus, errors.AutoscalerError) {
+	currentTime time.Time) (*status.ScaleDownStatus, errors.AutoscalerError) {
 	scaleDownStatus := &status.ScaleDownStatus{NodeDeleteResults: sd.nodeDeletionTracker.GetAndClearNodeDeleteResults()}
 	nodeDeletionDuration := time.Duration(0)
 	findNodesToRemoveDuration := time.Duration(0)
@@ -711,8 +705,6 @@ func (sd *ScaleDown) TryToScaleDown(allNodes []*apiv1.Node, pods []*apiv1.Pod, p
 		scaleDownStatus.Result = status.ScaleDownError
 		return scaleDownStatus, errors.ToAutoscalerError(errors.CloudProviderError, errCP)
 	}
-
-	nodesWithoutMaster = utils.FilterOutNodes(nodesWithoutMaster, tempNodes)
 
 	scaleDownResourcesLeft := computeScaleDownResourcesLeftLimits(nodesWithoutMaster, resourceLimiter, sd.context.CloudProvider, currentTime)
 
@@ -758,9 +750,8 @@ func (sd *ScaleDown) TryToScaleDown(allNodes []*apiv1.Node, pods []*apiv1.Pod, p
 				continue
 			}
 
-			tempNodesForNg := tempNodesPerNodeGroup[nodeGroup.Id()]
 			deletionsInProgress := sd.nodeDeletionTracker.GetDeletionsInProgress(nodeGroup.Id())
-			if size-deletionsInProgress-tempNodesForNg <= nodeGroup.MinSize() {
+			if size-deletionsInProgress <= nodeGroup.MinSize() {
 				klog.V(1).Infof("Skipping %s - node group min size reached", node.Name)
 				continue
 			}
@@ -790,7 +781,7 @@ func (sd *ScaleDown) TryToScaleDown(allNodes []*apiv1.Node, pods []*apiv1.Pod, p
 	// Trying to delete empty nodes in bulk. If there are no empty nodes then CA will
 	// try to delete not-so-empty nodes, possibly killing some pods and allowing them
 	// to recreate on other nodes.
-	emptyNodes := sd.getEmptyNodes(candidates, pods, sd.context.MaxEmptyBulkDelete, scaleDownResourcesLeft, tempNodesPerNodeGroup)
+	emptyNodes := sd.getEmptyNodes(candidates, pods, sd.context.MaxEmptyBulkDelete, scaleDownResourcesLeft)
 	if len(emptyNodes) > 0 {
 		nodeDeletionStart := time.Now()
 		deletedNodes, err := sd.scheduleDeleteEmptyNodes(emptyNodes, sd.context.ClientSet, sd.context.Recorder, readinessMap, candidateNodeGroups)
@@ -811,7 +802,7 @@ func (sd *ScaleDown) TryToScaleDown(allNodes []*apiv1.Node, pods []*apiv1.Pod, p
 
 	findNodesToRemoveStart := time.Now()
 	// Only scheduled non expendable pods are taken into account and have to be moved.
-	nonExpendablePods := filterOutExpendablePods(pods, sd.context.ExpendablePodsPriorityCutoff)
+	nonExpendablePods := core_utils.FilterOutExpendablePods(pods, sd.context.ExpendablePodsPriorityCutoff)
 	// We look for only 1 node so new hints may be incomplete.
 	nodesToRemove, _, _, err := simulator.FindNodesToRemove(candidates, nodesWithoutMaster, nonExpendablePods, sd.context.ListerRegistry,
 		sd.context.PredicateChecker, 1, false,
@@ -874,18 +865,6 @@ func (sd *ScaleDown) TryToScaleDown(allNodes []*apiv1.Node, pods []*apiv1.Pod, p
 	return scaleDownStatus, nil
 }
 
-func getTempNodesPerNodeGroup(cp cloudprovider.CloudProvider, tempNodes []*apiv1.Node) map[string]int {
-	tempNodesPerNg := make(map[string]int)
-	for _, node := range tempNodes {
-		ng, err := cp.NodeGroupForNode(node)
-		if err != nil || ng == nil {
-			continue
-		}
-		tempNodesPerNg[ng.Id()]++
-	}
-	return tempNodesPerNg
-}
-
 // updateScaleDownMetrics registers duration of different parts of scale down.
 // Separates time spent on finding nodes to remove, deleting nodes and other operations.
 func updateScaleDownMetrics(scaleDownStart time.Time, findNodesToRemoveDuration *time.Duration, nodeDeletionDuration *time.Duration) {
@@ -896,14 +875,14 @@ func updateScaleDownMetrics(scaleDownStart time.Time, findNodesToRemoveDuration 
 	metrics.UpdateDuration(metrics.ScaleDownMiscOperations, miscDuration)
 }
 
-func (sd *ScaleDown) getEmptyNodesNoResourceLimits(candidates []*apiv1.Node, pods []*apiv1.Pod, maxEmptyBulkDelete int, tempNodesPerNodeGroup map[string]int) []*apiv1.Node {
-	return sd.getEmptyNodes(candidates, pods, maxEmptyBulkDelete, noScaleDownLimitsOnResources(), tempNodesPerNodeGroup)
+func (sd *ScaleDown) getEmptyNodesNoResourceLimits(candidates []*apiv1.Node, pods []*apiv1.Pod, maxEmptyBulkDelete int) []*apiv1.Node {
+	return sd.getEmptyNodes(candidates, pods, maxEmptyBulkDelete, noScaleDownLimitsOnResources())
 }
 
 // This functions finds empty nodes among passed candidates and returns a list of empty nodes
 // that can be deleted at the same time.
 func (sd *ScaleDown) getEmptyNodes(candidates []*apiv1.Node, pods []*apiv1.Pod, maxEmptyBulkDelete int,
-	resourcesLimits scaleDownResourcesLimits, temporaryNodesPerNodeGroup map[string]int) []*apiv1.Node {
+	resourcesLimits scaleDownResourcesLimits) []*apiv1.Node {
 
 	emptyNodes := simulator.FindEmptyNodesToRemove(candidates, pods)
 	availabilityMap := make(map[string]int)
@@ -928,9 +907,8 @@ func (sd *ScaleDown) getEmptyNodes(candidates []*apiv1.Node, pods []*apiv1.Pod, 
 				klog.Errorf("Failed to get size for %s: %v ", nodeGroup.Id(), err)
 				continue
 			}
-			tempNodes := temporaryNodesPerNodeGroup[nodeGroup.Id()]
 			deletionsInProgress := sd.nodeDeletionTracker.GetDeletionsInProgress(nodeGroup.Id())
-			available = size - nodeGroup.MinSize() - deletionsInProgress - tempNodes
+			available = size - nodeGroup.MinSize() - deletionsInProgress
 			if available < 0 {
 				available = 0
 			}
@@ -1142,13 +1120,13 @@ func drainNode(node *apiv1.Node, pods []*apiv1.Pod, client kube_client.Interface
 	}
 
 	// Evictions created successfully, wait maxGracefulTerminationSec + podEvictionHeadroom to see if pods really disappeared.
-	allGone := true
+	var allGone bool
 	for start := time.Now(); time.Now().Sub(start) < time.Duration(maxGracefulTerminationSec)*time.Second+podEvictionHeadroom; time.Sleep(5 * time.Second) {
 		allGone = true
 		for _, pod := range pods {
 			podreturned, err := client.CoreV1().Pods(pod.Namespace).Get(pod.Name, metav1.GetOptions{})
 			if err == nil && (podreturned == nil || podreturned.Spec.NodeName == node.Name) {
-				klog.Errorf("Not deleted yet %v", podreturned)
+				klog.Errorf("Not deleted yet %s/%s", pod.Namespace, pod.Name)
 				allGone = false
 				break
 			}

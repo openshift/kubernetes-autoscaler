@@ -6,6 +6,7 @@ approvers:
   - ingvagabund
   - bison
 reviewers:
-  - paulfantom
-  - spangenberg
-  - vikaschoudhary16
+  - enxebre
+  - frobware
+  - ingvagabund
+  - bison
