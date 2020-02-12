@@ -11,4 +11,8 @@ COPY --from=builder \
     /go/src/k8s.io/autoscaler/vertical-pod-autoscaler/updater \
     /go/src/k8s.io/autoscaler/vertical-pod-autoscaler/recommender \
     /usr/bin/
+RUN mkdir /etc/tls-certs && \
+    ln -sf /data/tls-certs/tls.key /etc/tls-certs/serverKey.pem && \
+    ln -sf /data/tls-certs/tls.crt /etc/tls-certs/serverCert.pem && \
+    ln -sf /data/tls-ca-certs/service-ca.crt /etc/tls-certs/caCert.pem
 LABEL summary="Vertical Pod Autoscaler for OpenShift and Kubernetes"
