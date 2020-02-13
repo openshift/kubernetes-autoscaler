@@ -63,6 +63,11 @@ type MachineStatus struct {
 	// NodeRef will point to the corresponding Node if it exists.
 	// +optional
 	NodeRef *corev1.ObjectReference `json:"nodeRef,omitempty"`
+
+	// Phase represents the current phase of machine actuation.
+	// E.g. Pending, Running, Terminating, Failed etc.
+	// +optional
+	Phase string `json:"phase,omitempty"`
 }
 
 // MachineList contains a list of Machine

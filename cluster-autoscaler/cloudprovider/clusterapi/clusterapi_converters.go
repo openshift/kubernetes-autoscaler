@@ -115,6 +115,10 @@ func newMachineFromUnstructured(u *unstructured.Unstructured) *Machine {
 		machine.Status.NodeRef = &nodeRef
 	}
 
+	if phase, _, _ := unstructured.NestedString(u.Object, "status", "phase"); phase != "" {
+		machine.Status.Phase = phase
+	}
+
 	return &machine
 }
 
@@ -183,6 +187,8 @@ func newUnstructuredFromMachine(m *Machine) *unstructured.Unstructured {
 			unstructured.SetNestedField(u.Object, m.Status.NodeRef.Name, "status", "nodeRef", "name")
 		}
 	}
+
+	unstructured.SetNestedField(u.Object, m.Status.Phase, "status", "phase")
 
 	return &u
 }
