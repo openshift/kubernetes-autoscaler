@@ -815,3 +815,136 @@ func TestNodeGroupMachineSetDeleteNodesWithMismatchedNodes(t *testing.T) {
 		test(t, 2, append(testConfig0, testConfig1...))
 	})
 }
+
+func TestNodeGroupDeleteNodesTwice(t *testing.T) {
+	test := func(t *testing.T, testConfig *testConfig) {
+		controller, stop := mustCreateTestController(t, testConfig)
+		defer stop()
+
+		nodegroups, err := controller.nodeGroups()
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if l := len(nodegroups); l != 1 {
+			t.Fatalf("expected 1 nodegroup, got %d", l)
+		}
+
+		ng := nodegroups[0]
+		nodeNames, err := ng.Nodes()
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if len(nodeNames) != len(testConfig.nodes) {
+			t.Fatalf("expected len=%v, got len=%v", len(testConfig.nodes), len(nodeNames))
+		}
+
+		sort.SliceStable(nodeNames, func(i, j int) bool {
+			return nodeNames[i].Id < nodeNames[j].Id
+		})
+
+		for i := 0; i < len(nodeNames); i++ {
+			if nodeNames[i].Id != testConfig.nodes[i].Spec.ProviderID {
+				t.Fatalf("expected %q, got %q", testConfig.nodes[i].Spec.ProviderID, nodeNames[i].Id)
+			}
+		}
+
+		subTest := func(t *testing.T) {
+			// Make sure the scalable resource is up to date before being called
+			switch v := (ng.scalableResource).(type) {
+			case *machineSetScalableResource:
+				updatedMachineSet, err := controller.clusterClientset.MachineV1beta1().MachineSets(testConfig.machineSet.Namespace).Get(testConfig.machineSet.Name, v1.GetOptions{})
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				sr := ng.scalableResource.(*machineSetScalableResource)
+				sr.machineSet = updatedMachineSet
+			case *machineDeploymentScalableResource:
+				updatedMachineDeployment, err := controller.clusterClientset.MachineV1beta1().MachineDeployments(testConfig.machineDeployment.Namespace).Get(testConfig.machineDeployment.Name, v1.GetOptions{})
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				sr := ng.scalableResource.(*machineDeploymentScalableResource)
+				sr.machineDeployment = updatedMachineDeployment
+			default:
+				t.Errorf("unexpected type: %T", v)
+			}
+
+			if err := ng.DeleteNodes(testConfig.nodes[7:]); err != nil {
+				t.Errorf("unexpected error: %v", err)
+			}
+
+			for i := 7; i < len(testConfig.machines); i++ {
+				machine, err := controller.clusterClientset.MachineV1beta1().Machines(testConfig.machines[i].Namespace).Get(testConfig.machines[i].Name, v1.GetOptions{})
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				if _, found := machine.Annotations[machineDeleteAnnotationKey]; !found {
+					t.Errorf("expected annotation %q on machine %s", machineDeleteAnnotationKey, machine.Name)
+				}
+				// Simulate delete that would have happened if the Machine API controllers were running
+				// Don't actually delete since the fake client does not support finalizers
+				now := v1.Now()
+				machine.DeletionTimestamp = &now
+				_, err = controller.clusterClientset.MachineV1beta1().Machines(testConfig.machines[i].Namespace).Update(machine)
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+
+				// Ensure the update worked
+				isZero := true
+				for isZero {
+					machine, err := ng.machineController.findMachineByProviderID(*machine.Spec.ProviderID)
+					if err != nil {
+						t.Fatalf("unexpected error: %v", err)
+					}
+					isZero = machine.GetDeletionTimestamp().IsZero()
+				}
+			}
+
+			switch v := (ng.scalableResource).(type) {
+			case *machineSetScalableResource:
+				updatedMachineSet, err := controller.clusterClientset.MachineV1beta1().MachineSets(testConfig.machineSet.Namespace).Get(testConfig.machineSet.Name, v1.GetOptions{})
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				if actual := pointer.Int32PtrDerefOr(updatedMachineSet.Spec.Replicas, 0); actual != 7 {
+					t.Fatalf("expected 7 nodes, got %v", actual)
+				}
+			case *machineDeploymentScalableResource:
+				updatedMachineDeployment, err := controller.clusterClientset.MachineV1beta1().MachineDeployments(testConfig.machineDeployment.Namespace).Get(testConfig.machineDeployment.Name, v1.GetOptions{})
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				if actual := pointer.Int32PtrDerefOr(updatedMachineDeployment.Spec.Replicas, 0); actual != 7 {
+					t.Fatalf("expected 7 nodes, got %v", actual)
+				}
+			default:
+				t.Errorf("unexpected type: %T", v)
+			}
+		}
+
+		t.Run("when deleting nodes for the first time", subTest)
+		t.Run("when deleting nodes for the second time", subTest)
+	}
+
+	// Note: 10 is an upper bound for the number of nodes/replicas
+	// Going beyond 10 will break the sorting that happens in the
+	// test() function because sort.Strings() will not do natural
+	// sorting and the expected semantics in test() will fail.
+
+	t.Run("MachineSet", func(t *testing.T) {
+		test(t, createMachineSetTestConfig(testNamespace, 10, map[string]string{
+			nodeGroupMinSizeAnnotationKey: "1",
+			nodeGroupMaxSizeAnnotationKey: "10",
+		}))
+	})
+
+	t.Run("MachineDeployment", func(t *testing.T) {
+		test(t, createMachineDeploymentTestConfig(testNamespace, 10, map[string]string{
+			nodeGroupMinSizeAnnotationKey: "1",
+			nodeGroupMaxSizeAnnotationKey: "10",
+		}))
+	})
+}
