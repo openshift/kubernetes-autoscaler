@@ -14,12 +14,13 @@ func newMachineDeploymentFromUnstructured(u *unstructured.Unstructured) *Machine
 			APIVersion: u.GetAPIVersion(),
 		},
 		ObjectMeta: metav1.ObjectMeta{
-			Name:            u.GetName(),
-			Namespace:       u.GetNamespace(),
-			UID:             u.GetUID(),
-			Labels:          u.GetLabels(),
-			Annotations:     u.GetAnnotations(),
-			OwnerReferences: u.GetOwnerReferences(),
+			Name:              u.GetName(),
+			Namespace:         u.GetNamespace(),
+			UID:               u.GetUID(),
+			Labels:            u.GetLabels(),
+			Annotations:       u.GetAnnotations(),
+			OwnerReferences:   u.GetOwnerReferences(),
+			DeletionTimestamp: u.GetDeletionTimestamp(),
 		},
 		Spec:   MachineDeploymentSpec{},
 		Status: MachineDeploymentStatus{},
@@ -40,12 +41,13 @@ func newMachineSetFromUnstructured(u *unstructured.Unstructured) *MachineSet {
 			APIVersion: u.GetAPIVersion(),
 		},
 		ObjectMeta: metav1.ObjectMeta{
-			Name:            u.GetName(),
-			Namespace:       u.GetNamespace(),
-			UID:             u.GetUID(),
-			Labels:          u.GetLabels(),
-			Annotations:     u.GetAnnotations(),
-			OwnerReferences: u.GetOwnerReferences(),
+			Name:              u.GetName(),
+			Namespace:         u.GetNamespace(),
+			UID:               u.GetUID(),
+			Labels:            u.GetLabels(),
+			Annotations:       u.GetAnnotations(),
+			OwnerReferences:   u.GetOwnerReferences(),
+			DeletionTimestamp: u.GetDeletionTimestamp(),
 		},
 		Spec:   MachineSetSpec{},
 		Status: MachineSetStatus{},
@@ -66,13 +68,14 @@ func newMachineFromUnstructured(u *unstructured.Unstructured) *Machine {
 			APIVersion: u.GetAPIVersion(),
 		},
 		ObjectMeta: metav1.ObjectMeta{
-			Name:            u.GetName(),
-			Namespace:       u.GetNamespace(),
-			UID:             u.GetUID(),
-			Labels:          u.GetLabels(),
-			Annotations:     u.GetAnnotations(),
-			OwnerReferences: u.GetOwnerReferences(),
-			ClusterName:     u.GetClusterName(),
+			Name:              u.GetName(),
+			Namespace:         u.GetNamespace(),
+			UID:               u.GetUID(),
+			Labels:            u.GetLabels(),
+			Annotations:       u.GetAnnotations(),
+			OwnerReferences:   u.GetOwnerReferences(),
+			ClusterName:       u.GetClusterName(),
+			DeletionTimestamp: u.GetDeletionTimestamp(),
 		},
 		Spec:   MachineSpec{},
 		Status: MachineStatus{},
@@ -110,6 +113,7 @@ func newUnstructuredFromMachineSet(m *MachineSet) *unstructured.Unstructured {
 	u.SetNamespace(m.Namespace)
 	u.SetOwnerReferences(m.OwnerReferences)
 	u.SetUID(m.UID)
+	u.SetDeletionTimestamp(m.DeletionTimestamp)
 
 	if m.Spec.Replicas != nil {
 		unstructured.SetNestedField(u.Object, int64(*m.Spec.Replicas), "spec", "replicas")
@@ -129,6 +133,7 @@ func newUnstructuredFromMachineDeployment(m *MachineDeployment) *unstructured.Un
 	u.SetNamespace(m.Namespace)
 	u.SetOwnerReferences(m.OwnerReferences)
 	u.SetUID(m.UID)
+	u.SetDeletionTimestamp(m.DeletionTimestamp)
 
 	if m.Spec.Replicas != nil {
 		unstructured.SetNestedField(u.Object, int64(*m.Spec.Replicas), "spec", "replicas")
@@ -148,6 +153,7 @@ func newUnstructuredFromMachine(m *Machine) *unstructured.Unstructured {
 	u.SetNamespace(m.Namespace)
 	u.SetOwnerReferences(m.OwnerReferences)
 	u.SetUID(m.UID)
+	u.SetDeletionTimestamp(m.DeletionTimestamp)
 
 	if m.Spec.ProviderID != nil && *m.Spec.ProviderID != "" {
 		unstructured.SetNestedField(u.Object, *m.Spec.ProviderID, "spec", "providerID")
