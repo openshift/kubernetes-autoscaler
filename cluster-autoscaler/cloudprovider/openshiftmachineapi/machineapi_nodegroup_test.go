@@ -22,9 +22,9 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	"k8s.io/utils/pointer"
 )
@@ -807,6 +807,16 @@ func TestNodeGroupMachineSetDeleteNodesWithMismatchedNodes(t *testing.T) {
 }
 
 func TestNodeGroupDeleteNodesTwice(t *testing.T) {
+	addDeletionTimestamp := func(t *testing.T, controller *machineController, machine *Machine) error {
+		// Simulate delete that would have happened if the
+		// Machine API controllers were running Don't actually
+		// delete since the fake client does not support
+		// finalizers.
+		now := v1.Now()
+		machine.DeletionTimestamp = &now
+		return controller.machineInformer.Informer().GetStore().Update(newUnstructuredFromMachine(machine))
+	}
+
 	test := func(t *testing.T, testConfig *testConfig) {
 		controller, stop := mustCreateTestController(t, testConfig)
 		defer stop()
@@ -840,86 +850,79 @@ func TestNodeGroupDeleteNodesTwice(t *testing.T) {
 			}
 		}
 
-		subTest := func(t *testing.T) {
-			// Make sure the scalable resource is up to date before being called
-			switch v := (ng.scalableResource).(type) {
-			case *machineSetScalableResource:
-				updatedMachineSet, err := controller.getMachineSet(testConfig.machineSet.Namespace, testConfig.machineSet.Name, v1.GetOptions{})
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-				sr := ng.scalableResource.(*machineSetScalableResource)
-				sr.machineSet = updatedMachineSet
-			case *machineDeploymentScalableResource:
-				updatedMachineDeployment, err := controller.getMachineDeployment(testConfig.machineDeployment.Namespace, testConfig.machineDeployment.Name, v1.GetOptions{})
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-				sr := ng.scalableResource.(*machineDeploymentScalableResource)
-				sr.machineDeployment = updatedMachineDeployment
-			default:
-				t.Errorf("unexpected type: %T", v)
-			}
-
-			if err := ng.DeleteNodes(testConfig.nodes[7:]); err != nil {
-				t.Errorf("unexpected error: %v", err)
-			}
-
-			for i := 7; i < len(testConfig.machines); i++ {
-				machine, err := controller.getMachine(testConfig.machines[i].Namespace, testConfig.machines[i].Name, v1.GetOptions{})
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-				if _, found := machine.Annotations[machineDeleteAnnotationKey]; !found {
-					t.Errorf("expected annotation %q on machine %s", machineDeleteAnnotationKey, testConfig.machines[i].Name)
-				}
-				// Simulate delete that would have happened if the Machine API controllers were running
-				// Don't actually delete since the fake client does not support finalizers
-				now := v1.Now()
-				machine.DeletionTimestamp = &now
-				if err := controller.machineInformer.Informer().GetStore().Update(newUnstructuredFromMachine(machine)); err != nil {
-					t.Fatalf("unexpected error updating machine, got %v", err)
-				}
-
-				// Ensure the update worked
-				isZero := true
-				for isZero {
-					obj, exists, err := controller.machineInformer.Informer().GetStore().Get(machine)
-					if err != nil {
-						t.Fatalf("unexpected error: %v", err)
-					}
-					if !exists {
-						t.Fatalf("expected machine to exist")
-					}
-					machine := newMachineFromUnstructured((obj).(*unstructured.Unstructured))
-					isZero = machine.GetDeletionTimestamp().IsZero()
-				}
-			}
-
-			switch v := (ng.scalableResource).(type) {
-			case *machineSetScalableResource:
-				updatedMachineSet, err := ng.machineController.getMachineSet(testConfig.machineSet.Namespace, testConfig.machineSet.Name, v1.GetOptions{})
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-				if actual := pointer.Int32PtrDerefOr(updatedMachineSet.Spec.Replicas, 0); actual != 7 {
-					t.Fatalf("expected 7 nodes, got %v", actual)
-				}
-			case *machineDeploymentScalableResource:
-				updatedMachineDeployment, err := ng.machineController.getMachineDeployment(testConfig.machineDeployment.Namespace, testConfig.machineDeployment.Name, v1.GetOptions{})
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-				if actual := pointer.Int32PtrDerefOr(updatedMachineDeployment.Spec.Replicas, 0); actual != 7 {
-					t.Fatalf("expected 7 nodes, got %v", actual)
-				}
-			default:
-				t.Errorf("unexpected type: %T", v)
+		// Assert that we have no DeletionTimestamp
+		for i := 7; i < len(testConfig.machines); i++ {
+			if !testConfig.machines[i].ObjectMeta.DeletionTimestamp.IsZero() {
+				t.Fatalf("unexpected DeletionTimestamp")
 			}
 		}
 
-		t.Run("when deleting nodes for the first time", subTest)
-		t.Run("when deleting nodes for the second time", subTest)
+		if err := ng.DeleteNodes(testConfig.nodes[7:]); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		for i := 7; i < len(testConfig.machines); i++ {
+			if err := addDeletionTimestamp(t, controller, testConfig.machines[i]); err != nil {
+				t.Fatalf("unexpected err: %v", err)
+			}
+			if testConfig.machines[i].ObjectMeta.DeletionTimestamp.IsZero() {
+				t.Fatalf("expected a DeletionTimestamp")
+			}
+		}
+
+		// TODO(frobware) We have a flaky test here because we
+		// just called Delete and Update and the next call to
+		// controller.nodeGroups() will sometimes get stale
+		// objects from the (fakeclient) store. To fix this we
+		// should update the test machinery so that individual
+		// tests can have callbacks on Add/Update/Delete on
+		// each of the respective informers. We should then
+		// override those callbacks here in this test to add
+		// rendezvous points so that we wait until all objects
+		// have been updated before we go and get them again.
+		//
+		// Running this test with a 500ms duration I see:
+		//
+		// $ ./stress ./openshiftmachineapi.test -test.run TestNodeGroupDeleteNodesTwice -test.count 5 | ts | ts -i
+		// 00:00:05 Feb 27 14:29:36 0 runs so far, 0 failures
+		// 00:00:05 Feb 27 14:29:41 8 runs so far, 0 failures
+		// 00:00:05 Feb 27 14:29:46 16 runs so far, 0 failures
+		// 00:00:05 Feb 27 14:29:51 24 runs so far, 0 failures
+		// 00:00:05 Feb 27 14:29:56 32 runs so far, 0 failures
+		// ...
+		// 00:00:05 Feb 27 14:31:01 112 runs so far, 0 failures
+		// 00:00:05 Feb 27 14:31:06 120 runs so far, 0 failures
+		// 00:00:05 Feb 27 14:31:11 128 runs so far, 0 failures
+		// 00:00:05 Feb 27 14:31:16 136 runs so far, 0 failures
+		// 00:00:05 Feb 27 14:31:21 144 runs so far, 0 failures
+		//
+		// To make sure we don't run into any flakes in CI
+		// I've chosen to make this sleep duration 3s.
+		time.Sleep(3 * time.Second)
+
+		nodegroups, err = controller.nodeGroups()
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		ng = nodegroups[0]
+
+		// Attempt to delete the nodes again which verifies
+		// that nodegroup.DeleteNodes() skips over nodes that
+		// have a non-nil DeletionTimestamp value.
+		if err := ng.DeleteNodes(testConfig.nodes[7:]); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		actualSize, err := ng.TargetSize()
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		expectedSize := len(testConfig.machines) - len(testConfig.machines[7:])
+		if actualSize != expectedSize {
+			t.Fatalf("expected %d nodes, got %d", expectedSize, actualSize)
+		}
 	}
 
 	// Note: 10 is an upper bound for the number of nodes/replicas
