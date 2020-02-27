@@ -26,14 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
-// +genclient
-// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
-
-/// [MachineSet]
 // MachineSet ensures that a specified number of machines replicas are running at any given time.
-// +k8s:openapi-gen=true
-// +kubebuilder:subresource:status
-// +kubebuilder:subresource:scale:specpath=.spec.replicas,statuspath=.status.replicas,selectorpath=.status.labelSelector
 type MachineSet struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -42,9 +35,6 @@ type MachineSet struct {
 	Status MachineSetStatus `json:"status,omitempty"`
 }
 
-/// [MachineSet]
-
-/// [MachineSetSpec]
 // MachineSetSpec defines the desired state of MachineSet
 type MachineSetSpec struct {
 	// Replicas is the number of desired replicas.
@@ -70,9 +60,6 @@ type MachineSetSpec struct {
 	Template MachineTemplateSpec `json:"template,omitempty"`
 }
 
-/// [MachineSetSpec] // doxygen marker
-
-/// [MachineTemplateSpec] // doxygen marker
 // MachineTemplateSpec describes the data needed to create a Machine from a template
 type MachineTemplateSpec struct {
 	// Standard object's metadata.
@@ -86,9 +73,6 @@ type MachineTemplateSpec struct {
 	Spec MachineSpec `json:"spec,omitempty"`
 }
 
-/// [MachineTemplateSpec]
-
-/// [MachineSetStatus]
 // MachineSetStatus defines the observed state of MachineSet
 type MachineSetStatus struct {
 	// Replicas is the most recently observed number of replicas.
@@ -134,8 +118,7 @@ type MachineSetStatus struct {
 	ErrorMessage *string `json:"errorMessage,omitempty"`
 }
 
-/// [MachineSetStatus]
-
+// Validate validates
 func (m *MachineSet) Validate() field.ErrorList {
 	errors := field.ErrorList{}
 
@@ -158,7 +141,8 @@ func (m *MachineSet) Validate() field.ErrorList {
 	return errors
 }
 
-// DefaultingFunction sets default MachineSet field values
+// Default is a DefaultingFunction that sets default MachineSet field
+// values.
 func (m *MachineSet) Default() {
 	log.Printf("Defaulting fields for MachineSet %s\n", m.Name)
 

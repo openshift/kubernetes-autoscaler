@@ -21,7 +21,6 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
-/// [MachineDeploymentSpec]
 // MachineDeploymentSpec defines the desired state of MachineDeployment
 type MachineDeploymentSpec struct {
 	// Number of desired machines. Defaults to 1.
@@ -68,7 +67,6 @@ type MachineDeploymentSpec struct {
 
 /// [MachineDeploymentSpec]
 
-/// [MachineDeploymentStrategy]
 // MachineDeploymentStrategy describes how to replace existing machines
 // with new ones.
 type MachineDeploymentStrategy struct {
@@ -84,10 +82,7 @@ type MachineDeploymentStrategy struct {
 	RollingUpdate *MachineRollingUpdateDeployment `json:"rollingUpdate,omitempty"`
 }
 
-/// [MachineDeploymentStrategy]
-
-/// [MachineRollingUpdateDeployment]
-// Spec to control the desired behavior of rolling update.
+// MachineRollingUpdateDeployment Spec to control the desired behavior of rolling update.
 type MachineRollingUpdateDeployment struct {
 	// The maximum number of machines that can be unavailable during the update.
 	// Value can be an absolute number (ex: 5) or a percentage of desired
@@ -121,9 +116,6 @@ type MachineRollingUpdateDeployment struct {
 	MaxSurge *intstr.IntOrString `json:"maxSurge,omitempty" protobuf:"bytes,2,opt,name=maxSurge"`
 }
 
-/// [MachineRollingUpdateDeployment]
-
-/// [MachineDeploymentStatus]
 // MachineDeploymentStatus defines the observed state of MachineDeployment
 type MachineDeploymentStatus struct {
 	// The generation observed by the deployment controller.
@@ -158,16 +150,7 @@ type MachineDeploymentStatus struct {
 	UnavailableReplicas int32 `json:"unavailableReplicas,omitempty" protobuf:"varint,5,opt,name=unavailableReplicas"`
 }
 
-/// [MachineDeploymentStatus]
-
-// +genclient
-// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
-
-/// [MachineDeployment]
 // MachineDeployment is the Schema for the machinedeployments API
-// +k8s:openapi-gen=true
-// +kubebuilder:subresource:status
-// +kubebuilder:subresource:scale:specpath=.spec.replicas,statuspath=.status.replicas,selectorpath=.status.labelSelector
 type MachineDeployment struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -175,10 +158,6 @@ type MachineDeployment struct {
 	Spec   MachineDeploymentSpec   `json:"spec,omitempty"`
 	Status MachineDeploymentStatus `json:"status,omitempty"`
 }
-
-/// [MachineDeployment]
-
-// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 
 // MachineDeploymentList contains a list of MachineDeployment
 type MachineDeploymentList struct {

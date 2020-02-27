@@ -17,12 +17,9 @@ limitations under the License.
 package openshiftmachineapi
 
 import (
-	"fmt"
-
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
 const (
@@ -34,13 +31,7 @@ const (
 	MachineClusterIDLabel = "machine.openshift.io/cluster-api-cluster"
 )
 
-// +genclient
-// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
-
-/// [Machine]
 // Machine is the Schema for the machines API
-// +k8s:openapi-gen=true
-// +kubebuilder:subresource:status
 type Machine struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -49,9 +40,6 @@ type Machine struct {
 	Status MachineStatus `json:"status,omitempty"`
 }
 
-/// [Machine]
-
-/// [MachineSpec]
 // MachineSpec defines the desired state of Machine
 type MachineSpec struct {
 	// ObjectMeta will autopopulate the Node created. Use this to
@@ -84,9 +72,6 @@ type MachineSpec struct {
 	ProviderID *string `json:"providerID,omitempty"`
 }
 
-/// [MachineSpec]
-
-/// [MachineStatus]
 // MachineStatus defines the observed state of Machine
 type MachineStatus struct {
 	// NodeRef will point to the corresponding Node if it exists.
@@ -177,23 +162,22 @@ type LastOperation struct {
 }
 
 /// [MachineVersionInfo]
+// func (m *Machine) Validate() field.ErrorList {
+// 	errors := field.ErrorList{}
 
-func (m *Machine) Validate() field.ErrorList {
-	errors := field.ErrorList{}
+// 	// validate spec.labels
+// 	fldPath := field.NewPath("spec")
+// 	if m.Labels[MachineClusterIDLabel] == "" {
+// 		errors = append(errors, field.Invalid(fldPath.Child("labels"), m.Labels, fmt.Sprintf("missing %v label.", MachineClusterIDLabel)))
+// 	}
 
-	// validate spec.labels
-	fldPath := field.NewPath("spec")
-	if m.Labels[MachineClusterIDLabel] == "" {
-		errors = append(errors, field.Invalid(fldPath.Child("labels"), m.Labels, fmt.Sprintf("missing %v label.", MachineClusterIDLabel)))
-	}
+// 	// validate provider config is set
+// 	if m.Spec.ProviderSpec.Value == nil {
+// 		errors = append(errors, field.Invalid(fldPath.Child("spec").Child("providerspec"), m.Spec.ProviderSpec, "value field must be set"))
+// 	}
 
-	// validate provider config is set
-	if m.Spec.ProviderSpec.Value == nil {
-		errors = append(errors, field.Invalid(fldPath.Child("spec").Child("providerspec"), m.Spec.ProviderSpec, "value field must be set"))
-	}
-
-	return errors
-}
+// 	return errors
+// }
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 
