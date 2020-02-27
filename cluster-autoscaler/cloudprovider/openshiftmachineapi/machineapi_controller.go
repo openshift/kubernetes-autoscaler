@@ -37,6 +37,7 @@ import (
 const (
 	machineProviderIDIndex = "openshiftmachineapi-machineProviderIDIndex"
 	nodeProviderIDIndex    = "openshiftmachineapi-nodeProviderIDIndex"
+	defaultMachineAPI      = "v1beta1.machine.openshift.io"
 )
 
 // machineController watches for Nodes, Machines, MachineSets and
@@ -284,14 +285,15 @@ func newMachineController(
 	kubeInformerFactory := kubeinformers.NewSharedInformerFactory(kubeclient, 0)
 	informerFactory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(dynamicclient, 0, metav1.NamespaceAll, nil)
 
-	machineDeploymentResource, _ := schema.ParseResourceArg("machinedeployments.v1beta1.machine.openshift.io")
+	// TODO(alberto): let environment variable to override defaultMachineAPI
+	machineDeploymentResource, _ := schema.ParseResourceArg(fmt.Sprintf("machinedeployments.%v", defaultMachineAPI))
 
-	machineSetResource, _ := schema.ParseResourceArg("machinesets.v1beta1.machine.openshift.io")
+	machineSetResource, _ := schema.ParseResourceArg(fmt.Sprintf("machinesets.%v", defaultMachineAPI))
 	if machineSetResource == nil {
 		panic("MachineSetResource")
 	}
 
-	machineResource, _ := schema.ParseResourceArg("machines.v1beta1.machine.openshift.io")
+	machineResource, _ := schema.ParseResourceArg(fmt.Sprintf("machines.%v", defaultMachineAPI))
 	if machineResource == nil {
 		panic("machineResource")
 	}
