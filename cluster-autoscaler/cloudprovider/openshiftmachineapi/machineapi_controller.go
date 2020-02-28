@@ -18,6 +18,7 @@ package openshiftmachineapi
 
 import (
 	"fmt"
+	"os"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -35,9 +36,10 @@ import (
 )
 
 const (
-	machineProviderIDIndex = "openshiftmachineapi-machineProviderIDIndex"
-	nodeProviderIDIndex    = "openshiftmachineapi-nodeProviderIDIndex"
-	defaultMachineAPI      = "v1beta1.machine.openshift.io"
+	machineProviderIDIndex        = "openshiftmachineapi-machineProviderIDIndex"
+	nodeProviderIDIndex           = "openshiftmachineapi-nodeProviderIDIndex"
+	defaultMachineAPIVersionGroup = "v1beta1.machine.openshift.io"
+	machineAPIVersionGroupEnvVar  = "MACHINEAPI_VERSION_GROUP"
 )
 
 // machineController watches for Nodes, Machines, MachineSets and
@@ -274,6 +276,19 @@ func (c *machineController) machinesInMachineSet(machineSet *MachineSet) ([]*Mac
 	return result, nil
 }
 
+// getAPIVersionGroup returns a string that specifies the version and
+// group for the API. It will return either the value from the
+// MACHINEAPI_VERSION_GROUP environment variable, or the default
+// value. This value will be a string in the format of "version.group".
+func getAPIVersionGroup() string {
+	vg := os.Getenv(machineAPIVersionGroupEnvVar)
+	if vg == "" {
+		vg = defaultMachineAPIVersionGroup
+	}
+	klog.V(4).Infof("Using API Version Group %v", vg)
+	return vg
+}
+
 // newMachineController constructs a controller that watches Nodes,
 // Machines and MachineSet as they are added, updated and deleted on
 // the cluster.
@@ -285,15 +300,16 @@ func newMachineController(
 	kubeInformerFactory := kubeinformers.NewSharedInformerFactory(kubeclient, 0)
 	informerFactory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(dynamicclient, 0, metav1.NamespaceAll, nil)
 
-	// TODO(alberto): let environment variable to override defaultMachineAPI
-	machineDeploymentResource, _ := schema.ParseResourceArg(fmt.Sprintf("machinedeployments.%v", defaultMachineAPI))
+	specifiedMachineAPI := getAPIVersionGroup()
 
-	machineSetResource, _ := schema.ParseResourceArg(fmt.Sprintf("machinesets.%v", defaultMachineAPI))
+	machineDeploymentResource, _ := schema.ParseResourceArg(fmt.Sprintf("machinedeployments.%v", specifiedMachineAPI))
+
+	machineSetResource, _ := schema.ParseResourceArg(fmt.Sprintf("machinesets.%v", specifiedMachineAPI))
 	if machineSetResource == nil {
 		panic("MachineSetResource")
 	}
 
-	machineResource, _ := schema.ParseResourceArg(fmt.Sprintf("machines.%v", defaultMachineAPI))
+	machineResource, _ := schema.ParseResourceArg(fmt.Sprintf("machines.%v", specifiedMachineAPI))
 	if machineResource == nil {
 		panic("machineResource")
 	}
