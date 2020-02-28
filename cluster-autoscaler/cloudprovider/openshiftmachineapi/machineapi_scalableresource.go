@@ -43,4 +43,7 @@ type scalableResource interface {
 
 	// Replicas returns the current replica count of the resource
 	Replicas() int32
+
+	// MarkMachineForDeletion marks machine for deletion
+	MarkMachineForDeletion(machine *Machine) error
 }

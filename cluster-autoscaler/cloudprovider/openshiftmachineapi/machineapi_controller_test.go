@@ -24,13 +24,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/openshift/cluster-api/pkg/apis/machine/v1beta1"
-	fakeclusterapi "github.com/openshift/cluster-api/pkg/client/clientset_generated/clientset/fake"
 	corev1 "k8s.io/api/core/v1"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	fakedynamic "k8s.io/client-go/dynamic/fake"
 	fakekube "k8s.io/client-go/kubernetes/fake"
 	"k8s.io/utils/pointer"
 )
@@ -39,9 +38,9 @@ type testControllerShutdownFunc func()
 
 type testConfig struct {
 	spec              *testSpec
-	machineDeployment *v1beta1.MachineDeployment
-	machineSet        *v1beta1.MachineSet
-	machines          []*v1beta1.Machine
+	machineDeployment *MachineDeployment
+	machineSet        *MachineSet
+	machines          []*Machine
 	nodes             []*corev1.Node
 }
 
@@ -66,18 +65,18 @@ func mustCreateTestController(t *testing.T, testConfigs ...*testConfig) (*machin
 		}
 
 		for i := range config.machines {
-			machineObjects = append(machineObjects, config.machines[i])
+			machineObjects = append(machineObjects, newUnstructuredFromMachine(config.machines[i]))
 		}
 
-		machineObjects = append(machineObjects, config.machineSet)
+		machineObjects = append(machineObjects, newUnstructuredFromMachineSet(config.machineSet))
 		if config.machineDeployment != nil {
-			machineObjects = append(machineObjects, config.machineDeployment)
+			machineObjects = append(machineObjects, newUnstructuredFromMachineDeployment(config.machineDeployment))
 		}
 	}
 
 	kubeclientSet := fakekube.NewSimpleClientset(nodeObjects...)
-	clusterclientSet := fakeclusterapi.NewSimpleClientset(machineObjects...)
-	controller, err := newMachineController(kubeclientSet, clusterclientSet, true)
+	dynamicClientset := fakedynamic.NewSimpleDynamicClient(runtime.NewScheme(), machineObjects...)
+	controller, err := newMachineController(dynamicClientset, kubeclientSet, true)
 	if err != nil {
 		t.Fatal("failed to create test controller")
 	}
@@ -132,12 +131,13 @@ func createTestConfigs(specs ...testSpec) []*testConfig {
 		config := &testConfig{
 			spec:     &specs[i],
 			nodes:    make([]*corev1.Node, spec.nodeCount),
-			machines: make([]*v1beta1.Machine, spec.nodeCount),
+			machines: make([]*Machine, spec.nodeCount),
 		}
 
-		config.machineSet = &v1beta1.MachineSet{
+		config.machineSet = &MachineSet{
 			TypeMeta: v1.TypeMeta{
-				Kind: "MachineSet",
+				APIVersion: "machine.openshift.io/v1beta1",
+				Kind:       "MachineSet",
 			},
 			ObjectMeta: v1.ObjectMeta{
 				Name:      spec.machineSetName,
@@ -150,9 +150,10 @@ func createTestConfigs(specs ...testSpec) []*testConfig {
 			config.machineSet.ObjectMeta.Annotations = spec.annotations
 			config.machineSet.Spec.Replicas = int32ptr(int32(spec.nodeCount))
 		} else {
-			config.machineDeployment = &v1beta1.MachineDeployment{
+			config.machineDeployment = &MachineDeployment{
 				TypeMeta: v1.TypeMeta{
-					Kind: "MachineDeployment",
+					APIVersion: "machine.openshift.io/v1beta1",
+					Kind:       "MachineDeployment",
 				},
 				ObjectMeta: v1.ObjectMeta{
 					Name:        spec.machineDeploymentName,
@@ -160,7 +161,7 @@ func createTestConfigs(specs ...testSpec) []*testConfig {
 					UID:         types.UID(spec.machineDeploymentName),
 					Annotations: spec.annotations,
 				},
-				Spec: v1beta1.MachineDeploymentSpec{
+				Spec: MachineDeploymentSpec{
 					Replicas: int32ptr(int32(spec.nodeCount)),
 				},
 			}
@@ -192,7 +193,7 @@ func createTestConfigs(specs ...testSpec) []*testConfig {
 // makeLinkedNodeAndMachine creates a node and machine. The machine
 // has its NodeRef set to the new node and the new machine's owner
 // reference is set to owner.
-func makeLinkedNodeAndMachine(i int, namespace string, owner v1.OwnerReference) (*corev1.Node, *v1beta1.Machine) {
+func makeLinkedNodeAndMachine(i int, namespace string, owner v1.OwnerReference) (*corev1.Node, *Machine) {
 	node := &corev1.Node{
 		TypeMeta: v1.TypeMeta{
 			Kind: "Node",
@@ -208,9 +209,10 @@ func makeLinkedNodeAndMachine(i int, namespace string, owner v1.OwnerReference) 
 		},
 	}
 
-	machine := &v1beta1.Machine{
+	machine := &Machine{
 		TypeMeta: v1.TypeMeta{
-			Kind: "Machine",
+			APIVersion: "machine.openshift.io/v1beta1",
+			Kind:       "Machine",
 		},
 		ObjectMeta: v1.ObjectMeta{
 			Name:      fmt.Sprintf("%s-%s-machine-%d", namespace, owner.Name, i),
@@ -221,10 +223,10 @@ func makeLinkedNodeAndMachine(i int, namespace string, owner v1.OwnerReference) 
 				UID:  owner.UID,
 			}},
 		},
-		Spec: v1beta1.MachineSpec{
+		Spec: MachineSpec{
 			ProviderID: pointer.StringPtr(fmt.Sprintf("%s-%s-nodeid-%d", namespace, owner.Name, i)),
 		},
-		Status: v1beta1.MachineStatus{
+		Status: MachineStatus{
 			NodeRef: &corev1.ObjectReference{
 				Kind: node.Kind,
 				Name: node.Name,
@@ -244,15 +246,16 @@ func addTestConfigs(t *testing.T, controller *machineController, testConfigs ...
 
 	for _, config := range testConfigs {
 		if config.machineDeployment != nil {
-			if err := controller.machineDeploymentInformer.Informer().GetStore().Add(config.machineDeployment); err != nil {
+
+			if err := controller.machineDeploymentInformer.Informer().GetStore().Add(newUnstructuredFromMachineDeployment(config.machineDeployment)); err != nil {
 				return err
 			}
 		}
-		if err := controller.machineSetInformer.Informer().GetStore().Add(config.machineSet); err != nil {
+		if err := controller.machineSetInformer.Informer().GetStore().Add(newUnstructuredFromMachineSet(config.machineSet)); err != nil {
 			return err
 		}
 		for i := range config.machines {
-			if err := controller.machineInformer.Informer().GetStore().Add(config.machines[i]); err != nil {
+			if err := controller.machineInformer.Informer().GetStore().Add(newUnstructuredFromMachine(config.machines[i])); err != nil {
 				return err
 			}
 		}
@@ -425,6 +428,7 @@ func TestControllerFindMachineByProviderID(t *testing.T) {
 	if machine == nil {
 		t.Fatal("expected to find machine")
 	}
+
 	if !reflect.DeepEqual(machine, testConfig.machines[0]) {
 		t.Fatalf("expected machines to be equal - expected %+v, got %+v", testConfig.machines[0], machine)
 	}
@@ -495,12 +499,12 @@ func TestControllerMachinesInMachineSet(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	machinesInTestObjs1, err := controller.machineInformer.Lister().Machines(testConfig1.spec.namespace).List(labels.Everything())
+	machinesInTestObjs1, err := controller.listMachines(testConfig1.spec.namespace, labels.Everything())
 	if err != nil {
 		t.Fatalf("error listing machines: %v", err)
 	}
 
-	machinesInTestObjs2, err := controller.machineInformer.Lister().Machines(testConfig2.spec.namespace).List(labels.Everything())
+	machinesInTestObjs2, err := controller.listMachines(testConfig2.spec.namespace, labels.Everything())
 	if err != nil {
 		t.Fatalf("error listing machines: %v", err)
 	}
@@ -578,7 +582,7 @@ func TestControllerNodeGroupForNodeWithMissingMachineOwner(t *testing.T) {
 
 		machine := testConfig.machines[0].DeepCopy()
 		machine.OwnerReferences = []v1.OwnerReference{}
-		if err := controller.machineInformer.Informer().GetStore().Update(machine); err != nil {
+		if err := controller.machineInformer.Informer().GetStore().Update(newUnstructuredFromMachine(machine)); err != nil {
 			t.Fatalf("unexpected error updating machine, got %v", err)
 		}
 
@@ -814,7 +818,7 @@ func TestControllerFindMachineFromNodeAnnotation(t *testing.T) {
 	// searching using the annotation on the node object.
 	for _, machine := range testConfig.machines {
 		machine.Spec.ProviderID = nil
-		if err := controller.machineInformer.Informer().GetStore().Update(machine); err != nil {
+		if err := controller.machineInformer.Informer().GetStore().Update(newUnstructuredFromMachine(machine)); err != nil {
 			t.Fatalf("unexpected error updating machine, got %v", err)
 		}
 	}
@@ -859,13 +863,13 @@ func TestControllerMachineSetNodeNamesWithoutLinkage(t *testing.T) {
 	// Remove all linkage between node and machine.
 	for _, machine := range testConfig.machines {
 		machine.Spec.ProviderID = nil
-		if err := controller.machineInformer.Informer().GetStore().Update(machine); err != nil {
+		if err := controller.machineInformer.Informer().GetStore().Update(newUnstructuredFromMachine(machine)); err != nil {
 			t.Fatalf("unexpected error updating machine, got %v", err)
 		}
 	}
 	for _, machine := range testConfig.machines {
 		machine.Status.NodeRef = nil
-		if err := controller.machineInformer.Informer().GetStore().Update(machine); err != nil {
+		if err := controller.machineInformer.Informer().GetStore().Update(newUnstructuredFromMachine(machine)); err != nil {
 			t.Fatalf("unexpected error updating machine, got %v", err)
 		}
 	}
@@ -905,7 +909,7 @@ func TestControllerMachineSetNodeNamesUsingProviderID(t *testing.T) {
 	// ID for lookups.
 	for _, machine := range testConfig.machines {
 		machine.Status.NodeRef = nil
-		if err := controller.machineInformer.Informer().GetStore().Update(machine); err != nil {
+		if err := controller.machineInformer.Informer().GetStore().Update(newUnstructuredFromMachine(machine)); err != nil {
 			t.Fatalf("unexpected error updating machine, got %v", err)
 		}
 	}
@@ -954,7 +958,7 @@ func TestControllerMachineSetNodeNamesUsingStatusNodeRefName(t *testing.T) {
 	// searching using Status.NodeRef.Name.
 	for _, machine := range testConfig.machines {
 		machine.Spec.ProviderID = nil
-		if err := controller.machineInformer.Informer().GetStore().Update(machine); err != nil {
+		if err := controller.machineInformer.Informer().GetStore().Update(newUnstructuredFromMachine(machine)); err != nil {
 			t.Fatalf("unexpected error updating machine, got %v", err)
 		}
 	}
