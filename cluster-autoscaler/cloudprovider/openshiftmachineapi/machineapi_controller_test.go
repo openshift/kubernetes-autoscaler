@@ -30,8 +30,10 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	fakediscovery "k8s.io/client-go/discovery/fake"
 	fakedynamic "k8s.io/client-go/dynamic/fake"
 	fakekube "k8s.io/client-go/kubernetes/fake"
+	clientgotesting "k8s.io/client-go/testing"
 	"k8s.io/utils/pointer"
 )
 
@@ -77,7 +79,19 @@ func mustCreateTestController(t *testing.T, testConfigs ...*testConfig) (*machin
 
 	kubeclientSet := fakekube.NewSimpleClientset(nodeObjects...)
 	dynamicClientset := fakedynamic.NewSimpleDynamicClient(runtime.NewScheme(), machineObjects...)
-	controller, err := newMachineController(dynamicClientset, kubeclientSet, true)
+	discoveryClient := &fakediscovery.FakeDiscovery{
+		Fake: &clientgotesting.Fake{
+			Resources: []*v1.APIResourceList{
+				{
+					GroupVersion: "machine.openshift.io/v1beta1",
+				},
+				{
+					GroupVersion: "cluster.x-k8s.io/v1alpha3",
+				},
+			},
+		},
+	}
+	controller, err := newMachineController(dynamicClientset, kubeclientSet, discoveryClient, true)
 	if err != nil {
 		t.Fatal("failed to create test controller")
 	}
@@ -994,22 +1008,22 @@ func TestControllerMachineSetNodeNamesUsingStatusNodeRefName(t *testing.T) {
 }
 
 func TestControllerGetAPIVersionGroup(t *testing.T) {
-	expected := "myversion.mygroup"
-	err := os.Setenv(machineAPIVersionGroupEnvVar, expected)
+	expected := "mygroup"
+	err := os.Setenv(machineAPIGroupEnvVar, expected)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	observed := getAPIVersionGroup()
+	observed := getMachineAPIGroup()
 	if observed != expected {
 		t.Fatalf("Wrong Version Group detected, expected %q, got %q", expected, observed)
 	}
 
-	expected = defaultMachineAPIVersionGroup
-	err = os.Setenv(machineAPIVersionGroupEnvVar, "")
+	expected = defaultMachineAPIGroup
+	err = os.Setenv(machineAPIGroupEnvVar, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	observed = getAPIVersionGroup()
+	observed = getMachineAPIGroup()
 	if observed != expected {
 		t.Fatalf("Wrong Version Group detected, expected %q, got %q", expected, observed)
 	}
@@ -1020,13 +1034,13 @@ func TestControllerGetAPIVersionGroupWithMachineSets(t *testing.T) {
 		nodeGroupMinSizeAnnotationKey: "1",
 		nodeGroupMaxSizeAnnotationKey: "1",
 	})
-	err := os.Setenv(machineAPIVersionGroupEnvVar, "myversion.mygroup.io")
+	err := os.Setenv(machineAPIGroupEnvVar, "cluster.x-k8s.io")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	testConfig.machineSet.TypeMeta.APIVersion = "mygroup.io/myversion"
+	testConfig.machineSet.TypeMeta.APIVersion = "cluster.x-k8s.io/v1alpha3"
 	for _, machine := range testConfig.machines {
-		machine.TypeMeta.APIVersion = "mygroup.io/myversion"
+		machine.TypeMeta.APIVersion = "cluster.x-k8s.io/v1alpha3"
 	}
 	controller, stop := mustCreateTestController(t, testConfig)
 	defer stop()
@@ -1047,7 +1061,7 @@ func TestControllerGetAPIVersionGroupWithMachineSets(t *testing.T) {
 		t.Fatalf("Incorrect number of Machines, expected 1, got %d", l)
 	}
 
-	err = os.Setenv(machineAPIVersionGroupEnvVar, "")
+	err = os.Setenv(machineAPIGroupEnvVar, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1058,14 +1072,15 @@ func TestControllerGetAPIVersionGroupWithMachineDeployments(t *testing.T) {
 		nodeGroupMinSizeAnnotationKey: "1",
 		nodeGroupMaxSizeAnnotationKey: "1",
 	})
-	err := os.Setenv(machineAPIVersionGroupEnvVar, "myversion.mygroup.io")
+	err := os.Setenv(machineAPIGroupEnvVar, "cluster.x-k8s.io")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	testConfig.machineDeployment.TypeMeta.APIVersion = "mygroup.io/myversion"
-	testConfig.machineSet.TypeMeta.APIVersion = "mygroup.io/myversion"
+
+	testConfig.machineDeployment.TypeMeta.APIVersion = "cluster.x-k8s.io/v1alpha3"
+	testConfig.machineSet.TypeMeta.APIVersion = "cluster.x-k8s.io/v1alpha3"
 	for _, machine := range testConfig.machines {
-		machine.TypeMeta.APIVersion = "mygroup.io/myversion"
+		machine.TypeMeta.APIVersion = "cluster.x-k8s.io/v1alpha3"
 	}
 	controller, stop := mustCreateTestController(t, testConfig)
 	defer stop()
@@ -1094,7 +1109,7 @@ func TestControllerGetAPIVersionGroupWithMachineDeployments(t *testing.T) {
 		t.Fatalf("Incorrect number of Machines, expected 1, got %d", l)
 	}
 
-	err = os.Setenv(machineAPIVersionGroupEnvVar, "")
+	err = os.Setenv(machineAPIGroupEnvVar, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
