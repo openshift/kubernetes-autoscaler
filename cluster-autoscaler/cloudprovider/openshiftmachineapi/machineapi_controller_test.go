@@ -18,6 +18,7 @@ package openshiftmachineapi
 
 import (
 	"fmt"
+	"os"
 	"path"
 	"reflect"
 	"sort"
@@ -989,5 +990,112 @@ func TestControllerMachineSetNodeNamesUsingStatusNodeRefName(t *testing.T) {
 		if nodeNames[i].Id != testConfig.nodes[i].Spec.ProviderID {
 			t.Fatalf("expected %q, got %q", testConfig.nodes[i].Spec.ProviderID, nodeNames[i].Id)
 		}
+	}
+}
+
+func TestControllerGetAPIVersionGroup(t *testing.T) {
+	expected := "myversion.mygroup"
+	err := os.Setenv(machineAPIVersionGroupEnvVar, expected)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	observed := getAPIVersionGroup()
+	if observed != expected {
+		t.Fatalf("Wrong Version Group detected, expected %q, got %q", expected, observed)
+	}
+
+	expected = defaultMachineAPIVersionGroup
+	err = os.Setenv(machineAPIVersionGroupEnvVar, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	observed = getAPIVersionGroup()
+	if observed != expected {
+		t.Fatalf("Wrong Version Group detected, expected %q, got %q", expected, observed)
+	}
+}
+
+func TestControllerGetAPIVersionGroupWithMachineSets(t *testing.T) {
+	testConfig := createMachineSetTestConfig(testNamespace, 1, map[string]string{
+		nodeGroupMinSizeAnnotationKey: "1",
+		nodeGroupMaxSizeAnnotationKey: "1",
+	})
+	err := os.Setenv(machineAPIVersionGroupEnvVar, "myversion.mygroup.io")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	testConfig.machineSet.TypeMeta.APIVersion = "mygroup.io/myversion"
+	for _, machine := range testConfig.machines {
+		machine.TypeMeta.APIVersion = "mygroup.io/myversion"
+	}
+	controller, stop := mustCreateTestController(t, testConfig)
+	defer stop()
+
+	machineSets, err := controller.listMachineSets(testNamespace, labels.Everything())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if l := len(machineSets); l != 1 {
+		t.Fatalf("Incorrect number of MachineSets, expected 1, got %d", l)
+	}
+
+	machines, err := controller.listMachines(testNamespace, labels.Everything())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if l := len(machines); l != 1 {
+		t.Fatalf("Incorrect number of Machines, expected 1, got %d", l)
+	}
+
+	err = os.Setenv(machineAPIVersionGroupEnvVar, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestControllerGetAPIVersionGroupWithMachineDeployments(t *testing.T) {
+	testConfig := createMachineDeploymentTestConfig(testNamespace, 1, map[string]string{
+		nodeGroupMinSizeAnnotationKey: "1",
+		nodeGroupMaxSizeAnnotationKey: "1",
+	})
+	err := os.Setenv(machineAPIVersionGroupEnvVar, "myversion.mygroup.io")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	testConfig.machineDeployment.TypeMeta.APIVersion = "mygroup.io/myversion"
+	testConfig.machineSet.TypeMeta.APIVersion = "mygroup.io/myversion"
+	for _, machine := range testConfig.machines {
+		machine.TypeMeta.APIVersion = "mygroup.io/myversion"
+	}
+	controller, stop := mustCreateTestController(t, testConfig)
+	defer stop()
+
+	machineDeployments, err := controller.listMachineDeployments(testNamespace, labels.Everything())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if l := len(machineDeployments); l != 1 {
+		t.Fatalf("Incorrect number of MachineDeployments, expected 1, got %d", l)
+	}
+
+	machineSets, err := controller.listMachineSets(testNamespace, labels.Everything())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if l := len(machineSets); l != 1 {
+		t.Fatalf("Incorrect number of MachineSets, expected 1, got %d", l)
+	}
+
+	machines, err := controller.listMachines(testNamespace, labels.Everything())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if l := len(machines); l != 1 {
+		t.Fatalf("Incorrect number of Machines, expected 1, got %d", l)
+	}
+
+	err = os.Setenv(machineAPIVersionGroupEnvVar, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
