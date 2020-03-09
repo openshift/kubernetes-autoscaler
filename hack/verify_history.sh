@@ -14,22 +14,34 @@
 # limitations under the License.
 
 # Verifies git commits starting from predefined prefix.
-# Script is meant to be run in CI. Locally it can produce confusing outputs when local "master" branch is not in sync with remote one
 
-PREFIX="UPSTREAM: <[[:alnum:]]+>: openshift:"
+# default to checking most recent commit only if not run by CI pipeline
+check_base="${PULL_BASE_SHA:-HEAD^}"
+check_sha="${PULL_PULL_SHA:-HEAD}"
 
-if ! [[ "$(git log -1 --pretty=%B --no-merges)" =~ ^$PREFIX ]]; then
-  echo "Last commit message didn't contain needed prefix. Offending commit message is:"
-  git log -1 --pretty=%B --no-merges
-  exit 1
-fi
+read -d '' help_message << EOF
 
-git log master.. --pretty=%s --no-merges | while read -r; do
-  if ! [[ "$REPLY" =~ ^$PREFIX ]]; then
+commit messages should look like one of:
+UPSTREAM: <carry>: message  (commits that should be carried indefinitely)
+UPSTREAM: <drop>: message   (commits that should be dropped on the next upstream rebase)
+UPSTREAM: 1234: message     (commits that should be carried until an upstream rebase includes upstream PR 1234)
+EOF
+
+prefix='UPSTREAM: ([0-9]+|<(carry|drop)>): '
+
+echo "examining commits between $check_base and $check_sha"
+echo
+
+while read -r message; do
+  if ! [[ "$message" =~ ^$prefix ]]; then
     echo "Git history in this PR doesn't conform to set commit message standards. Offending commit message is:"
-    echo "$REPLY"
+    echo "$message"
+    echo
+    echo "$help_message"
     exit 1
   fi
-done
+  echo "$message"
+done < <(git log "$check_base".."$check_sha" --pretty=%s --no-merges)
 
+echo
 echo "All looks good"
