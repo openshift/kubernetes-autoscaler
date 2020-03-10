@@ -25,6 +25,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/dynamic/dynamicinformer"
 	"k8s.io/client-go/informers"
@@ -36,10 +37,10 @@ import (
 )
 
 const (
-	machineProviderIDIndex        = "openshiftmachineapi-machineProviderIDIndex"
-	nodeProviderIDIndex           = "openshiftmachineapi-nodeProviderIDIndex"
-	defaultMachineAPIVersionGroup = "v1beta1.machine.openshift.io"
-	machineAPIVersionGroupEnvVar  = "MACHINEAPI_VERSION_GROUP"
+	machineProviderIDIndex = "openshiftmachineapi-machineProviderIDIndex"
+	nodeProviderIDIndex    = "openshiftmachineapi-nodeProviderIDIndex"
+	defaultMachineAPIGroup = "machine.openshift.io"
+	machineAPIGroupEnvVar  = "MACHINEAPI_GROUP"
 )
 
 // machineController watches for Nodes, Machines, MachineSets and
@@ -276,17 +277,16 @@ func (c *machineController) machinesInMachineSet(machineSet *MachineSet) ([]*Mac
 	return result, nil
 }
 
-// getAPIVersionGroup returns a string that specifies the version and
-// group for the API. It will return either the value from the
-// MACHINEAPI_VERSION_GROUP environment variable, or the default
-// value. This value will be a string in the format of "version.group".
-func getAPIVersionGroup() string {
-	vg := os.Getenv(machineAPIVersionGroupEnvVar)
-	if vg == "" {
-		vg = defaultMachineAPIVersionGroup
+// getMachineAPIGroup returns a string that specifies the group for the API.
+// It will return either the value from the
+// MACHINEAPI_GROUP environment variable, or the default value.
+func getMachineAPIGroup() string {
+	g := os.Getenv(machineAPIGroupEnvVar)
+	if g == "" {
+		g = defaultMachineAPIGroup
 	}
-	klog.V(4).Infof("Using API Version Group %v", vg)
-	return vg
+	klog.V(4).Infof("Using API Group %q", g)
+	return g
 }
 
 // newMachineController constructs a controller that watches Nodes,
@@ -295,28 +295,47 @@ func getAPIVersionGroup() string {
 func newMachineController(
 	dynamicclient dynamic.Interface,
 	kubeclient kubeclient.Interface,
+	discoveryclient discovery.DiscoveryInterface,
 	enableMachineDeployments bool,
 ) (*machineController, error) {
 	kubeInformerFactory := kubeinformers.NewSharedInformerFactory(kubeclient, 0)
 	informerFactory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(dynamicclient, 0, metav1.NamespaceAll, nil)
 
-	specifiedMachineAPI := getAPIVersionGroup()
+	machineAPIGroup := getMachineAPIGroup()
+	groupList, err := discoveryclient.ServerGroups()
+	if err != nil {
+		panic("groupList")
+	}
 
-	machineDeploymentResource, _ := schema.ParseResourceArg(fmt.Sprintf("machinedeployments.%v", specifiedMachineAPI))
+	foundMachineAPIGroup := false
+	var machineAPIVersion string
+	for _, group := range groupList.Groups {
+		if group.Name == machineAPIGroup {
+			foundMachineAPIGroup = true
+			machineAPIVersion = group.PreferredVersion.Version
+			break
+		}
+	}
+	if !foundMachineAPIGroup {
+		panic("defaultMAPIGroup")
+	}
+	klog.Infof("Using version %q for API group %q", machineAPIVersion, machineAPIGroup)
 
-	machineSetResource, _ := schema.ParseResourceArg(fmt.Sprintf("machinesets.%v", specifiedMachineAPI))
+	machineSetResource, _ := schema.ParseResourceArg(fmt.Sprintf("machinesets.%v.%v", machineAPIVersion, machineAPIGroup))
 	if machineSetResource == nil {
 		panic("MachineSetResource")
 	}
 
-	machineResource, _ := schema.ParseResourceArg(fmt.Sprintf("machines.%v", specifiedMachineAPI))
+	machineResource, _ := schema.ParseResourceArg(fmt.Sprintf("machines.%v.%v", machineAPIVersion, machineAPIGroup))
 	if machineResource == nil {
 		panic("machineResource")
 	}
+
 	machineInformer := informerFactory.ForResource(*machineResource)
 	machineSetInformer := informerFactory.ForResource(*machineSetResource)
-	var machineDeploymentInformer informers.GenericInformer
 
+	var machineDeploymentInformer informers.GenericInformer
+	machineDeploymentResource, _ := schema.ParseResourceArg(fmt.Sprintf("machinedeployments.%v.%v", machineAPIVersion, machineAPIGroup))
 	if enableMachineDeployments && machineDeploymentResource != nil {
 		machineDeploymentInformer = informerFactory.ForResource(*machineDeploymentResource)
 		machineDeploymentInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{})
