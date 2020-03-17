@@ -256,17 +256,17 @@ func NewNodeLister(kubeClient client.Interface, filter func(*apiv1.Node) bool, s
 func (l *nodeListerImpl) List() ([]*apiv1.Node, error) {
 	var nodes []*apiv1.Node
 	var err error
-	if l.filter != nil {
-		nodes, err = l.nodeLister.ListWithPredicate(l.filter)
-	} else {
-		nodes, err = l.nodeLister.List(labels.Everything())
-	}
+
+	nodes, err = l.nodeLister.List(labels.Everything())
 	if err != nil {
 		return []*apiv1.Node{}, err
 	}
-	results := make([]*apiv1.Node, 0, len(nodes))
-	results = append(results, nodes...)
-	return results, nil
+
+	if l.filter != nil {
+		nodes = filterNodes(nodes, l.filter)
+	}
+
+	return nodes, nil
 }
 
 // Get returns the node with the given name.
@@ -276,6 +276,16 @@ func (l *nodeListerImpl) Get(name string) (*apiv1.Node, error) {
 		return nil, err
 	}
 	return node, nil
+}
+
+func filterNodes(nodes []*apiv1.Node, predicate func(*apiv1.Node) bool) []*apiv1.Node {
+	var filtered []*apiv1.Node
+	for i := range nodes {
+		if predicate(nodes[i]) {
+			filtered = append(filtered, nodes[i])
+		}
+	}
+	return filtered
 }
 
 // PodDisruptionBudgetLister lists pod disruption budgets.

@@ -43,6 +43,10 @@ esac
 
 for project_name in ${PROJECT_NAMES[*]}; do
   (
+    if [[ $project_name == cluster-autoscaler ]];then
+      export GO111MODULE=off
+    fi
+
     project=${CONTRIB_ROOT}/${project_name}
     echo "${CMD}ing ${project}"
     cd "${project}"
@@ -60,3 +64,8 @@ for project_name in ${PROJECT_NAMES[*]}; do
     esac
   )
 done;
+
+if [ "${CMD}" = "build" ] || [ "${CMD}" == "test" ]; then
+  cd ${CONTRIB_ROOT}/vertical-pod-autoscaler/e2e
+  go test -mod vendor -run=None ./...
+fi

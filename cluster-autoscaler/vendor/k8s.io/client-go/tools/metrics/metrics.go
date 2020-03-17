@@ -31,9 +31,9 @@ type DurationMetric interface {
 	Observe(duration time.Duration)
 }
 
-// TTLMetric sets the time to live of something.
-type TTLMetric interface {
-	Set(ttl *time.Duration)
+// ExpiryMetric sets some time of expiry. If nil, assume not relevant.
+type ExpiryMetric interface {
+	Set(expiry *time.Time)
 }
 
 // LatencyMetric observes client latency partitioned by verb and url.
@@ -47,21 +47,24 @@ type ResultMetric interface {
 }
 
 var (
-	// ClientCertTTL is the time to live of a client certificate
-	ClientCertTTL TTLMetric = noopTTL{}
+	// ClientCertExpiry is the expiry time of a client certificate
+	ClientCertExpiry ExpiryMetric = noopExpiry{}
 	// ClientCertRotationAge is the age of a certificate that has just been rotated.
 	ClientCertRotationAge DurationMetric = noopDuration{}
 	// RequestLatency is the latency metric that rest clients will update.
 	RequestLatency LatencyMetric = noopLatency{}
+	// RateLimiterLatency is the client side rate limiter latency metric.
+	RateLimiterLatency LatencyMetric = noopLatency{}
 	// RequestResult is the result metric that rest clients will update.
 	RequestResult ResultMetric = noopResult{}
 )
 
 // RegisterOpts contains all the metrics to register. Metrics may be nil.
 type RegisterOpts struct {
-	ClientCertTTL         TTLMetric
+	ClientCertExpiry      ExpiryMetric
 	ClientCertRotationAge DurationMetric
 	RequestLatency        LatencyMetric
+	RateLimiterLatency    LatencyMetric
 	RequestResult         ResultMetric
 }
 
@@ -69,14 +72,17 @@ type RegisterOpts struct {
 // only be called once.
 func Register(opts RegisterOpts) {
 	registerMetrics.Do(func() {
-		if opts.ClientCertTTL != nil {
-			ClientCertTTL = opts.ClientCertTTL
+		if opts.ClientCertExpiry != nil {
+			ClientCertExpiry = opts.ClientCertExpiry
 		}
 		if opts.ClientCertRotationAge != nil {
 			ClientCertRotationAge = opts.ClientCertRotationAge
 		}
 		if opts.RequestLatency != nil {
 			RequestLatency = opts.RequestLatency
+		}
+		if opts.RateLimiterLatency != nil {
+			RateLimiterLatency = opts.RateLimiterLatency
 		}
 		if opts.RequestResult != nil {
 			RequestResult = opts.RequestResult
@@ -88,9 +94,9 @@ type noopDuration struct{}
 
 func (noopDuration) Observe(time.Duration) {}
 
-type noopTTL struct{}
+type noopExpiry struct{}
 
-func (noopTTL) Set(*time.Duration) {}
+func (noopExpiry) Set(*time.Time) {}
 
 type noopLatency struct{}
 

@@ -19,6 +19,7 @@ go_test(
         "//pkg/proxy/healthcheck:go_default_library",
         "//pkg/proxy/ipvs/testing:go_default_library",
         "//pkg/proxy/util:go_default_library",
+        "//pkg/proxy/util/iptables:go_default_library",
         "//pkg/proxy/util/testing:go_default_library",
         "//pkg/util/async:go_default_library",
         "//pkg/util/ipset:go_default_library",
@@ -45,7 +46,6 @@ go_library(
     srcs = [
         "graceful_termination.go",
         "ipset.go",
-        "meta_proxier.go",
         "netlink.go",
         "netlink_linux.go",
         "netlink_unsupported.go",
@@ -56,10 +56,11 @@ go_library(
     deps = [
         "//pkg/features:go_default_library",
         "//pkg/proxy:go_default_library",
-        "//pkg/proxy/config:go_default_library",
         "//pkg/proxy/healthcheck:go_default_library",
+        "//pkg/proxy/metaproxier:go_default_library",
         "//pkg/proxy/metrics:go_default_library",
         "//pkg/proxy/util:go_default_library",
+        "//pkg/proxy/util/iptables:go_default_library",
         "//pkg/util/async:go_default_library",
         "//pkg/util/conntrack:go_default_library",
         "//pkg/util/ipset:go_default_library",
