@@ -11,6 +11,10 @@
 OUT_DIR = _output
 OS_OUTPUT_GOPATH ?= 1
 
+GO111MODULE = off
+export GO111MODULE
+GOFLAGS ?= -mod=vendor
+
 export GOFLAGS
 export TESTFLAGS
 # If set to 1, create an isolated GOPATH inside _output using symlinks to avoid
@@ -84,7 +88,7 @@ verify-commits:
 #   make test-unit
 #   make test-unit WHAT=pkg/build TESTFLAGS=-v
 test-unit:
-	GOTEST_FLAGS="$(TESTFLAGS)" hack/test-go.sh $(WHAT) $(TESTS)
+	GO111MODULE="$(GO111MODULE)" GOTEST_FLAGS="$(TESTFLAGS)" hack/test-go.sh $(WHAT) $(TESTS)
 .PHONY: test-unit
 
 # Remove all build artifacts.
@@ -125,16 +129,16 @@ build-images: build-rpms
 
 .PHONY: lint
 lint: ## Go lint your code
-	hack/go-lint.sh -min_confidence 0.9 ./cluster-autoscaler/cloudprovider/openshiftmachineapi/...
+	hack/go-lint.sh -min_confidence 0.9 ./cluster-autoscaler/cloudprovider/clusterapi/...
 
 .PHONY: fmt
 fmt: ## Go fmt your code
-	hack/go-fmt.sh ./cluster-autoscaler/cloudprovider/openshiftmachineapi
+	hack/go-fmt.sh ./cluster-autoscaler/cloudprovider/clusterapi
 
 .PHONY: vet
 vet: ## Go fmt your code
-	hack/go-vet.sh ./cluster-autoscaler/cloudprovider/openshiftmachineapi
+	hack/go-vet.sh ./cluster-autoscaler/cloudprovider/clusterapi
 
 .PHONY: goimports
 goimports: ## Go fmt your code
-	hack/goimports.sh ./cluster-autoscaler/cloudprovider/openshiftmachineapi
+	hack/goimports.sh ./cluster-autoscaler/cloudprovider/clusterapi
