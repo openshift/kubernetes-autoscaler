@@ -183,7 +183,10 @@ func (c *machineController) run(stopCh <-chan struct{}) error {
 		c.nodeInformer.HasSynced,
 		c.machineInformer.Informer().HasSynced,
 		c.machineSetInformer.Informer().HasSynced,
-		c.machineDeploymentInformer.Informer().HasSynced,
+	}
+
+	if c.machineDeploymentResource != nil {
+		syncFuncs = append(syncFuncs, c.machineDeploymentInformer.Informer().HasSynced)
 	}
 
 	klog.V(4).Infof("waiting for caches to sync")
@@ -305,9 +308,22 @@ func newMachineController(
 	}
 	klog.Infof("Using version %q for API group %q", CAPIVersion, CAPIGroup)
 
-	machineDeploymentResource, _ := schema.ParseResourceArg(fmt.Sprintf("machinedeployments.%v.%v", CAPIVersion, CAPIGroup))
-	if machineDeploymentResource == nil {
-		panic("MachineDeployment")
+	var machineDeploymentResource *schema.GroupVersionResource
+	var machineDeploymentInformer informers.GenericInformer
+
+	isMachineDeploymentEnabled, err := isMachineDeploymentEnabled(discoveryclient, fmt.Sprintf("%s/%s", CAPIGroup, CAPIVersion))
+	if err != nil {
+		return nil, fmt.Errorf("failed to validate if machineDeployment is enabled: %v", err)
+	}
+
+	if isMachineDeploymentEnabled {
+		klog.Info("machineDeployment resource is enabled")
+		machineDeploymentResource, _ = schema.ParseResourceArg(fmt.Sprintf("machinedeployments.%v.%v", CAPIVersion, CAPIGroup))
+		if machineDeploymentResource == nil {
+			panic("MachineDeployment")
+		}
+		machineDeploymentInformer = informerFactory.ForResource(*machineDeploymentResource)
+		machineDeploymentInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{})
 	}
 
 	machineSetResource, _ := schema.ParseResourceArg(fmt.Sprintf("machinesets.%v.%v", CAPIVersion, CAPIGroup))
@@ -322,11 +338,9 @@ func newMachineController(
 
 	machineInformer := informerFactory.ForResource(*machineResource)
 	machineSetInformer := informerFactory.ForResource(*machineSetResource)
-	machineDeploymentInformer := informerFactory.ForResource(*machineDeploymentResource)
 
 	machineInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{})
 	machineSetInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{})
-	machineDeploymentInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{})
 
 	nodeInformer := kubeInformerFactory.Core().V1().Nodes().Informer()
 	nodeInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{})
@@ -355,6 +369,22 @@ func newMachineController(
 		machineResource:           machineResource,
 		machineDeploymentResource: machineDeploymentResource,
 	}, nil
+}
+
+func isMachineDeploymentEnabled(client discovery.DiscoveryInterface, groupVersion string) (bool, error) {
+	resourceList, err := client.ServerResourcesForGroupVersion(groupVersion)
+	if err != nil {
+		return false, fmt.Errorf("failed to get ServerGroups: %v", err)
+	}
+
+	for _, resource := range resourceList.APIResources {
+		klog.Infof("Resource %q available", resource.Name)
+		if resource.Name == "machinedeployments" {
+			return true, nil
+		}
+	}
+
+	return false, nil
 }
 
 func getAPIGroupPreferredVersion(client discovery.DiscoveryInterface, APIGroup string) (string, error) {
@@ -479,12 +509,14 @@ func (c *machineController) nodeGroups() ([]*nodegroup, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	machineDeployments, err := c.machineDeploymentNodeGroups()
-	if err != nil {
-		return nil, err
+	if c.machineDeploymentResource != nil {
+		machineDeployments, err := c.machineDeploymentNodeGroups()
+		if err != nil {
+			return nil, err
+		}
+		machineSets = append(machineSets, machineDeployments...)
 	}
-	return append(machineSets, machineDeployments...), nil
+	return machineSets, nil
 }
 
 func (c *machineController) nodeGroupForNode(node *corev1.Node) (*nodegroup, error) {
@@ -505,26 +537,28 @@ func (c *machineController) nodeGroupForNode(node *corev1.Node) (*nodegroup, err
 		return nil, nil
 	}
 
-	if ref := machineSetMachineDeploymentRef(machineSet); ref != nil {
-		key := fmt.Sprintf("%s/%s", machineSet.Namespace, ref.Name)
-		machineDeployment, err := c.findMachineDeployment(key)
-		if err != nil {
-			return nil, fmt.Errorf("unknown MachineDeployment %q: %v", key, err)
+	if c.machineDeploymentResource != nil {
+		if ref := machineSetMachineDeploymentRef(machineSet); ref != nil {
+			key := fmt.Sprintf("%s/%s", machineSet.Namespace, ref.Name)
+			machineDeployment, err := c.findMachineDeployment(key)
+			if err != nil {
+				return nil, fmt.Errorf("unknown MachineDeployment %q: %v", key, err)
+			}
+			if machineDeployment == nil {
+				return nil, fmt.Errorf("unknown MachineDeployment %q", key)
+			}
+			nodegroup, err := newNodegroupFromMachineDeployment(c, machineDeployment)
+			if err != nil {
+				return nil, fmt.Errorf("failed to build nodegroup for node %q: %v", node.Name, err)
+			}
+			// We don't scale from 0 so nodes must belong
+			// to a nodegroup that has a scale size of at
+			// least 1.
+			if nodegroup.MaxSize()-nodegroup.MinSize() < 1 {
+				return nil, nil
+			}
+			return nodegroup, nil
 		}
-		if machineDeployment == nil {
-			return nil, fmt.Errorf("unknown MachineDeployment %q", key)
-		}
-		nodegroup, err := newNodegroupFromMachineDeployment(c, machineDeployment)
-		if err != nil {
-			return nil, fmt.Errorf("failed to build nodegroup for node %q: %v", node.Name, err)
-		}
-		// We don't scale from 0 so nodes must belong
-		// to a nodegroup that has a scale size of at
-		// least 1.
-		if nodegroup.MaxSize()-nodegroup.MinSize() < 1 {
-			return nil, nil
-		}
-		return nodegroup, nil
 	}
 
 	nodegroup, err := newNodegroupFromMachineSet(c, machineSet)

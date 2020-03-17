@@ -86,9 +86,31 @@ func mustCreateTestController(t *testing.T, testConfigs ...*testConfig) (*machin
 			Resources: []*v1.APIResourceList{
 				{
 					GroupVersion: fmt.Sprintf("%s/v1beta1", customCAPIGroup),
+					APIResources: []v1.APIResource{
+						{
+							Name: "machinedeployments",
+						},
+						{
+							Name: "machinesets",
+						},
+						{
+							Name: "machines",
+						},
+					},
 				},
 				{
 					GroupVersion: fmt.Sprintf("%s/v1alpha3", defaultCAPIGroup),
+					APIResources: []v1.APIResource{
+						{
+							Name: "machinedeployments",
+						},
+						{
+							Name: "machinesets",
+						},
+						{
+							Name: "machines",
+						},
+					},
 				},
 			},
 		},
