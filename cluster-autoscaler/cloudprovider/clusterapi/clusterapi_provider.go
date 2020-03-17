@@ -35,6 +35,11 @@ const (
 	// ProviderName is the name of cluster-api cloud provider.
 	ProviderName = "clusterapi"
 
+	// AliasProviderName is to provide backward compatibility until we switch cao
+	// to set "clusterapi" as the provider.
+	// https://github.com/openshift/cluster-autoscaler-operator/blob/b2a1486ee34a5efbf5989bb6c307b72d3db47d0c/pkg/operator/config.go#L44
+	AliasProviderName = "openshift-machine-api"
+
 	// GPULabel is the label added to nodes with GPU resource.
 	GPULabel = "cluster-api/accelerator"
 )

@@ -65,7 +65,7 @@ func buildCloudProvider(opts config.AutoscalingOptions, do cloudprovider.NodeGro
 		return magnum.BuildMagnum(opts, do, rl)
 	case packet.ProviderName:
 		return packet.BuildPacket(opts, do, rl)
-	case clusterapi.ProviderName:
+	case clusterapi.ProviderName, clusterapi.AliasProviderName:
 		return clusterapi.BuildClusterAPI(opts, do, rl)
 	}
 	return nil
