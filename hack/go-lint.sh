@@ -9,6 +9,8 @@ else
     --env IS_CONTAINER=TRUE \
     --volume "${PWD}:/go/src/github.com/openshift/${REPO_NAME}:z" \
     --workdir "/go/src/github.com/openshift/${REPO_NAME}" \
-    openshift/origin-release:golang-1.12 \
+    --env GO111MODULE="$GO111MODULE" \
+    --env GOFLAGS="$GOFLAGS" \
+    openshift/origin-release:golang-1.13 \
     ./hack/go-lint.sh "${@}"
 fi
