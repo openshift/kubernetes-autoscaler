@@ -29,6 +29,9 @@ import (
 const (
 	deprecatedNodeGroupMinSizeAnnotationKey = "cluster.k8s.io/cluster-api-autoscaler-node-group-min-size"
 	deprecatedNodeGroupMaxSizeAnnotationKey = "cluster.k8s.io/cluster-api-autoscaler-node-group-max-size"
+	nodeGroupMinSizeAnnotationKey           = "machine.openshift.io/cluster-api-autoscaler-node-group-min-size"
+	nodeGroupMaxSizeAnnotationKey           = "machine.openshift.io/cluster-api-autoscaler-node-group-max-size"
+	clusterNameLabel                        = "machine.openshift.io/cluster-name"
 	deprecatedClusterNameLabel              = "cluster.k8s.io/cluster-name"
 )
 
