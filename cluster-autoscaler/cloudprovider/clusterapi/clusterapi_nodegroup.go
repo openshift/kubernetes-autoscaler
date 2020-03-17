@@ -25,8 +25,8 @@ import (
 )
 
 const (
-	machineDeleteAnnotationKey = "cluster.k8s.io/delete-machine"
-	machineAnnotationKey       = "cluster.k8s.io/machine"
+	machineDeleteAnnotationKey = "machine.openshift.io/cluster-api-delete-machine"
+	machineAnnotationKey       = "machine.openshift.io/machine"
 	debugFormat                = "%s (min: %d, max: %d, replicas: %d)"
 )
 
