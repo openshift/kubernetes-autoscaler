@@ -33,7 +33,8 @@ import (
 )
 
 const (
-	capiMachineDeleteAnnotationKey = "cluster.x-k8s.io/delete-machine"
+	// deprecatedMachineDeleteAnnotationKey should not be removed until minimum cluster-api support is v1alpha3
+	deprecatedMachineDeleteAnnotationKey = "cluster.k8s.io/delete-machine"
 	// TODO: determine what currently relies on deprecatedMachineAnnotationKey to determine when it can be removed
 	deprecatedMachineAnnotationKey = "cluster.k8s.io/machine"
 	machineDeleteAnnotationKey     = "machine.openshift.io/cluster-api-delete-machine"
