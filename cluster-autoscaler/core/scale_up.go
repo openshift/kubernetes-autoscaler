@@ -19,10 +19,12 @@ package core
 import (
 	"bytes"
 	"fmt"
-	"k8s.io/autoscaler/cluster-autoscaler/core/utils"
 	"math"
 	"strings"
 	"time"
+
+	"k8s.io/autoscaler/cluster-autoscaler/core/utils"
+	"k8s.io/autoscaler/cluster-autoscaler/utils/taints"
 
 	appsv1 "k8s.io/api/apps/v1"
 	apiv1 "k8s.io/api/core/v1"
@@ -249,11 +251,62 @@ func maxResourceLimitReached(resources []string) *skippedReasons {
 	return &skippedReasons{[]string{fmt.Sprintf("max cluster %s limit reached", strings.Join(resources, ", "))}}
 }
 
+func computeExpansionOption(context *context.AutoscalingContext, podEquivalenceGroups []*podEquivalenceGroup, nodeGroup cloudprovider.NodeGroup, nodeInfo *schedulernodeinfo.NodeInfo, upcomingNodes []*schedulernodeinfo.NodeInfo) (expander.Option, error) {
+	option := expander.Option{
+		NodeGroup: nodeGroup,
+		Pods:      make([]*apiv1.Pod, 0),
+	}
+
+	if err := context.ClusterSnapshot.Fork(); err != nil {
+		klog.Errorf("Error while calling ClusterSnapshot.Fork; %v", err)
+		return expander.Option{}, err
+	}
+
+	// add test node to snapshot
+	if err := context.ClusterSnapshot.AddNodeWithPods(nodeInfo.Node(), nodeInfo.Pods()); err != nil {
+		klog.Errorf("Error while adding test Node; %v", err)
+		if err := context.ClusterSnapshot.Revert(); err != nil {
+			klog.Fatalf("Error while calling ClusterSnapshot.Revert; %v", err)
+		}
+		// TODO: Or should I just skip the node group? specifically if Revert fails it is fatal error.
+		//       Maybe we should not return error from Revert as we cannot handle it in any way on the caller side?
+		return expander.Option{}, err
+	}
+
+	for _, eg := range podEquivalenceGroups {
+		samplePod := eg.pods[0]
+		if err := context.PredicateChecker.CheckPredicates(context.ClusterSnapshot, samplePod, nodeInfo.Node().Name); err == nil {
+			// add pods to option
+			option.Pods = append(option.Pods, eg.pods...)
+			// mark pod group as (theoretically) schedulable
+			eg.schedulable = true
+		} else {
+			klog.V(2).Infof("Pod %s can't be scheduled on %s, predicate checking error: %v", samplePod.Name, nodeGroup.Id(), err.VerboseMessage())
+			if podCount := len(eg.pods); podCount > 1 {
+				klog.V(2).Infof("%d other pods similar to %s can't be scheduled on %s", podCount-1, samplePod.Name, nodeGroup.Id())
+			}
+			eg.schedulingErrors[nodeGroup.Id()] = err
+		}
+	}
+
+	if err := context.ClusterSnapshot.Revert(); err != nil {
+		klog.Fatalf("Error while calling ClusterSnapshot.Revert; %v", err)
+		return expander.Option{}, err
+	}
+
+	if len(option.Pods) > 0 {
+		estimator := context.EstimatorBuilder(context.PredicateChecker, context.ClusterSnapshot)
+		option.NodeCount = estimator.Estimate(option.Pods, nodeInfo)
+	}
+
+	return option, nil
+}
+
 // ScaleUp tries to scale the cluster up. Return true if it found a way to increase the size,
 // false if it didn't and error if an error occurred. Assumes that all nodes in the cluster are
 // ready and in sync with instance groups.
 func ScaleUp(context *context.AutoscalingContext, processors *ca_processors.AutoscalingProcessors, clusterStateRegistry *clusterstate.ClusterStateRegistry, unschedulablePods []*apiv1.Pod,
-	nodes []*apiv1.Node, daemonSets []*appsv1.DaemonSet, nodeInfos map[string]*schedulernodeinfo.NodeInfo, ignoredTaints utils.TaintKeySet) (*status.ScaleUpStatus, errors.AutoscalerError) {
+	nodes []*apiv1.Node, daemonSets []*appsv1.DaemonSet, nodeInfos map[string]*schedulernodeinfo.NodeInfo, ignoredTaints taints.TaintKeySet) (*status.ScaleUpStatus, errors.AutoscalerError) {
 	// From now on we only care about unschedulable pods that were marked after the newest
 	// node became available for the scheduler.
 	if len(unschedulablePods) == 0 {
@@ -265,11 +318,8 @@ func ScaleUp(context *context.AutoscalingContext, processors *ca_processors.Auto
 
 	loggingQuota := glogx.PodsLoggingQuota()
 
-	podsRemainUnschedulable := make(map[*apiv1.Pod]map[string]status.Reasons)
-
 	for _, pod := range unschedulablePods {
 		glogx.V(1).UpTo(loggingQuota).Infof("Pod %s/%s is unschedulable", pod.Namespace, pod.Name)
-		podsRemainUnschedulable[pod] = make(map[string]status.Reasons)
 	}
 	glogx.V(1).Over(loggingQuota).Infof("%v other pods are also unschedulable", -loggingQuota.Left())
 
@@ -309,7 +359,7 @@ func ScaleUp(context *context.AutoscalingContext, processors *ca_processors.Auto
 	}
 	klog.V(4).Infof("Upcoming %d nodes", len(upcomingNodes))
 
-	expansionOptions := make([]expander.Option, 0)
+	expansionOptions := make(map[string]expander.Option, 0)
 
 	if processors != nil && processors.NodeGroupListProcessor != nil {
 		var errProc error
@@ -319,9 +369,7 @@ func ScaleUp(context *context.AutoscalingContext, processors *ca_processors.Auto
 		}
 	}
 
-	podsPredicatePassingCheckFunctions := getPodsPredicatePassingCheckFunctions(context, unschedulablePods, nodeInfos)
-	getPodsPassingPredicates := podsPredicatePassingCheckFunctions.getPodsPassingPredicates
-	getPodsNotPassingPredicates := podsPredicatePassingCheckFunctions.getPodsNotPassingPredicates
+	podEquivalenceGroups := buildPodEquivalenceGroups(unschedulablePods)
 
 	skippedNodeGroups := map[string]status.Reasons{}
 	for _, nodeGroup := range nodeGroups {
@@ -370,63 +418,36 @@ func ScaleUp(context *context.AutoscalingContext, processors *ca_processors.Auto
 			continue
 		}
 
-		option := expander.Option{
-			NodeGroup: nodeGroup,
-			Pods:      make([]*apiv1.Pod, 0),
-		}
-
-		// add list of pods which pass predicates to option
-		podsPassing, err := getPodsPassingPredicates(nodeGroup.Id())
+		option, err := computeExpansionOption(context, podEquivalenceGroups, nodeGroup, nodeInfo, upcomingNodes)
 		if err != nil {
-			klog.V(4).Infof("Skipping node group %s; cannot compute pods passing predicates", nodeGroup.Id())
-			skippedNodeGroups[nodeGroup.Id()] = notReadyReason
-			continue
-		} else {
-			option.Pods = make([]*apiv1.Pod, len(podsPassing))
-			copy(option.Pods, podsPassing)
-		}
-
-		// update information why we cannot schedule pods for which we did not find a working extension option so far
-		podsNotPassing, err := getPodsNotPassingPredicates(nodeGroup.Id())
-		if err != nil {
-			klog.V(4).Infof("Skipping node group %s; cannot compute pods not passing predicates", nodeGroup.Id())
-			skippedNodeGroups[nodeGroup.Id()] = notReadyReason
-			continue
-		}
-
-		// mark that there is a scheduling option for pods which can be scheduled to node from currently analyzed node group
-		for _, pod := range podsPassing {
-			delete(podsRemainUnschedulable, pod)
-		}
-
-		for pod, err := range podsNotPassing {
-			_, found := podsRemainUnschedulable[pod]
-			if found {
-				podsRemainUnschedulable[pod][nodeGroup.Id()] = err
-			}
+			return &status.ScaleUpStatus{Result: status.ScaleUpError}, errors.ToAutoscalerError(errors.InternalError, err)
 		}
 
 		if len(option.Pods) > 0 {
-			estimator := context.EstimatorBuilder(context.PredicateChecker)
-			option.NodeCount = estimator.Estimate(option.Pods, nodeInfo, upcomingNodes)
 			if option.NodeCount > 0 {
-				expansionOptions = append(expansionOptions, option)
+				expansionOptions[nodeGroup.Id()] = option
 			} else {
-				klog.V(2).Infof("No need for any nodes in %s", nodeGroup.Id())
+				klog.V(4).Infof("No pod can fit to %s", nodeGroup.Id())
 			}
 		} else {
 			klog.V(4).Infof("No pod can fit to %s", nodeGroup.Id())
 		}
 	}
-
 	if len(expansionOptions) == 0 {
 		klog.V(1).Info("No expansion options")
-		return &status.ScaleUpStatus{Result: status.ScaleUpNoOptionsAvailable, PodsRemainUnschedulable: getRemainingPods(podsRemainUnschedulable, skippedNodeGroups),
-			ConsideredNodeGroups: nodeGroups}, nil
+		return &status.ScaleUpStatus{
+			Result:                  status.ScaleUpNoOptionsAvailable,
+			PodsRemainUnschedulable: getRemainingPods(podEquivalenceGroups, skippedNodeGroups),
+			ConsideredNodeGroups:    nodeGroups,
+		}, nil
 	}
 
 	// Pick some expansion option.
-	bestOption := context.ExpanderStrategy.BestOption(expansionOptions, nodeInfos)
+	options := make([]expander.Option, 0, len(expansionOptions))
+	for _, o := range expansionOptions {
+		options = append(options, o)
+	}
+	bestOption := context.ExpanderStrategy.BestOption(options, nodeInfos)
 	if bestOption != nil && bestOption.NodeCount > 0 {
 		klog.V(1).Infof("Best option to resize: %s", bestOption.NodeGroup.Id())
 		if len(bestOption.Debug) > 0 {
@@ -480,6 +501,15 @@ func ScaleUp(context *context.AutoscalingContext, processors *ca_processors.Auto
 					continue
 				}
 				nodeInfos[nodeGroup.Id()] = nodeInfo
+
+				option, err2 := computeExpansionOption(context, podEquivalenceGroups, nodeGroup, nodeInfo, upcomingNodes)
+				if err2 != nil {
+					return &status.ScaleUpStatus{Result: status.ScaleUpError}, errors.ToAutoscalerError(errors.InternalError, err)
+				}
+
+				if len(option.Pods) > 0 && option.NodeCount > 0 {
+					expansionOptions[nodeGroup.Id()] = option
+				}
 			}
 
 			// Update ClusterStateRegistry so similar nodegroups rebalancing works.
@@ -510,7 +540,7 @@ func ScaleUp(context *context.AutoscalingContext, processors *ca_processors.Auto
 			if typedErr != nil {
 				return &status.ScaleUpStatus{Result: status.ScaleUpError, CreateNodeGroupResults: createNodeGroupResults}, typedErr.AddPrefix("Failed to find matching node groups: ")
 			}
-			similarNodeGroups = filterNodeGroupsByPods(similarNodeGroups, bestOption.Pods, getPodsPassingPredicates)
+			similarNodeGroups = filterNodeGroupsByPods(similarNodeGroups, bestOption.Pods, expansionOptions)
 			for _, ng := range similarNodeGroups {
 				if clusterStateRegistry.IsNodeGroupSafeToScaleUp(ng, now) {
 					targetNodeGroups = append(targetNodeGroups, ng)
@@ -547,141 +577,69 @@ func ScaleUp(context *context.AutoscalingContext, processors *ca_processors.Auto
 
 		clusterStateRegistry.Recalculate()
 		return &status.ScaleUpStatus{
-				Result:                  status.ScaleUpSuccessful,
-				ScaleUpInfos:            scaleUpInfos,
-				PodsRemainUnschedulable: getRemainingPods(podsRemainUnschedulable, skippedNodeGroups),
-				ConsideredNodeGroups:    nodeGroups,
-				CreateNodeGroupResults:  createNodeGroupResults,
-				PodsTriggeredScaleUp:    bestOption.Pods,
-				PodsAwaitEvaluation:     getPodsAwaitingEvaluation(unschedulablePods, podsRemainUnschedulable, bestOption.Pods)},
-			nil
+			Result:                  status.ScaleUpSuccessful,
+			ScaleUpInfos:            scaleUpInfos,
+			PodsRemainUnschedulable: getRemainingPods(podEquivalenceGroups, skippedNodeGroups),
+			ConsideredNodeGroups:    nodeGroups,
+			CreateNodeGroupResults:  createNodeGroupResults,
+			PodsTriggeredScaleUp:    bestOption.Pods,
+			PodsAwaitEvaluation:     getPodsAwaitingEvaluation(podEquivalenceGroups, bestOption.NodeGroup.Id()),
+		}, nil
 	}
 
-	return &status.ScaleUpStatus{Result: status.ScaleUpNoOptionsAvailable, PodsRemainUnschedulable: getRemainingPods(podsRemainUnschedulable, skippedNodeGroups),
-		ConsideredNodeGroups: nodeGroups}, nil
+	return &status.ScaleUpStatus{
+		Result:                  status.ScaleUpNoOptionsAvailable,
+		PodsRemainUnschedulable: getRemainingPods(podEquivalenceGroups, skippedNodeGroups),
+		ConsideredNodeGroups:    nodeGroups,
+	}, nil
 }
 
-type podsPredicatePassingCheckFunctions struct {
-	getPodsPassingPredicates    func(nodeGroupId string) ([]*apiv1.Pod, error)
-	getPodsNotPassingPredicates func(nodeGroupId string) (map[*apiv1.Pod]status.Reasons, error)
-}
-
-func getPodsPredicatePassingCheckFunctions(
-	context *context.AutoscalingContext,
-	unschedulablePods []*apiv1.Pod,
-	nodeInfos map[string]*schedulernodeinfo.NodeInfo) podsPredicatePassingCheckFunctions {
-
-	podsPassingPredicatesCache := make(map[string][]*apiv1.Pod)
-	podsNotPassingPredicatesCache := make(map[string]map[*apiv1.Pod]status.Reasons)
-	errorsCache := make(map[string]error)
-	checker := utils.NewPodsSchedulableOnNodeChecker(context, unschedulablePods)
-
-	computeCaches := func(nodeGroupId string) {
-		nodeInfo, found := nodeInfos[nodeGroupId]
-		if !found {
-			errorsCache[nodeGroupId] = errors.NewAutoscalerError(errors.InternalError, "NodeInfo not found for node group %v", nodeGroupId)
-			return
-		}
-
-		podsPassing := make([]*apiv1.Pod, 0)
-		podsNotPassing := make(map[*apiv1.Pod]status.Reasons)
-		schedulableOnNode := checker.CheckPodsSchedulableOnNode(nodeGroupId, nodeInfo)
-		for pod, err := range schedulableOnNode {
-			if err == nil {
-				podsPassing = append(podsPassing, pod)
-			} else {
-				podsNotPassing[pod] = err
-			}
-		}
-		podsPassingPredicatesCache[nodeGroupId] = podsPassing
-		podsNotPassingPredicatesCache[nodeGroupId] = podsNotPassing
-	}
-
-	return podsPredicatePassingCheckFunctions{
-
-		getPodsPassingPredicates: func(nodeGroupId string) ([]*apiv1.Pod, error) {
-			_, passingFound := podsPassingPredicatesCache[nodeGroupId]
-			_, errorFound := errorsCache[nodeGroupId]
-
-			if !passingFound && !errorFound {
-				computeCaches(nodeGroupId)
-			}
-			err, found := errorsCache[nodeGroupId]
-			if found {
-				return []*apiv1.Pod{}, err
-			}
-			pods, found := podsPassingPredicatesCache[nodeGroupId]
-			if found {
-				return pods, nil
-			}
-			return []*apiv1.Pod{}, errors.NewAutoscalerError(errors.InternalError, "Pods passing predicate entry not found in cache for node group %s", nodeGroupId)
-		},
-
-		getPodsNotPassingPredicates: func(nodeGroupId string) (map[*apiv1.Pod]status.Reasons, error) {
-			_, notPassingFound := podsNotPassingPredicatesCache[nodeGroupId]
-			_, errorFound := errorsCache[nodeGroupId]
-
-			if !notPassingFound && !errorFound {
-				computeCaches(nodeGroupId)
-			}
-			err, found := errorsCache[nodeGroupId]
-			if found {
-				return map[*apiv1.Pod]status.Reasons{}, err
-			}
-			pods, found := podsNotPassingPredicatesCache[nodeGroupId]
-			if found {
-				return pods, nil
-			}
-			return map[*apiv1.Pod]status.Reasons{}, errors.NewAutoscalerError(errors.InternalError, "Pods not passing predicate entry not found in cache for node group %s", nodeGroupId)
-		},
-	}
-}
-
-func getRemainingPods(schedulingErrors map[*apiv1.Pod]map[string]status.Reasons, skipped map[string]status.Reasons) []status.NoScaleUpInfo {
+func getRemainingPods(egs []*podEquivalenceGroup, skipped map[string]status.Reasons) []status.NoScaleUpInfo {
 	remaining := []status.NoScaleUpInfo{}
-	for pod, errs := range schedulingErrors {
-		noScaleUpInfo := status.NoScaleUpInfo{
-			Pod:                pod,
-			RejectedNodeGroups: errs,
-			SkippedNodeGroups:  skipped,
+	for _, eg := range egs {
+		if eg.schedulable {
+			continue
 		}
-		remaining = append(remaining, noScaleUpInfo)
+		for _, pod := range eg.pods {
+			noScaleUpInfo := status.NoScaleUpInfo{
+				Pod:                pod,
+				RejectedNodeGroups: eg.schedulingErrors,
+				SkippedNodeGroups:  skipped,
+			}
+			remaining = append(remaining, noScaleUpInfo)
+		}
 	}
 	return remaining
 }
 
-func getPodsAwaitingEvaluation(allPods []*apiv1.Pod, unschedulable map[*apiv1.Pod]map[string]status.Reasons, bestOption []*apiv1.Pod) []*apiv1.Pod {
-	awaitsEvaluation := make(map[*apiv1.Pod]bool, len(allPods))
-	for _, pod := range allPods {
-		if _, found := unschedulable[pod]; !found {
-			awaitsEvaluation[pod] = true
+func getPodsAwaitingEvaluation(egs []*podEquivalenceGroup, bestOption string) []*apiv1.Pod {
+	awaitsEvaluation := []*apiv1.Pod{}
+	for _, eg := range egs {
+		if eg.schedulable {
+			if _, found := eg.schedulingErrors[bestOption]; found {
+				// Schedulable, but not yet.
+				awaitsEvaluation = append(awaitsEvaluation, eg.pods...)
+			}
 		}
 	}
-	for _, pod := range bestOption {
-		delete(awaitsEvaluation, pod)
-	}
-
-	result := make([]*apiv1.Pod, 0)
-	for pod := range awaitsEvaluation {
-		result = append(result, pod)
-	}
-	return result
+	return awaitsEvaluation
 }
 
 func filterNodeGroupsByPods(
 	groups []cloudprovider.NodeGroup,
 	podsRequiredToFit []*apiv1.Pod,
-	fittingPodsPerNodeGroup func(groupId string) ([]*apiv1.Pod, error)) []cloudprovider.NodeGroup {
+	expansionOptions map[string]expander.Option) []cloudprovider.NodeGroup {
 
 	result := make([]cloudprovider.NodeGroup, 0)
 
 groupsloop:
 	for _, group := range groups {
-		fittingPods, err := fittingPodsPerNodeGroup(group.Id())
-		if err != nil {
-			klog.V(1).Infof("No info about pods passing predicates found for group %v, skipping it from scale-up consideration; err=%v", group.Id(), err)
+		option, found := expansionOptions[group.Id()]
+		if !found {
+			klog.V(1).Infof("No info about pods passing predicates found for group %v, skipping it from scale-up consideration", group.Id())
 			continue
 		}
+		fittingPods := option.Pods
 		podSet := make(map[*apiv1.Pod]bool, len(fittingPods))
 		for _, pod := range fittingPods {
 			podSet[pod] = true

@@ -46,8 +46,10 @@ import (
 	"k8s.io/kubernetes/pkg/features"
 	"k8s.io/kubernetes/pkg/proxy"
 	"k8s.io/kubernetes/pkg/proxy/healthcheck"
+	"k8s.io/kubernetes/pkg/proxy/metaproxier"
 	"k8s.io/kubernetes/pkg/proxy/metrics"
 	utilproxy "k8s.io/kubernetes/pkg/proxy/util"
+	proxyutiliptables "k8s.io/kubernetes/pkg/proxy/util/iptables"
 	"k8s.io/kubernetes/pkg/util/async"
 	"k8s.io/kubernetes/pkg/util/conntrack"
 	utilipset "k8s.io/kubernetes/pkg/util/ipset"
@@ -225,7 +227,7 @@ type Proxier struct {
 	exec           utilexec.Interface
 	masqueradeAll  bool
 	masqueradeMark string
-	clusterCIDR    string
+	localDetector  proxyutiliptables.LocalTrafficDetector
 	hostname       string
 	nodeIP         net.IP
 	portMapper     utilproxy.PortOpener
@@ -327,9 +329,12 @@ func NewProxier(ipt utiliptables.Interface,
 	minSyncPeriod time.Duration,
 	excludeCIDRs []string,
 	strictARP bool,
+	tcpTimeout time.Duration,
+	tcpFinTimeout time.Duration,
+	udpTimeout time.Duration,
 	masqueradeAll bool,
 	masqueradeBit int,
-	clusterCIDR string,
+	localDetector proxyutiliptables.LocalTrafficDetector,
 	hostname string,
 	nodeIP net.IP,
 	recorder record.EventRecorder,
@@ -402,6 +407,15 @@ func NewProxier(ipt utiliptables.Interface,
 		}
 	}
 
+	// Configure IPVS timeouts if any one of the timeout parameters have been set.
+	// This is the equivalent to running ipvsadm --set, a value of 0 indicates the
+	// current system timeout should be preserved
+	if tcpTimeout > 0 || tcpFinTimeout > 0 || udpTimeout > 0 {
+		if err := ipvs.ConfigureTimeouts(tcpTimeout, tcpFinTimeout, udpTimeout); err != nil {
+			klog.Warningf("failed to configure IPVS timeouts: %v", err)
+		}
+	}
+
 	// Generate the masquerade mark to use for SNAT rules.
 	masqueradeValue := 1 << uint(masqueradeBit)
 	masqueradeMark := fmt.Sprintf("%#08x/%#08x", masqueradeValue, masqueradeValue)
@@ -410,12 +424,6 @@ func NewProxier(ipt utiliptables.Interface,
 
 	klog.V(2).Infof("nodeIP: %v, isIPv6: %v", nodeIP, isIPv6)
 
-	if len(clusterCIDR) == 0 {
-		klog.Warningf("clusterCIDR not specified, unable to distinguish between internal and external traffic")
-	} else if utilnet.IsIPv6CIDRString(clusterCIDR) != isIPv6 {
-		return nil, fmt.Errorf("clusterCIDR %s has incorrect IP version: expect isIPv6=%t", clusterCIDR, isIPv6)
-	}
-
 	if len(scheduler) == 0 {
 		klog.Warningf("IPVS scheduler not specified, use %s by default", DefaultScheduler)
 		scheduler = DefaultScheduler
@@ -423,7 +431,7 @@ func NewProxier(ipt utiliptables.Interface,
 
 	serviceHealthServer := healthcheck.NewServiceHealthServer(hostname, recorder)
 
-	endpointSlicesEnabled := utilfeature.DefaultFeatureGate.Enabled(features.EndpointSlice)
+	endpointSlicesEnabled := utilfeature.DefaultFeatureGate.Enabled(features.EndpointSliceProxying)
 
 	proxier := &Proxier{
 		portsMap:              make(map[utilproxy.LocalPort]utilproxy.Closeable),
@@ -438,7 +446,7 @@ func NewProxier(ipt utiliptables.Interface,
 		masqueradeAll:         masqueradeAll,
 		masqueradeMark:        masqueradeMark,
 		exec:                  exec,
-		clusterCIDR:           clusterCIDR,
+		localDetector:         localDetector,
 		hostname:              hostname,
 		nodeIP:                nodeIP,
 		portMapper:            &listenPortOpener{},
@@ -483,9 +491,12 @@ func NewDualStackProxier(
 	minSyncPeriod time.Duration,
 	excludeCIDRs []string,
 	strictARP bool,
+	tcpTimeout time.Duration,
+	tcpFinTimeout time.Duration,
+	udpTimeout time.Duration,
 	masqueradeAll bool,
 	masqueradeBit int,
-	clusterCIDR [2]string,
+	localDetectors [2]proxyutiliptables.LocalTrafficDetector,
 	hostname string,
 	nodeIP [2]net.IP,
 	recorder record.EventRecorder,
@@ -499,7 +510,8 @@ func NewDualStackProxier(
 	// Create an ipv4 instance of the single-stack proxier
 	ipv4Proxier, err := NewProxier(ipt[0], ipvs, safeIpset, sysctl,
 		exec, syncPeriod, minSyncPeriod, filterCIDRs(false, excludeCIDRs), strictARP,
-		masqueradeAll, masqueradeBit, clusterCIDR[0], hostname, nodeIP[0],
+		tcpTimeout, tcpFinTimeout, udpTimeout, masqueradeAll, masqueradeBit,
+		localDetectors[0], hostname, nodeIP[0],
 		recorder, healthzServer, scheduler, nodePortAddresses)
 	if err != nil {
 		return nil, fmt.Errorf("unable to create ipv4 proxier: %v", err)
@@ -507,7 +519,8 @@ func NewDualStackProxier(
 
 	ipv6Proxier, err := NewProxier(ipt[1], ipvs, safeIpset, sysctl,
 		exec, syncPeriod, minSyncPeriod, filterCIDRs(true, excludeCIDRs), strictARP,
-		masqueradeAll, masqueradeBit, clusterCIDR[1], hostname, nodeIP[1],
+		tcpTimeout, tcpFinTimeout, udpTimeout, masqueradeAll, masqueradeBit,
+		localDetectors[1], hostname, nodeIP[1],
 		nil, nil, scheduler, nodePortAddresses)
 	if err != nil {
 		return nil, fmt.Errorf("unable to create ipv6 proxier: %v", err)
@@ -515,7 +528,7 @@ func NewDualStackProxier(
 
 	// Return a meta-proxier that dispatch calls between the two
 	// single-stack proxier instances
-	return NewMetaProxier(ipv4Proxier, ipv6Proxier), nil
+	return metaproxier.NewMetaProxier(ipv4Proxier, ipv6Proxier), nil
 }
 
 func filterCIDRs(wantIPv6 bool, cidrs []string) []string {
@@ -580,11 +593,24 @@ func (handle *LinuxKernelHandler) GetModules() ([]string, error) {
 
 	var bmods []string
 
-	// Find out loaded kernel modules. If this is a full static kernel it will thrown an error
+	// Find out loaded kernel modules. If this is a full static kernel it will try to verify if the module is compiled using /boot/config-KERNELVERSION
 	modulesFile, err := os.Open("/proc/modules")
+	if err == os.ErrNotExist {
+		klog.Warningf("Failed to read file /proc/modules with error %v. Assuming this is a kernel without loadable modules support enabled", err)
+		kernelConfigFile := fmt.Sprintf("/boot/config-%s", kernelVersionStr)
+		kConfig, err := ioutil.ReadFile(kernelConfigFile)
+		if err != nil {
+			return nil, fmt.Errorf("Failed to read Kernel Config file %s with error %v", kernelConfigFile, err)
+		}
+		for _, module := range ipvsModules {
+			if match, _ := regexp.Match("CONFIG_"+strings.ToUpper(module)+"=y", kConfig); match {
+				bmods = append(bmods, module)
+			}
+		}
+		return bmods, nil
+	}
 	if err != nil {
-		klog.Warningf("Failed to read file /proc/modules with error %v. Kube-proxy requires loadable modules support enabled in the kernel", err)
-		return nil, err
+		return nil, fmt.Errorf("Failed to read file /proc/modules with error %v", err)
 	}
 
 	mods, err := getFirstColumn(modulesFile)
@@ -824,7 +850,7 @@ func (proxier *Proxier) OnServiceDelete(service *v1.Service) {
 func (proxier *Proxier) OnServiceSynced() {
 	proxier.mu.Lock()
 	proxier.servicesSynced = true
-	if utilfeature.DefaultFeatureGate.Enabled(features.EndpointSlice) {
+	if utilfeature.DefaultFeatureGate.Enabled(features.EndpointSliceProxying) {
 		proxier.setInitialized(proxier.endpointSlicesSynced)
 	} else {
 		proxier.setInitialized(proxier.endpointsSynced)
@@ -959,33 +985,6 @@ func (proxier *Proxier) OnNodeSynced() {
 // EntryInvalidErr indicates if an ipset entry is invalid or not
 const EntryInvalidErr = "error adding entry %s to ipset %s"
 
-func getLocalAddrs() ([]net.IP, error) {
-	var localAddrs []net.IP
-
-	addrs, err := net.InterfaceAddrs()
-	if err != nil {
-		return nil, err
-	}
-
-	for _, addr := range addrs {
-		ip, _, err := net.ParseCIDR(addr.String())
-		if err != nil {
-			return nil, err
-		}
-		localAddrs = append(localAddrs, ip)
-	}
-	return localAddrs, nil
-}
-
-func ipExists(ip net.IP, addrs []net.IP) bool {
-	for _, addr := range addrs {
-		if ip.Equal(addr) {
-			return true
-		}
-	}
-	return false
-}
-
 // This is where all of the ipvs calls happen.
 // assumes proxier.mu is held
 func (proxier *Proxier) syncProxyRules() {
@@ -1002,14 +1001,18 @@ func (proxier *Proxier) syncProxyRules() {
 	start := time.Now()
 	defer func() {
 		metrics.SyncProxyRulesLatency.Observe(metrics.SinceInSeconds(start))
-		metrics.DeprecatedSyncProxyRulesLatency.Observe(metrics.SinceInMicroseconds(start))
 		klog.V(4).Infof("syncProxyRules took %v", time.Since(start))
 	}()
 
-	localAddrs, err := getLocalAddrs()
+	localAddrs, err := utilproxy.GetLocalAddrs()
 	if err != nil {
-		klog.Errorf("Failed to get local addresses during proxy sync: %v", err)
+		klog.Errorf("Failed to get local addresses during proxy sync: %v, assuming external IPs are not local", err)
+	} else if len(localAddrs) == 0 {
+		klog.Warning("No local addresses found, assuming all external IPs are not local")
 	}
+
+	localAddrSet := utilnet.IPSet{}
+	localAddrSet.Insert(localAddrs...)
 
 	// We assume that if this was called, we really want to sync them,
 	// even if nothing changed in the meantime. In other words, callers are
@@ -1115,6 +1118,7 @@ func (proxier *Proxier) syncProxyRules() {
 			klog.Errorf("Failed to cast serviceInfo %q", svcName.String())
 			continue
 		}
+		isIPv6 := utilnet.IsIPv6(svcInfo.ClusterIP())
 		protocol := strings.ToLower(string(svcInfo.Protocol()))
 		// Precompute svcNameString; with many services the many calls
 		// to ServicePortName.String() show up in CPU profiles.
@@ -1192,9 +1196,10 @@ func (proxier *Proxier) syncProxyRules() {
 
 		// Capture externalIPs.
 		for _, externalIP := range svcInfo.ExternalIPStrings() {
-			if len(localAddrs) == 0 {
-				klog.Errorf("couldn't find any local IPs, assuming %s is not local", externalIP)
-			} else if (svcInfo.Protocol() != v1.ProtocolSCTP) && ipExists(net.ParseIP(externalIP), localAddrs) {
+			// If the "external" IP happens to be an IP that is local to this
+			// machine, hold the local port open so no other process can open it
+			// (because the socket might open but it would never work).
+			if localAddrSet.Len() > 0 && (svcInfo.Protocol() != v1.ProtocolSCTP) && localAddrSet.Has(net.ParseIP(externalIP)) {
 				// We do not start listening on SCTP ports, according to our agreement in the SCTP support KEP
 				lp := utilproxy.LocalPort{
 					Description: "externalIP for " + svcNameString,
@@ -1206,7 +1211,7 @@ func (proxier *Proxier) syncProxyRules() {
 					klog.V(4).Infof("Port %s was open before and is still needed", lp.String())
 					replacementPortsMap[lp] = proxier.portsMap[lp]
 				} else {
-					socket, err := proxier.portMapper.OpenLocalPort(&lp)
+					socket, err := proxier.portMapper.OpenLocalPort(&lp, isIPv6)
 					if err != nil {
 						msg := fmt.Sprintf("can't open %s, skipping this externalIP: %v", lp.String(), err)
 
@@ -1395,13 +1400,12 @@ func (proxier *Proxier) syncProxyRules() {
 					// We do not start listening on SCTP ports, according to our agreement in the
 					// SCTP support KEP
 				} else if svcInfo.Protocol() != v1.ProtocolSCTP {
-					socket, err := proxier.portMapper.OpenLocalPort(&lp)
+					socket, err := proxier.portMapper.OpenLocalPort(&lp, isIPv6)
 					if err != nil {
 						klog.Errorf("can't open %s, skipping this nodePort: %v", lp.String(), err)
 						continue
 					}
 					if lp.Protocol == "udp" {
-						isIPv6 := utilnet.IsIPv6(svcInfo.ClusterIP())
 						conntrack.ClearEntriesForPort(proxier.exec, lp.Port, isIPv6, v1.ProtocolUDP)
 					}
 					replacementPortsMap[lp] = socket
@@ -1645,13 +1649,13 @@ func (proxier *Proxier) writeIptablesRules() {
 		)
 		if proxier.masqueradeAll {
 			writeLine(proxier.natRules, append(args, "dst,dst", "-j", string(KubeMarkMasqChain))...)
-		} else if len(proxier.clusterCIDR) > 0 {
+		} else if proxier.localDetector.IsImplemented() {
 			// This masquerades off-cluster traffic to a service VIP.  The idea
 			// is that you can establish a static route for your Service range,
 			// routing to any node, and that node will bridge into the Service
 			// for you.  Since that might bounce off-node, we masquerade here.
 			// If/when we support "Local" policy for VIPs, we should update this.
-			writeLine(proxier.natRules, append(args, "dst,dst", "! -s", proxier.clusterCIDR, "-j", string(KubeMarkMasqChain))...)
+			writeLine(proxier.natRules, proxier.localDetector.JumpIfNotLocal(append(args, "dst,dst"), string(KubeMarkMasqChain))...)
 		} else {
 			// Masquerade all OUTPUT traffic coming from a service ip.
 			// The kube dummy interface has all service VIPs assigned which
@@ -1721,29 +1725,23 @@ func (proxier *Proxier) writeIptablesRules() {
 		"-j", "ACCEPT",
 	)
 
-	// The following rules can only be set if clusterCIDR has been defined.
-	if len(proxier.clusterCIDR) != 0 {
-		// The following two rules ensure the traffic after the initial packet
-		// accepted by the "kubernetes forwarding rules" rule above will be
-		// accepted, to be as specific as possible the traffic must be sourced
-		// or destined to the clusterCIDR (to/from a pod).
-		writeLine(proxier.filterRules,
-			"-A", string(KubeForwardChain),
-			"-s", proxier.clusterCIDR,
-			"-m", "comment", "--comment", `"kubernetes forwarding conntrack pod source rule"`,
-			"-m", "conntrack",
-			"--ctstate", "RELATED,ESTABLISHED",
-			"-j", "ACCEPT",
-		)
-		writeLine(proxier.filterRules,
-			"-A", string(KubeForwardChain),
-			"-m", "comment", "--comment", `"kubernetes forwarding conntrack pod destination rule"`,
-			"-d", proxier.clusterCIDR,
-			"-m", "conntrack",
-			"--ctstate", "RELATED,ESTABLISHED",
-			"-j", "ACCEPT",
-		)
-	}
+	// The following two rules ensure the traffic after the initial packet
+	// accepted by the "kubernetes forwarding rules" rule above will be
+	// accepted.
+	writeLine(proxier.filterRules,
+		"-A", string(KubeForwardChain),
+		"-m", "comment", "--comment", `"kubernetes forwarding conntrack pod source rule"`,
+		"-m", "conntrack",
+		"--ctstate", "RELATED,ESTABLISHED",
+		"-j", "ACCEPT",
+	)
+	writeLine(proxier.filterRules,
+		"-A", string(KubeForwardChain),
+		"-m", "comment", "--comment", `"kubernetes forwarding conntrack pod destination rule"`,
+		"-m", "conntrack",
+		"--ctstate", "RELATED,ESTABLISHED",
+		"-j", "ACCEPT",
+	)
 
 	// Write the end-of-table markers.
 	writeLine(proxier.filterRules, "COMMIT")
@@ -1933,7 +1931,7 @@ func (proxier *Proxier) syncEndpoint(svcPortName proxy.ServicePortName, onlyNode
 	// 2. ServiceTopology is not enabled.
 	// 3. EndpointSlice is not enabled (service topology depends on endpoint slice
 	// to get topology information).
-	if !onlyNodeLocalEndpoints && utilfeature.DefaultFeatureGate.Enabled(features.ServiceTopology) && utilfeature.DefaultFeatureGate.Enabled(features.EndpointSlice) {
+	if !onlyNodeLocalEndpoints && utilfeature.DefaultFeatureGate.Enabled(features.ServiceTopology) && utilfeature.DefaultFeatureGate.Enabled(features.EndpointSliceProxying) {
 		endpoints = proxy.FilterTopologyEndpoint(proxier.nodeLabels, proxier.serviceMap[svcPortName].TopologyKeys(), endpoints)
 	}
 
@@ -2092,11 +2090,11 @@ func writeBytesLine(buf *bytes.Buffer, bytes []byte) {
 type listenPortOpener struct{}
 
 // OpenLocalPort holds the given local port open.
-func (l *listenPortOpener) OpenLocalPort(lp *utilproxy.LocalPort) (utilproxy.Closeable, error) {
-	return openLocalPort(lp)
+func (l *listenPortOpener) OpenLocalPort(lp *utilproxy.LocalPort, isIPv6 bool) (utilproxy.Closeable, error) {
+	return openLocalPort(lp, isIPv6)
 }
 
-func openLocalPort(lp *utilproxy.LocalPort) (utilproxy.Closeable, error) {
+func openLocalPort(lp *utilproxy.LocalPort, isIPv6 bool) (utilproxy.Closeable, error) {
 	// For ports on node IPs, open the actual port and hold it, even though we
 	// use ipvs to redirect traffic.
 	// This ensures a) that it's safe to use that port and b) that (a) stays
@@ -2112,17 +2110,25 @@ func openLocalPort(lp *utilproxy.LocalPort) (utilproxy.Closeable, error) {
 	var socket utilproxy.Closeable
 	switch lp.Protocol {
 	case "tcp":
-		listener, err := net.Listen("tcp", net.JoinHostPort(lp.IP, strconv.Itoa(lp.Port)))
+		network := "tcp4"
+		if isIPv6 {
+			network = "tcp6"
+		}
+		listener, err := net.Listen(network, net.JoinHostPort(lp.IP, strconv.Itoa(lp.Port)))
 		if err != nil {
 			return nil, err
 		}
 		socket = listener
 	case "udp":
-		addr, err := net.ResolveUDPAddr("udp", net.JoinHostPort(lp.IP, strconv.Itoa(lp.Port)))
+		network := "udp4"
+		if isIPv6 {
+			network = "udp6"
+		}
+		addr, err := net.ResolveUDPAddr(network, net.JoinHostPort(lp.IP, strconv.Itoa(lp.Port)))
 		if err != nil {
 			return nil, err
 		}
-		conn, err := net.ListenUDP("udp", addr)
+		conn, err := net.ListenUDP(network, addr)
 		if err != nil {
 			return nil, err
 		}

@@ -18,12 +18,13 @@ package priority
 
 import (
 	"flag"
-	"math"
 	"sort"
 	"time"
 
 	apiv1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/util/sets"
 	vpa_types "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/apis/autoscaling.k8s.io/v1"
+	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/annotations"
 	vpa_api_util "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/vpa"
 	"k8s.io/klog"
 )
@@ -37,9 +38,9 @@ const (
 )
 
 var (
-	evictAfterOOMThreshold = flag.Duration("evict-after-oom-treshold", 10*time.Minute,
+	evictAfterOOMThreshold = flag.Duration("evict-after-oom-threshold", 10*time.Minute,
 		`Evict pod that has only one container and it OOMed in less than
-		evict-after-oom-treshold since start.`)
+		evict-after-oom-threshold since start.`)
 )
 
 // UpdatePriorityCalculator is responsible for prioritizing updates on pods.
@@ -48,11 +49,11 @@ var (
 // i.e. pod with 10M current memory and recommendation 20M will have higher update priority
 // than pod with 100M current memory and 150M recommendation (100% increase vs 50% increase)
 type UpdatePriorityCalculator struct {
-	resourcesPolicy         *vpa_types.PodResourcePolicy
-	conditions              []vpa_types.VerticalPodAutoscalerCondition
-	pods                    []podPriority
+	vpa                     *vpa_types.VerticalPodAutoscaler
+	pods                    []prioritizedPod
 	config                  *UpdateConfig
 	recommendationProcessor vpa_api_util.RecommendationProcessor
+	priorityProcessor       PriorityProcessor
 }
 
 // UpdateConfig holds configuration for UpdatePriorityCalculator
@@ -62,66 +63,97 @@ type UpdateConfig struct {
 	MinChangePriority float64
 }
 
-// NewUpdatePriorityCalculator creates new UpdatePriorityCalculator for the given resources policy and configuration.
-// If the given policy is nil, there will be no policy restriction on update.
-// If the given config is nil, default values are used.
-func NewUpdatePriorityCalculator(policy *vpa_types.PodResourcePolicy,
-	conditions []vpa_types.VerticalPodAutoscalerCondition,
+// NewUpdatePriorityCalculator creates new UpdatePriorityCalculator for the given VPA object
+// an update config.
+// If the vpa resource policy is nil, there will be no policy restriction on update.
+// If the given update config is nil, default values are used.
+func NewUpdatePriorityCalculator(vpa *vpa_types.VerticalPodAutoscaler,
 	config *UpdateConfig,
-	processor vpa_api_util.RecommendationProcessor) UpdatePriorityCalculator {
+	recommendationProcessor vpa_api_util.RecommendationProcessor,
+	priorityProcessor PriorityProcessor) UpdatePriorityCalculator {
 	if config == nil {
 		config = &UpdateConfig{MinChangePriority: defaultUpdateThreshold}
 	}
-	return UpdatePriorityCalculator{resourcesPolicy: policy, conditions: conditions, config: config, recommendationProcessor: processor}
+	return UpdatePriorityCalculator{
+		vpa:                     vpa,
+		config:                  config,
+		recommendationProcessor: recommendationProcessor,
+		priorityProcessor:       priorityProcessor}
 }
 
 // AddPod adds pod to the UpdatePriorityCalculator.
-func (calc *UpdatePriorityCalculator) AddPod(pod *apiv1.Pod, recommendation *vpa_types.RecommendedPodResources, now time.Time) {
-	processedRecommendation, _, err := calc.recommendationProcessor.Apply(recommendation, calc.resourcesPolicy, calc.conditions, pod)
+func (calc *UpdatePriorityCalculator) AddPod(pod *apiv1.Pod, now time.Time) {
+	processedRecommendation, _, err := calc.recommendationProcessor.Apply(calc.vpa.Status.Recommendation, calc.vpa.Spec.ResourcePolicy, calc.vpa.Status.Conditions, pod)
 	if err != nil {
-		klog.V(2).Infof("cannot process recommendation for pod %s: %v", pod.Name, err)
+		klog.V(2).Infof("cannot process recommendation for pod %s/%s: %v", pod.Namespace, pod.Name, err)
 		return
 	}
 
-	updatePriority := calc.getUpdatePriority(pod, processedRecommendation)
+	hasObservedContainers, vpaContainerSet := parseVpaObservedContainers(pod)
+
+	updatePriority := calc.priorityProcessor.GetUpdatePriority(pod, calc.vpa, processedRecommendation)
 
 	quickOOM := false
-	if len(pod.Status.ContainerStatuses) == 1 {
-		terminationState := pod.Status.ContainerStatuses[0].LastTerminationState
+	for i := range pod.Status.ContainerStatuses {
+		cs := &pod.Status.ContainerStatuses[i]
+		if hasObservedContainers && !vpaContainerSet.Has(cs.Name) {
+			// Containers not observed by Admission Controller are not supported
+			// by the quick OOM logic.
+			klog.V(4).Infof("Not listed in %s:%s. Skipping container %s quick OOM calculations",
+				annotations.VpaObservedContainersLabel, pod.GetAnnotations()[annotations.VpaObservedContainersLabel], cs.Name)
+			continue
+		}
+		crp := vpa_api_util.GetContainerResourcePolicy(cs.Name, calc.vpa.Spec.ResourcePolicy)
+		if crp != nil && crp.Mode != nil && *crp.Mode == vpa_types.ContainerScalingModeOff {
+			// Containers with ContainerScalingModeOff are not considered
+			// during the quick OOM calculation.
+			klog.V(4).Infof("Container with ContainerScalingModeOff. Skipping container %s quick OOM calculations", cs.Name)
+			continue
+		}
+		terminationState := &cs.LastTerminationState
 		if terminationState.Terminated != nil &&
 			terminationState.Terminated.Reason == "OOMKilled" &&
 			terminationState.Terminated.FinishedAt.Time.Sub(terminationState.Terminated.StartedAt.Time) < *evictAfterOOMThreshold {
 			quickOOM = true
-			klog.V(2).Infof("quick OOM detected in pod %v", pod.Name)
+			klog.V(2).Infof("quick OOM detected in pod %v/%v, container %v", pod.Namespace, pod.Name, cs.Name)
 		}
 	}
 
 	// The update is allowed in following cases:
 	// - the request is outside the recommended range for some container.
 	// - the pod lives for at least 24h and the resource diff is >= MinChangePriority.
-	// - there is only one container in a pod and it OOMed in less than evictAfterOOMThreshold
-	if !updatePriority.outsideRecommendedRange && !quickOOM {
+	// - a vpa scaled container OOMed in less than evictAfterOOMThreshold.
+	if !updatePriority.OutsideRecommendedRange && !quickOOM {
 		if pod.Status.StartTime == nil {
 			// TODO: Set proper condition on the VPA.
-			klog.V(2).Infof("not updating pod %v, missing field pod.Status.StartTime", pod.Name)
+			klog.V(2).Infof("not updating pod %v/%v, missing field pod.Status.StartTime", pod.Namespace, pod.Name)
 			return
 		}
 		if now.Before(pod.Status.StartTime.Add(podLifetimeUpdateThreshold)) {
-			klog.V(2).Infof("not updating a short-lived pod %v, request within recommended range", pod.Name)
+			klog.V(2).Infof("not updating a short-lived pod %v/%v, request within recommended range", pod.Namespace, pod.Name)
 			return
 		}
-		if updatePriority.resourceDiff < calc.config.MinChangePriority {
-			klog.V(2).Infof("not updating pod %v, resource diff too low: %v", pod.Name, updatePriority)
+		if updatePriority.ResourceDiff < calc.config.MinChangePriority {
+			klog.V(2).Infof("not updating pod %v/%v, resource diff too low: %v", pod.Namespace, pod.Name, updatePriority)
 			return
 		}
 	}
-	klog.V(2).Infof("pod accepted for update %v with priority %v", pod.Name, updatePriority.resourceDiff)
-	calc.pods = append(calc.pods, updatePriority)
+
+	// If the pod has quick OOMed then evict only if the resources will change
+	if quickOOM && updatePriority.ResourceDiff == 0 {
+		klog.V(2).Infof("not updating pod %v/%v because resource would not change", pod.Namespace, pod.Name)
+		return
+	}
+	klog.V(2).Infof("pod accepted for update %v/%v with priority %v", pod.Namespace, pod.Name, updatePriority.ResourceDiff)
+	calc.pods = append(calc.pods, prioritizedPod{
+		pod:            pod,
+		priority:       updatePriority,
+		recommendation: processedRecommendation})
 }
 
 // GetSortedPods returns a list of pods ordered by update priority (highest update priority first)
 func (calc *UpdatePriorityCalculator) GetSortedPods(admission PodEvictionAdmission) []*apiv1.Pod {
-	sort.Sort(byPriority(calc.pods))
+	sort.Sort(byPriorityDesc(calc.pods))
 
 	result := []*apiv1.Pod{}
 	for _, podPrio := range calc.pods {
@@ -135,87 +167,61 @@ func (calc *UpdatePriorityCalculator) GetSortedPods(admission PodEvictionAdmissi
 	return result
 }
 
-func (calc *UpdatePriorityCalculator) getUpdatePriority(pod *apiv1.Pod, recommendation *vpa_types.RecommendedPodResources) podPriority {
-	outsideRecommendedRange := false
-	scaleUp := false
-	// Sum of requests over all containers, per resource type.
-	totalRequestPerResource := make(map[apiv1.ResourceName]int64)
-	// Sum of recommendations over all containers, per resource type.
-	totalRecommendedPerResource := make(map[apiv1.ResourceName]int64)
-
-	for _, podContainer := range pod.Spec.Containers {
-		recommendedRequest := vpa_api_util.GetRecommendationForContainer(podContainer.Name, recommendation)
-		if recommendedRequest == nil {
-			continue
-		}
-		for resourceName, recommended := range recommendedRequest.Target {
-			totalRecommendedPerResource[resourceName] += recommended.MilliValue()
-			lowerBound, hasLowerBound := recommendedRequest.LowerBound[resourceName]
-			upperBound, hasUpperBound := recommendedRequest.UpperBound[resourceName]
-			if request, hasRequest := podContainer.Resources.Requests[resourceName]; hasRequest {
-				totalRequestPerResource[resourceName] += request.MilliValue()
-				if recommended.MilliValue() > request.MilliValue() {
-					scaleUp = true
-				}
-				if (hasLowerBound && request.Cmp(lowerBound) < 0) ||
-					(hasUpperBound && request.Cmp(upperBound) > 0) {
-					outsideRecommendedRange = true
-				}
-			} else {
-				// Note: if the request is not specified, the container will use the
-				// namespace default request. Currently we ignore it and treat such
-				// containers as if they had 0 request. A more correct approach would
-				// be to always calculate the 'effective' request.
-				scaleUp = true
-				outsideRecommendedRange = true
-			}
+func parseVpaObservedContainers(pod *apiv1.Pod) (bool, sets.String) {
+	observedContainers, hasObservedContainers := pod.GetAnnotations()[annotations.VpaObservedContainersLabel]
+	vpaContainerSet := sets.NewString()
+	if hasObservedContainers {
+		if containers, err := annotations.ParseVpaObservedContainersValue(observedContainers); err != nil {
+			klog.Errorf("Vpa annotation %s failed to parse: %v", observedContainers, err)
+			hasObservedContainers = false
+		} else {
+			vpaContainerSet.Insert(containers...)
 		}
 	}
-	resourceDiff := 0.0
-	for resource, totalRecommended := range totalRecommendedPerResource {
-		totalRequest := math.Max(float64(totalRequestPerResource[resource]), 1.0)
-		resourceDiff += math.Abs(totalRequest-float64(totalRecommended)) / totalRequest
-	}
-	return podPriority{
-		pod:                     pod,
-		outsideRecommendedRange: outsideRecommendedRange,
-		scaleUp:                 scaleUp,
-		resourceDiff:            resourceDiff,
-		recommendation:          recommendation,
-	}
+	return hasObservedContainers, vpaContainerSet
 }
 
-type podPriority struct {
-	pod *apiv1.Pod
-	// Is any container outside of the recommended range.
-	outsideRecommendedRange bool
-	// Does any container want to grow.
-	scaleUp bool
-	// Relative difference between the total requested and total recommended resources.
-	resourceDiff float64
-	// Recommendation for pod
+type prioritizedPod struct {
+	pod            *apiv1.Pod
+	priority       PodPriority
 	recommendation *vpa_types.RecommendedPodResources
 }
 
-type byPriority []podPriority
+// PodPriority contains data for a pod update that can be used to prioritize between updates.
+type PodPriority struct {
+	// Is any container outside of the recommended range.
+	OutsideRecommendedRange bool
+	// Does any container want to grow.
+	ScaleUp bool
+	// Relative difference between the total requested and total recommended resources.
+	ResourceDiff float64
+}
 
-func (list byPriority) Len() int {
+type byPriorityDesc []prioritizedPod
+
+func (list byPriorityDesc) Len() int {
 	return len(list)
 }
-func (list byPriority) Swap(i, j int) {
+func (list byPriorityDesc) Swap(i, j int) {
 	list[i], list[j] = list[j], list[i]
 }
 
 // Less implements reverse ordering by priority (highest priority first).
-func (list byPriority) Less(i, j int) bool {
+// This means we return true if priority at index j is lower than at index i.
+func (list byPriorityDesc) Less(i, j int) bool {
+	return list[j].priority.Less(list[i].priority)
+}
+
+// Less returns true if p is lower than other.
+func (p PodPriority) Less(other PodPriority) bool {
 	// 1. If any container wants to grow, the pod takes precedence.
 	// TODO: A better policy would be to prioritize scaling down when
 	// (a) the pod is pending
 	// (b) there is general resource shortage
 	// and prioritize scaling up otherwise.
-	if list[i].scaleUp != list[j].scaleUp {
-		return list[i].scaleUp
+	if p.ScaleUp != other.ScaleUp {
+		return other.ScaleUp
 	}
 	// 2. A pod with larger value of resourceDiff takes precedence.
-	return list[i].resourceDiff > list[j].resourceDiff
+	return p.ResourceDiff < other.ResourceDiff
 }

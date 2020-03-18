@@ -20,6 +20,7 @@ import (
 	"flag"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -43,6 +44,8 @@ var (
 	memoryPerNode        = flag.String("extra-memory", "0Mi", "The amount of memory to add per node.")
 	baseStorage          = flag.String("storage", noValue, "The base storage resource requirement.")
 	storagePerNode       = flag.String("extra-storage", "0Gi", "The amount of storage to add per node.")
+	scaleDownDelay       = flag.Duration("scale-down-delay", time.Duration(0), "The time to wait after the addon-resizer start or last scaling operation before the scale down can be performed.")
+	scaleUpDelay         = flag.Duration("scale-up-delay", time.Duration(0), "The time to wait after the addon-resizer start or last scaling operation before the scale up can be performed.")
 	recommendationOffset = flag.Int("recommendation-offset", 10, "A number from range 0-100. When the dependent's resources are rewritten, they are set to the closer end of the range defined by this percentage threshold.")
 	acceptanceOffset     = flag.Int("acceptance-offset", 20, "A number from range 0-100. The dependent's resources are rewritten when they deviate from expected by a percentage that is higher than this threshold. Can't be lower than recommendation-offset.")
 	// Flags to identify the container to nanny.
@@ -66,7 +69,7 @@ func GetClientOrDie() kubernetes.Interface {
 	if err != nil {
 		log.Fatalf("Can not get kubernetes config: %v", err)
 	}
-
+	config.UserAgent = userAgent()
 	return kubernetes.NewForConfigOrDie(config)
 }
 
@@ -75,7 +78,23 @@ func buildOutOfClusterConfig() (*rest.Config, error) {
 	if kubeconfigPath == "" {
 		kubeconfigPath = os.Getenv("HOME") + "/.kube/config"
 	}
-	return clientcmd.BuildConfigFromFlags("", kubeconfigPath)
+	config, err := clientcmd.BuildConfigFromFlags("", kubeconfigPath)
+	if err != nil {
+		return nil, err
+	}
+	config.UserAgent = userAgent()
+	return config, nil
+}
+
+func userAgent() string {
+	command := ""
+	if len(os.Args) > 0 && len(os.Args[0]) > 0 {
+		command = filepath.Base(os.Args[0])
+	}
+	if len(command) == 0 {
+		command = "addon-resizer"
+	}
+	return command + "/" + nanny.AddonResizerVersion
 }
 
 // GetClientOutOfClusterOrDie returns a k8s clientset to the request from outside of cluster
@@ -103,6 +122,7 @@ func main() {
 	checkPercentageFlagBounds("acceptance-offset", *acceptanceOffset)
 
 	pollPeriod := time.Duration(int64(*pollPeriodMillis) * int64(time.Millisecond))
+	log.Infof("Version: %s", nanny.AddonResizerVersion)
 	log.Infof("Poll period: %+v", pollPeriod)
 	log.Infof("Watching namespace: %s, pod: %s, container: %s.", *podNamespace, *podName, *containerName)
 	log.Infof("cpu: %s, extra_cpu: %s, memory: %s, extra_memory: %s, storage: %s, extra_storage: %s", *baseCPU, *cpuPerNode, *baseMemory, *memoryPerNode, *baseStorage, *storagePerNode)
@@ -166,5 +186,7 @@ func main() {
 			RecommendationOffset: int64(*recommendationOffset),
 			Resources:            resources,
 		},
-		pollPeriod)
+		pollPeriod,
+		*scaleDownDelay,
+		*scaleUpDelay)
 }

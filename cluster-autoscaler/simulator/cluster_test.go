@@ -23,6 +23,7 @@ import (
 
 	apiv1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1beta1"
+	"k8s.io/autoscaler/cluster-autoscaler/utils/drain"
 	. "k8s.io/autoscaler/cluster-autoscaler/utils/test"
 	"k8s.io/kubernetes/pkg/kubelet/types"
 	schedulernodeinfo "k8s.io/kubernetes/pkg/scheduler/nodeinfo"
@@ -84,6 +85,7 @@ func TestUtilization(t *testing.T) {
 	AddGpusToNode(gpuNode, 1)
 	gpuPod := BuildTestPod("gpu_pod", 100, 200000)
 	RequestGpuForPod(gpuPod, 1)
+	TolerateGpuForPod(gpuPod)
 	nodeInfo = schedulernodeinfo.NewNodeInfo(pod, pod, gpuPod)
 	utilInfo, err = CalculateUtilization(gpuNode, nodeInfo, false, false, gpuLabel)
 	assert.NoError(t, err)
@@ -98,31 +100,48 @@ func TestUtilization(t *testing.T) {
 	assert.Zero(t, utilInfo.Utilization)
 }
 
-func TestFindPlaceAllOk(t *testing.T) {
-	pod1 := BuildTestPod("p1", 300, 500000)
-	new1 := BuildTestPod("p2", 600, 500000)
-	new2 := BuildTestPod("p3", 500, 500000)
-
-	nodeInfos := map[string]*schedulernodeinfo.NodeInfo{
-		"n1": schedulernodeinfo.NewNodeInfo(pod1),
-		"n2": schedulernodeinfo.NewNodeInfo(),
+func nodeInfos(nodes []*apiv1.Node) []*schedulernodeinfo.NodeInfo {
+	result := make([]*schedulernodeinfo.NodeInfo, len(nodes))
+	for i, node := range nodes {
+		ni := schedulernodeinfo.NewNodeInfo()
+		ni.SetNode(node)
+		result[i] = ni
 	}
+	return result
+}
+
+func TestFindPlaceAllOk(t *testing.T) {
 	node1 := BuildTestNode("n1", 1000, 2000000)
 	SetNodeReadyState(node1, true, time.Time{})
 	node2 := BuildTestNode("n2", 1000, 2000000)
 	SetNodeReadyState(node2, true, time.Time{})
-	nodeInfos["n1"].SetNode(node1)
-	nodeInfos["n2"].SetNode(node2)
+
+	pod1 := BuildTestPod("p1", 300, 500000)
+	pod1.Spec.NodeName = "n1"
+	new1 := BuildTestPod("p2", 600, 500000)
+	new2 := BuildTestPod("p3", 500, 500000)
 
 	oldHints := make(map[string]string)
 	newHints := make(map[string]string)
+	destinations := map[string]bool{
+		"n1": true,
+		"n2": true,
+	}
 	tracker := NewUsageTracker()
 
-	err := findPlaceFor(
+	clusterSnapshot := NewBasicClusterSnapshot()
+	predicateChecker, err := NewTestPredicateChecker()
+	assert.NoError(t, err)
+	InitializeClusterSnapshotOrDie(t, clusterSnapshot,
+		[]*apiv1.Node{node1, node2},
+		[]*apiv1.Pod{pod1})
+
+	err = findPlaceFor(
 		"x",
 		[]*apiv1.Pod{new1, new2},
-		[]*apiv1.Node{node1, node2},
-		nodeInfos, NewTestPredicateChecker(),
+		destinations,
+		clusterSnapshot,
+		predicateChecker,
 		oldHints, newHints, tracker, time.Now())
 
 	assert.Len(t, newHints, 2)
@@ -132,36 +151,38 @@ func TestFindPlaceAllOk(t *testing.T) {
 }
 
 func TestFindPlaceAllBas(t *testing.T) {
+	node1 := BuildTestNode("n1", 1000, 2000000)
+	SetNodeReadyState(node1, true, time.Time{})
+	node2 := BuildTestNode("n2", 1000, 2000000)
+	SetNodeReadyState(node2, true, time.Time{})
+
 	pod1 := BuildTestPod("p1", 300, 500000)
+	pod1.Spec.NodeName = "n1"
 	new1 := BuildTestPod("p2", 600, 500000)
 	new2 := BuildTestPod("p3", 500, 500000)
 	new3 := BuildTestPod("p4", 700, 500000)
 
-	nodeInfos := map[string]*schedulernodeinfo.NodeInfo{
-		"n1":   schedulernodeinfo.NewNodeInfo(pod1),
-		"n2":   schedulernodeinfo.NewNodeInfo(),
-		"nbad": schedulernodeinfo.NewNodeInfo(),
-	}
-	nodebad := BuildTestNode("nbad", 1000, 2000000)
-	node1 := BuildTestNode("n1", 1000, 2000000)
-	SetNodeReadyState(node1, true, time.Time{})
-
-	node2 := BuildTestNode("n2", 1000, 2000000)
-	SetNodeReadyState(node2, true, time.Time{})
-
-	nodeInfos["n1"].SetNode(node1)
-	nodeInfos["n2"].SetNode(node2)
-	nodeInfos["nbad"].SetNode(nodebad)
-
 	oldHints := make(map[string]string)
 	newHints := make(map[string]string)
+	destinations := map[string]bool{
+		"nbad": true,
+		"n1":   true,
+		"n2":   true,
+	}
 	tracker := NewUsageTracker()
 
-	err := findPlaceFor(
+	clusterSnapshot := NewBasicClusterSnapshot()
+	predicateChecker, err := NewTestPredicateChecker()
+	assert.NoError(t, err)
+	InitializeClusterSnapshotOrDie(t, clusterSnapshot,
+		[]*apiv1.Node{node1, node2},
+		[]*apiv1.Pod{pod1})
+
+	err = findPlaceFor(
 		"nbad",
 		[]*apiv1.Pod{new1, new2, new3},
-		[]*apiv1.Node{nodebad, node1, node2},
-		nodeInfos, NewTestPredicateChecker(),
+		destinations,
+		clusterSnapshot, predicateChecker,
 		oldHints, newHints, tracker, time.Now())
 
 	assert.Error(t, err)
@@ -171,26 +192,31 @@ func TestFindPlaceAllBas(t *testing.T) {
 }
 
 func TestFindNone(t *testing.T) {
-	pod1 := BuildTestPod("p1", 300, 500000)
-
-	nodeInfos := map[string]*schedulernodeinfo.NodeInfo{
-		"n1": schedulernodeinfo.NewNodeInfo(pod1),
-		"n2": schedulernodeinfo.NewNodeInfo(),
-	}
 	node1 := BuildTestNode("n1", 1000, 2000000)
 	SetNodeReadyState(node1, true, time.Time{})
-
 	node2 := BuildTestNode("n2", 1000, 2000000)
 	SetNodeReadyState(node2, true, time.Time{})
 
-	nodeInfos["n1"].SetNode(node1)
-	nodeInfos["n2"].SetNode(node2)
+	pod1 := BuildTestPod("p1", 300, 500000)
+	pod1.Spec.NodeName = "n1"
 
-	err := findPlaceFor(
+	destinations := map[string]bool{
+		"n1": true,
+		"n2": true,
+	}
+
+	clusterSnapshot := NewBasicClusterSnapshot()
+	predicateChecker, err := NewTestPredicateChecker()
+	assert.NoError(t, err)
+	InitializeClusterSnapshotOrDie(t, clusterSnapshot,
+		[]*apiv1.Node{node1, node2},
+		[]*apiv1.Pod{pod1})
+
+	err = findPlaceFor(
 		"x",
 		[]*apiv1.Pod{},
-		[]*apiv1.Node{node1, node2},
-		nodeInfos, NewTestPredicateChecker(),
+		destinations,
+		clusterSnapshot, predicateChecker,
 		make(map[string]string),
 		make(map[string]string),
 		NewUsageTracker(),
@@ -198,64 +224,61 @@ func TestFindNone(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-func TestShuffleNodes(t *testing.T) {
-	nodes := []*apiv1.Node{
-		BuildTestNode("n1", 0, 0),
-		BuildTestNode("n2", 0, 0),
-		BuildTestNode("n3", 0, 0)}
-	gotPermutation := false
-	for i := 0; i < 10000; i++ {
-		shuffled := shuffleNodes(nodes)
-		if shuffled[0].Name == "n2" && shuffled[1].Name == "n3" && shuffled[2].Name == "n1" {
-			gotPermutation = true
-			break
-		}
-	}
-	assert.True(t, gotPermutation)
-}
-
 func TestFindEmptyNodes(t *testing.T) {
+	nodes := []*apiv1.Node{}
+	nodeNames := []string{}
+	for i := 0; i < 4; i++ {
+		nodeName := fmt.Sprintf("n%d", i)
+		node := BuildTestNode(nodeName, 1000, 2000000)
+		SetNodeReadyState(node, true, time.Time{})
+		nodes = append(nodes, node)
+		nodeNames = append(nodeNames, nodeName)
+	}
+
 	pod1 := BuildTestPod("p1", 300, 500000)
 	pod1.Spec.NodeName = "n1"
+
 	pod2 := BuildTestPod("p2", 300, 500000)
 	pod2.Spec.NodeName = "n2"
 	pod2.Annotations = map[string]string{
 		types.ConfigMirrorAnnotationKey: "",
 	}
 
-	node1 := BuildTestNode("n1", 1000, 2000000)
-	node2 := BuildTestNode("n2", 1000, 2000000)
-	node3 := BuildTestNode("n3", 1000, 2000000)
-	node4 := BuildTestNode("n4", 1000, 2000000)
+	clusterSnapshot := NewBasicClusterSnapshot()
+	InitializeClusterSnapshotOrDie(t, clusterSnapshot, []*apiv1.Node{nodes[0], nodes[1], nodes[2], nodes[3]}, []*apiv1.Pod{pod1, pod2})
 
-	SetNodeReadyState(node1, true, time.Time{})
-	SetNodeReadyState(node2, true, time.Time{})
-	SetNodeReadyState(node3, true, time.Time{})
-	SetNodeReadyState(node4, true, time.Time{})
-
-	emptyNodes := FindEmptyNodesToRemove([]*apiv1.Node{node1, node2, node3, node4}, []*apiv1.Pod{pod1, pod2})
-	assert.Equal(t, []*apiv1.Node{node2, node3, node4}, emptyNodes)
+	emptyNodes := FindEmptyNodesToRemove(clusterSnapshot, nodeNames)
+	assert.Equal(t, []string{nodeNames[0], nodeNames[2], nodeNames[3]}, emptyNodes)
 }
 
 type findNodesToRemoveTestConfig struct {
 	name        string
-	candidates  []*apiv1.Node
+	pods        []*apiv1.Pod
 	allNodes    []*apiv1.Node
+	candidates  []string
 	toRemove    []NodeToBeRemoved
-	unremovable []*apiv1.Node
+	unremovable []*UnremovableNode
 }
 
 func TestFindNodesToRemove(t *testing.T) {
 	emptyNode := BuildTestNode("n1", 1000, 2000000)
+	emptyNodeInfo := schedulernodeinfo.NewNodeInfo()
+	emptyNodeInfo.SetNode(emptyNode)
 
 	// two small pods backed by ReplicaSet
 	drainableNode := BuildTestNode("n2", 1000, 2000000)
+	drainableNodeInfo := schedulernodeinfo.NewNodeInfo()
+	drainableNodeInfo.SetNode(drainableNode)
 
 	// one small pod, not backed by anything
 	nonDrainableNode := BuildTestNode("n3", 1000, 2000000)
+	nonDrainableNodeInfo := schedulernodeinfo.NewNodeInfo()
+	nonDrainableNodeInfo.SetNode(nonDrainableNode)
 
 	// one very large pod
 	fullNode := BuildTestNode("n4", 1000, 2000000)
+	fullNodeInfo := schedulernodeinfo.NewNodeInfo()
+	fullNodeInfo.SetNode(fullNode)
 
 	SetNodeReadyState(emptyNode, true, time.Time{})
 	SetNodeReadyState(drainableNode, true, time.Time{})
@@ -267,13 +290,20 @@ func TestFindNodesToRemove(t *testing.T) {
 	pod1 := BuildTestPod("p1", 100, 100000)
 	pod1.OwnerReferences = ownerRefs
 	pod1.Spec.NodeName = "n2"
+	drainableNodeInfo.AddPod(pod1)
+
 	pod2 := BuildTestPod("p2", 100, 100000)
 	pod2.OwnerReferences = ownerRefs
 	pod2.Spec.NodeName = "n2"
+	drainableNodeInfo.AddPod(pod2)
+
 	pod3 := BuildTestPod("p3", 100, 100000)
 	pod3.Spec.NodeName = "n3"
+	nonDrainableNodeInfo.AddPod(pod3)
+
 	pod4 := BuildTestPod("p4", 1000, 100000)
 	pod4.Spec.NodeName = "n4"
+	fullNodeInfo.AddPod(pod4)
 
 	emptyNodeToRemove := NodeToBeRemoved{
 		Node:             emptyNode,
@@ -284,62 +314,74 @@ func TestFindNodesToRemove(t *testing.T) {
 		PodsToReschedule: []*apiv1.Pod{pod1, pod2},
 	}
 
-	pods := []*apiv1.Pod{pod1, pod2, pod3, pod4}
-	predicateChecker := NewTestPredicateChecker()
+	clusterSnapshot := NewBasicClusterSnapshot()
+	predicateChecker, err := NewTestPredicateChecker()
+	assert.NoError(t, err)
 	tracker := NewUsageTracker()
 
 	tests := []findNodesToRemoveTestConfig{
 		// just an empty node, should be removed
 		{
 			name:        "just an empty node, should be removed",
-			candidates:  []*apiv1.Node{emptyNode},
+			pods:        []*apiv1.Pod{},
+			candidates:  []string{emptyNode.Name},
 			allNodes:    []*apiv1.Node{emptyNode},
 			toRemove:    []NodeToBeRemoved{emptyNodeToRemove},
-			unremovable: []*apiv1.Node{},
+			unremovable: []*UnremovableNode{},
 		},
 		// just a drainable node, but nowhere for pods to go to
 		{
 			name:        "just a drainable node, but nowhere for pods to go to",
-			candidates:  []*apiv1.Node{drainableNode},
+			pods:        []*apiv1.Pod{pod1, pod2},
+			candidates:  []string{drainableNode.Name},
 			allNodes:    []*apiv1.Node{drainableNode},
 			toRemove:    []NodeToBeRemoved{},
-			unremovable: []*apiv1.Node{drainableNode},
+			unremovable: []*UnremovableNode{{Node: drainableNode, Reason: NoPlaceToMovePods}},
 		},
 		// drainable node, and a mostly empty node that can take its pods
 		{
 			name:        "drainable node, and a mostly empty node that can take its pods",
-			candidates:  []*apiv1.Node{drainableNode, nonDrainableNode},
+			pods:        []*apiv1.Pod{pod1, pod2, pod3},
+			candidates:  []string{drainableNode.Name, nonDrainableNode.Name},
 			allNodes:    []*apiv1.Node{drainableNode, nonDrainableNode},
 			toRemove:    []NodeToBeRemoved{drainableNodeToRemove},
-			unremovable: []*apiv1.Node{nonDrainableNode},
+			unremovable: []*UnremovableNode{{Node: nonDrainableNode, Reason: BlockedByPod, BlockingPod: &drain.BlockingPod{Pod: pod3, Reason: drain.NotReplicated}}},
 		},
 		// drainable node, and a full node that cannot fit anymore pods
 		{
 			name:        "drainable node, and a full node that cannot fit anymore pods",
-			candidates:  []*apiv1.Node{drainableNode},
+			pods:        []*apiv1.Pod{pod1, pod2, pod4},
+			candidates:  []string{drainableNode.Name},
 			allNodes:    []*apiv1.Node{drainableNode, fullNode},
 			toRemove:    []NodeToBeRemoved{},
-			unremovable: []*apiv1.Node{drainableNode},
+			unremovable: []*UnremovableNode{{Node: drainableNode, Reason: NoPlaceToMovePods}},
 		},
 		// 4 nodes, 1 empty, 1 drainable
 		{
 			name:        "4 nodes, 1 empty, 1 drainable",
-			candidates:  []*apiv1.Node{emptyNode, drainableNode},
+			pods:        []*apiv1.Pod{pod1, pod2, pod3, pod4},
+			candidates:  []string{emptyNode.Name, drainableNode.Name},
 			allNodes:    []*apiv1.Node{emptyNode, drainableNode, fullNode, nonDrainableNode},
 			toRemove:    []NodeToBeRemoved{emptyNodeToRemove, drainableNodeToRemove},
-			unremovable: []*apiv1.Node{},
+			unremovable: []*UnremovableNode{},
 		},
 	}
 
 	for _, test := range tests {
-		toRemove, unremovable, _, err := FindNodesToRemove(
-			test.candidates, test.allNodes, pods, nil,
-			predicateChecker, len(test.allNodes), true, map[string]string{},
-			tracker, time.Now(), []*policyv1.PodDisruptionBudget{})
-		assert.NoError(t, err)
-		fmt.Printf("Test scenario: %s, found len(toRemove)=%v, expected len(test.toRemove)=%v\n", test.name, len(toRemove), len(test.toRemove))
-		assert.Equal(t, toRemove, test.toRemove)
-		assert.Equal(t, unremovable, test.unremovable)
+		t.Run(test.name, func(t *testing.T) {
+			destinations := make([]string, 0, len(test.allNodes))
+			for _, node := range test.allNodes {
+				destinations = append(destinations, node.Name)
+			}
+			InitializeClusterSnapshotOrDie(t, clusterSnapshot, test.allNodes, test.pods)
+			toRemove, unremovable, _, err := FindNodesToRemove(
+				test.candidates, destinations, nil,
+				clusterSnapshot, predicateChecker, len(test.allNodes), true, map[string]string{},
+				tracker, time.Now(), []*policyv1.PodDisruptionBudget{})
+			assert.NoError(t, err)
+			fmt.Printf("Test scenario: %s, found len(toRemove)=%v, expected len(test.toRemove)=%v\n", test.name, len(toRemove), len(test.toRemove))
+			assert.Equal(t, toRemove, test.toRemove)
+			assert.Equal(t, unremovable, test.unremovable)
+		})
 	}
-
 }

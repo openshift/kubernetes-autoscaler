@@ -17,10 +17,13 @@ limitations under the License.
 package core
 
 import (
+	"fmt"
+	"reflect"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
+	testcloudprovider "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/test"
 	"k8s.io/autoscaler/cluster-autoscaler/clusterstate/utils"
 	"k8s.io/autoscaler/cluster-autoscaler/config"
 	"k8s.io/autoscaler/cluster-autoscaler/context"
@@ -57,11 +60,12 @@ type nodeConfig struct {
 }
 
 type podConfig struct {
-	name   string
-	cpu    int64
-	memory int64
-	gpu    int64
-	node   string
+	name         string
+	cpu          int64
+	memory       int64
+	gpu          int64
+	node         string
+	toleratesGpu bool
 }
 
 type groupSizeChange struct {
@@ -77,18 +81,50 @@ type scaleTestConfig struct {
 	nodeDeletionTracker     *NodeDeletionTracker
 	expansionOptionToChoose groupSizeChange // this will be selected by assertingStrategy.BestOption
 
-	//expectedScaleUpOptions []groupSizeChange // we expect that all those options should be included in expansion options passed to expander strategy
-	//expectedFinalScaleUp   groupSizeChange   // we expect this to be delivered via scale-up event
-	expectedScaleDowns []string
+	expectedScaleDowns     []string
+	expectedScaleDownCount int
 }
 
 type scaleTestResults struct {
 	expansionOptions []groupSizeChange
 	finalOption      groupSizeChange
-	scaleUpStatus    *status.ScaleUpStatus
 	noScaleUpReason  string
 	finalScaleDowns  []string
 	events           []string
+	scaleUpStatus    scaleUpStatusInfo
+}
+
+// scaleUpStatusInfo is a simplified form of a ScaleUpStatus, to avoid mocking actual NodeGroup and Pod objects in test config.
+type scaleUpStatusInfo struct {
+	result                  status.ScaleUpResult
+	podsTriggeredScaleUp    []string
+	podsRemainUnschedulable []string
+	podsAwaitEvaluation     []string
+}
+
+func (s *scaleUpStatusInfo) WasSuccessful() bool {
+	return s.result == status.ScaleUpSuccessful
+}
+
+func extractPodNames(pods []*apiv1.Pod) []string {
+	podNames := []string{}
+	for _, pod := range pods {
+		podNames = append(podNames, pod.Name)
+	}
+	return podNames
+}
+
+func simplifyScaleUpStatus(scaleUpStatus *status.ScaleUpStatus) scaleUpStatusInfo {
+	remainUnschedulable := []string{}
+	for _, nsi := range scaleUpStatus.PodsRemainUnschedulable {
+		remainUnschedulable = append(remainUnschedulable, nsi.Pod.Name)
+	}
+	return scaleUpStatusInfo{
+		result:                  scaleUpStatus.Result,
+		podsTriggeredScaleUp:    extractPodNames(scaleUpStatus.PodsTriggeredScaleUp),
+		podsRemainUnschedulable: remainUnschedulable,
+		podsAwaitEvaluation:     extractPodNames(scaleUpStatus.PodsAwaitEvaluation),
+	}
 }
 
 // NewTestProcessors returns a set of simple processors for use in tests.
@@ -109,12 +145,22 @@ func NewTestProcessors() *processors.AutoscalingProcessors {
 func NewScaleTestAutoscalingContext(
 	options config.AutoscalingOptions, fakeClient kube_client.Interface,
 	listers kube_util.ListerRegistry, provider cloudprovider.CloudProvider,
-	processorCallbacks processor_callbacks.ProcessorCallbacks) context.AutoscalingContext {
-	fakeRecorder := kube_record.NewFakeRecorder(5)
-	fakeLogRecorder, _ := utils.NewStatusMapRecorder(fakeClient, "kube-system", fakeRecorder, false)
+	processorCallbacks processor_callbacks.ProcessorCallbacks) (context.AutoscalingContext, error) {
+	// Not enough buffer space causes the test to hang without printing any logs.
+	// This is not useful.
+	fakeRecorder := kube_record.NewFakeRecorder(100)
+	fakeLogRecorder, err := utils.NewStatusMapRecorder(fakeClient, "kube-system", fakeRecorder, false)
+	if err != nil {
+		return context.AutoscalingContext{}, err
+	}
 	// Ignoring error here is safe - if a test doesn't specify valid estimatorName,
 	// it either doesn't need one, or should fail when it turns out to be nil.
 	estimatorBuilder, _ := estimator.NewEstimatorBuilder(options.EstimatorName)
+	predicateChecker, err := simulator.NewTestPredicateChecker()
+	if err != nil {
+		return context.AutoscalingContext{}, err
+	}
+	clusterSnapshot := simulator.NewBasicClusterSnapshot()
 	return context.AutoscalingContext{
 		AutoscalingOptions: options,
 		AutoscalingKubeClients: context.AutoscalingKubeClients{
@@ -124,23 +170,50 @@ func NewScaleTestAutoscalingContext(
 			ListerRegistry: listers,
 		},
 		CloudProvider:      provider,
-		PredicateChecker:   simulator.NewTestPredicateChecker(),
+		PredicateChecker:   predicateChecker,
+		ClusterSnapshot:    clusterSnapshot,
 		ExpanderStrategy:   random.NewStrategy(),
 		EstimatorBuilder:   estimatorBuilder,
 		ProcessorCallbacks: processorCallbacks,
-	}
+	}, nil
 }
 
 type mockAutoprovisioningNodeGroupManager struct {
-	t *testing.T
+	t           *testing.T
+	extraGroups int
 }
 
 func (p *mockAutoprovisioningNodeGroupManager) CreateNodeGroup(context *context.AutoscalingContext, nodeGroup cloudprovider.NodeGroup) (nodegroups.CreateNodeGroupResult, errors.AutoscalerError) {
 	newNodeGroup, err := nodeGroup.Create()
 	assert.NoError(p.t, err)
 	metrics.RegisterNodeGroupCreation()
+	extraGroups := []cloudprovider.NodeGroup{}
+	testGroup, ok := nodeGroup.(*testcloudprovider.TestNodeGroup)
+	if !ok {
+		return nodegroups.CreateNodeGroupResult{}, errors.ToAutoscalerError(errors.InternalError, fmt.Errorf("expected test node group, found %v", reflect.TypeOf(nodeGroup)))
+	}
+	testCloudProvider, ok := context.CloudProvider.(*testcloudprovider.TestCloudProvider)
+	if !ok {
+		return nodegroups.CreateNodeGroupResult{}, errors.ToAutoscalerError(errors.InternalError, fmt.Errorf("expected test CloudProvider, found %v", reflect.TypeOf(context.CloudProvider)))
+	}
+	for i := 0; i < p.extraGroups; i++ {
+		extraNodeGroup, err := testCloudProvider.NewNodeGroupWithId(
+			testGroup.MachineType(),
+			testGroup.Labels(),
+			map[string]string{},
+			[]apiv1.Taint{},
+			map[string]resource.Quantity{},
+			fmt.Sprintf("%d", i+1),
+		)
+		assert.NoError(p.t, err)
+		extraGroup, err := extraNodeGroup.Create()
+		assert.NoError(p.t, err)
+		metrics.RegisterNodeGroupCreation()
+		extraGroups = append(extraGroups, extraGroup)
+	}
 	result := nodegroups.CreateNodeGroupResult{
-		MainCreatedNodeGroup: newNodeGroup,
+		MainCreatedNodeGroup:   newNodeGroup,
+		ExtraCreatedNodeGroups: extraGroups,
 	}
 	return result, nil
 }

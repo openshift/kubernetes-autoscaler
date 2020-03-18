@@ -30,7 +30,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/Azure/azure-sdk-for-go/services/compute/mgmt/2018-10-01/compute"
+	"github.com/Azure/azure-sdk-for-go/services/compute/mgmt/2019-07-01/compute"
 	azStorage "github.com/Azure/azure-sdk-for-go/storage"
 	"github.com/Azure/go-autorest/autorest"
 	"github.com/Azure/go-autorest/autorest/to"
@@ -39,6 +39,7 @@ import (
 
 	"k8s.io/autoscaler/cluster-autoscaler/version"
 	"k8s.io/klog"
+	"k8s.io/legacy-cloud-providers/azure/retry"
 )
 
 const (
@@ -99,9 +100,9 @@ func (util *AzUtil) DeleteBlob(accountName, vhdContainer, vhdBlob string) error 
 	ctx, cancel := getContextWithCancel()
 	defer cancel()
 
-	storageKeysResult, err := util.manager.azClient.storageAccountsClient.ListKeys(ctx, util.manager.config.ResourceGroup, accountName)
-	if err != nil {
-		return err
+	storageKeysResult, rerr := util.manager.azClient.storageAccountsClient.ListKeys(ctx, util.manager.config.ResourceGroup, accountName)
+	if rerr != nil {
+		return rerr.Error()
 	}
 
 	keys := *storageKeysResult.Keys
@@ -122,15 +123,15 @@ func (util *AzUtil) DeleteVirtualMachine(rg string, name string) error {
 	ctx, cancel := getContextWithCancel()
 	defer cancel()
 
-	vm, err := util.manager.azClient.virtualMachinesClient.Get(ctx, rg, name, "")
-	if err != nil {
-		if exists, _ := checkResourceExistsFromError(err); !exists {
+	vm, rerr := util.manager.azClient.virtualMachinesClient.Get(ctx, rg, name, "")
+	if rerr != nil {
+		if exists, _ := checkResourceExistsFromRetryError(rerr); !exists {
 			klog.V(2).Infof("VirtualMachine %s/%s has already been removed", rg, name)
 			return nil
 		}
 
-		klog.Errorf("failed to get VM: %s/%s: %s", rg, name, err.Error())
-		return err
+		klog.Errorf("failed to get VM: %s/%s: %s", rg, name, rerr.Error())
+		return rerr.Error()
 	}
 
 	vhd := vm.VirtualMachineProperties.StorageProfile.OsDisk.Vhd
@@ -146,7 +147,7 @@ func (util *AzUtil) DeleteVirtualMachine(rg string, name string) error {
 	if nicID == nil {
 		klog.Warningf("NIC ID is not set for VM (%s/%s)", rg, name)
 	} else {
-		nicName, err = resourceName(*nicID)
+		nicName, err := resourceName(*nicID)
 		if err != nil {
 			return err
 		}
@@ -158,8 +159,8 @@ func (util *AzUtil) DeleteVirtualMachine(rg string, name string) error {
 	defer deleteCancel()
 
 	klog.Infof("waiting for VirtualMachine deletion: %s/%s", rg, name)
-	_, err = util.manager.azClient.virtualMachinesClient.Delete(deleteCtx, rg, name)
-	_, realErr := checkResourceExistsFromError(err)
+	rerr = util.manager.azClient.virtualMachinesClient.Delete(deleteCtx, rg, name)
+	_, realErr := checkResourceExistsFromRetryError(rerr)
 	if realErr != nil {
 		return realErr
 	}
@@ -170,8 +171,8 @@ func (util *AzUtil) DeleteVirtualMachine(rg string, name string) error {
 		interfaceCtx, interfaceCancel := getContextWithCancel()
 		defer interfaceCancel()
 		klog.Infof("waiting for nic deletion: %s/%s", rg, nicName)
-		_, nicErr := util.manager.azClient.interfacesClient.Delete(interfaceCtx, rg, nicName)
-		_, realErr := checkResourceExistsFromError(nicErr)
+		nicErr := util.manager.azClient.interfacesClient.Delete(interfaceCtx, rg, nicName)
+		_, realErr := checkResourceExistsFromRetryError(nicErr)
 		if realErr != nil {
 			return realErr
 		}
@@ -201,8 +202,8 @@ func (util *AzUtil) DeleteVirtualMachine(rg string, name string) error {
 			klog.Infof("deleting managed disk: %s/%s", rg, *osDiskName)
 			disksCtx, disksCancel := getContextWithCancel()
 			defer disksCancel()
-			_, diskErr := util.manager.azClient.disksClient.Delete(disksCtx, rg, *osDiskName)
-			_, realErr := checkResourceExistsFromError(diskErr)
+			diskErr := util.manager.azClient.disksClient.Delete(disksCtx, rg, *osDiskName)
+			_, realErr := checkResourceExistsFromRetryError(diskErr)
 			if realErr != nil {
 				return realErr
 			}
@@ -233,7 +234,7 @@ func decodePkcs12(pkcs []byte, password string) (*x509.Certificate, *rsa.Private
 // example:
 // Azure-SDK-for-Go/7.0.1-beta arm-network/2016-09-01; cluster-autoscaler/v1.7.0-alpha.2.711+a2fadef8170bb0-dirty;
 func configureUserAgent(client *autorest.Client) {
-	client.UserAgent = fmt.Sprintf("%s; cluster-autoscaler/%s", client.UserAgent, version.ClusterAutoscalerVersion)
+	client.UserAgent = fmt.Sprintf("%s; cluster-autoscaler/v%s", client.UserAgent, version.ClusterAutoscalerVersion)
 }
 
 // normalizeForK8sVMASScalingUp takes a template and removes elements that are unwanted in a K8s VMAS scale up/down case
@@ -534,7 +535,7 @@ func validateConfig(cfg *Config) error {
 		}
 	}
 
-	if cfg.VMType == vmTypeACS || cfg.VMType == vmTypeAKS {
+	if cfg.VMType == vmTypeAKS {
 		// Cluster name is a mandatory param to proceed.
 		if cfg.ClusterName == "" {
 			return fmt.Errorf("cluster name not set for type %+v", cfg.VMType)
@@ -613,6 +614,16 @@ func checkResourceExistsFromError(err error) (bool, error) {
 	return false, v
 }
 
+func checkResourceExistsFromRetryError(err *retry.Error) (bool, error) {
+	if err == nil {
+		return true, nil
+	}
+	if err.HTTPStatusCode == http.StatusNotFound {
+		return false, nil
+	}
+	return false, err.Error()
+}
+
 // isSuccessHTTPResponse determines if the response from an HTTP request suggests success
 func isSuccessHTTPResponse(resp *http.Response, err error) (isSuccess bool, realError error) {
 	if err != nil {
@@ -644,19 +655,11 @@ func convertResourceGroupNameToLower(resourceID string) (string, error) {
 }
 
 // isAzureRequestsThrottled returns true when the err is http.StatusTooManyRequests (429).
-func isAzureRequestsThrottled(err error) bool {
-	if err == nil {
+func isAzureRequestsThrottled(rerr *retry.Error) bool {
+	klog.V(6).Infof("isAzureRequestsThrottled: starts for error %v", rerr)
+	if rerr == nil {
 		return false
 	}
 
-	v, ok := err.(autorest.DetailedError)
-	if !ok {
-		return false
-	}
-
-	if v.StatusCode == http.StatusTooManyRequests {
-		return true
-	}
-
-	return false
+	return rerr.HTTPStatusCode == http.StatusTooManyRequests
 }

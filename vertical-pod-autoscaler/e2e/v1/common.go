@@ -25,6 +25,8 @@ import (
 	"github.com/onsi/gomega"
 	appsv1 "k8s.io/api/apps/v1"
 	autoscaling "k8s.io/api/autoscaling/v1"
+	batchv1 "k8s.io/api/batch/v1"
+	batchv1beta1 "k8s.io/api/batch/v1beta1"
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -34,6 +36,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	vpa_types "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/apis/autoscaling.k8s.io/v1"
 	vpa_clientset "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/client/clientset/versioned"
+	clientset "k8s.io/client-go/kubernetes"
 	"k8s.io/kubernetes/test/e2e/framework"
 	framework_deployment "k8s.io/kubernetes/test/e2e/framework/deployment"
 )
@@ -46,15 +49,17 @@ const (
 	actuationSuite               = "actuation"
 	pollInterval                 = 10 * time.Second
 	pollTimeout                  = 15 * time.Minute
+	cronJobsWaitTimeout          = 15 * time.Minute
 	// VpaEvictionTimeout is a timeout for VPA to restart a pod if there are no
 	// mechanisms blocking it (for example PDB).
 	VpaEvictionTimeout = 3 * time.Minute
 
-	defaultHamsterReplicas = int32(3)
+	defaultHamsterReplicas     = int32(3)
+	defaultHamsterBackoffLimit = int32(10)
 )
 
 var hamsterTargetRef = &autoscaling.CrossVersionObjectReference{
-	APIVersion: "extensions/v1beta1",
+	APIVersion: "apps/v1",
 	Kind:       "Deployment",
 	Name:       "hamster-deployment",
 }
@@ -96,6 +101,18 @@ func ActuationSuiteE2eDescribe(name string, body func()) bool {
 	return E2eDescribe(actuationSuite, name, body)
 }
 
+// GetHamsterContainerNameByIndex returns name of i-th hamster container.
+func GetHamsterContainerNameByIndex(i int) string {
+	switch {
+	case i < 0:
+		panic("negative index")
+	case i == 0:
+		return "hamster"
+	default:
+		return fmt.Sprintf("hamster%d", i+1)
+	}
+}
+
 // SetupHamsterDeployment creates and installs a simple hamster deployment
 // for e2e test purposes, then makes sure the deployment is running.
 func SetupHamsterDeployment(f *framework.Framework, cpu, memory string, replicas int32) *appsv1.Deployment {
@@ -111,13 +128,32 @@ func SetupHamsterDeployment(f *framework.Framework, cpu, memory string, replicas
 	return d
 }
 
-// NewHamsterDeployment creates a simple hamster deployment for e2e test
-// purposes.
+// NewHamsterDeployment creates a simple hamster deployment for e2e test purposes.
 func NewHamsterDeployment(f *framework.Framework) *appsv1.Deployment {
-	d := framework_deployment.NewDeployment("hamster-deployment", defaultHamsterReplicas, hamsterLabels, "hamster", "k8s.gcr.io/ubuntu-slim:0.1", appsv1.RollingUpdateDeploymentStrategyType)
+	return NewNHamstersDeployment(f, 1)
+}
+
+// NewNHamstersDeployment creates a simple hamster deployment with n containers
+// for e2e test purposes.
+func NewNHamstersDeployment(f *framework.Framework, n int) *appsv1.Deployment {
+	if n < 1 {
+		panic("container count should be greater than 0")
+	}
+	d := framework_deployment.NewDeployment(
+		"hamster-deployment",                       /*deploymentName*/
+		defaultHamsterReplicas,                     /*replicas*/
+		hamsterLabels,                              /*podLabels*/
+		GetHamsterContainerNameByIndex(0),          /*imageName*/
+		"k8s.gcr.io/ubuntu-slim:0.1",               /*image*/
+		appsv1.RollingUpdateDeploymentStrategyType, /*strategyType*/
+	)
 	d.ObjectMeta.Namespace = f.Namespace.Name
 	d.Spec.Template.Spec.Containers[0].Command = []string{"/bin/sh"}
 	d.Spec.Template.Spec.Containers[0].Args = []string{"-c", "/usr/bin/yes >/dev/null"}
+	for i := 1; i < n; i++ {
+		d.Spec.Template.Spec.Containers = append(d.Spec.Template.Spec.Containers, d.Spec.Template.Spec.Containers[0])
+		d.Spec.Template.Spec.Containers[i].Name = GetHamsterContainerNameByIndex(i)
+	}
 	return d
 }
 
@@ -165,49 +201,119 @@ func GetHamsterPods(f *framework.Framework) (*apiv1.PodList, error) {
 	return f.ClientSet.CoreV1().Pods(f.Namespace.Name).List(options)
 }
 
-// SetupVPA creates and installs a simple hamster VPA for e2e test purposes.
-func SetupVPA(f *framework.Framework, cpu string, mode vpa_types.UpdateMode, targetRef *autoscaling.CrossVersionObjectReference) {
-	vpaCRD := NewVPA(f, "hamster-vpa", targetRef)
-	vpaCRD.Spec.UpdatePolicy.UpdateMode = &mode
-
-	cpuQuantity := ParseQuantityOrDie(cpu)
-	resourceList := apiv1.ResourceList{apiv1.ResourceCPU: cpuQuantity}
-
-	vpaCRD.Status.Recommendation = &vpa_types.RecommendedPodResources{
-		ContainerRecommendations: []vpa_types.RecommendedContainerResources{{
-			ContainerName: "hamster",
-			Target:        resourceList,
-			LowerBound:    resourceList,
-			UpperBound:    resourceList,
-		}},
-	}
-	InstallVPA(f, vpaCRD)
-}
-
-// SetupVPAForTwoHamsters creates and installs a simple pod with two hamster containers for e2e test purposes.
-func SetupVPAForTwoHamsters(f *framework.Framework, cpu string, mode vpa_types.UpdateMode, targetRef *autoscaling.CrossVersionObjectReference) {
-	vpaCRD := NewVPA(f, "hamster-vpa", targetRef)
-	vpaCRD.Spec.UpdatePolicy.UpdateMode = &mode
-
-	cpuQuantity := ParseQuantityOrDie(cpu)
-	resourceList := apiv1.ResourceList{apiv1.ResourceCPU: cpuQuantity}
-
-	vpaCRD.Status.Recommendation = &vpa_types.RecommendedPodResources{
-		ContainerRecommendations: []vpa_types.RecommendedContainerResources{
-			{
-				ContainerName: "hamster",
-				Target:        resourceList,
-				LowerBound:    resourceList,
-				UpperBound:    resourceList,
-			},
-			{
-				ContainerName: "hamster2",
-				Target:        resourceList,
-				LowerBound:    resourceList,
-				UpperBound:    resourceList,
+// NewTestCronJob returns a CronJob for test purposes.
+func NewTestCronJob(name, schedule string) *batchv1beta1.CronJob {
+	replicas := defaultHamsterReplicas
+	backoffLimit := defaultHamsterBackoffLimit
+	sj := &batchv1beta1.CronJob{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name,
+		},
+		TypeMeta: metav1.TypeMeta{
+			Kind: "CronJob",
+		},
+		Spec: batchv1beta1.CronJobSpec{
+			Schedule:          schedule,
+			ConcurrencyPolicy: batchv1beta1.AllowConcurrent,
+			JobTemplate: batchv1beta1.JobTemplateSpec{
+				Spec: batchv1.JobSpec{
+					Parallelism:  &replicas,
+					Completions:  &replicas,
+					BackoffLimit: &backoffLimit,
+					Template: apiv1.PodTemplateSpec{
+						ObjectMeta: metav1.ObjectMeta{
+							Labels: map[string]string{"job": name},
+						},
+						Spec: apiv1.PodSpec{
+							RestartPolicy: apiv1.RestartPolicyOnFailure,
+						},
+					},
+				},
 			},
 		},
 	}
+
+	return sj
+}
+
+func waitForActiveJobs(c clientset.Interface, ns, cronJobName string, active int) error {
+	return wait.Poll(framework.Poll, cronJobsWaitTimeout, func() (bool, error) {
+		curr, err := getCronJob(c, ns, cronJobName)
+		if err != nil {
+			return false, err
+		}
+		return len(curr.Status.Active) >= active, nil
+	})
+}
+
+func createCronJob(c clientset.Interface, ns string, cronJob *batchv1beta1.CronJob) (*batchv1beta1.CronJob, error) {
+	return c.BatchV1beta1().CronJobs(ns).Create(cronJob)
+}
+
+func getCronJob(c clientset.Interface, ns, name string) (*batchv1beta1.CronJob, error) {
+	return c.BatchV1beta1().CronJobs(ns).Get(name, metav1.GetOptions{})
+}
+
+// SetupHamsterCronJob creates and sets up a new CronJob
+func SetupHamsterCronJob(f *framework.Framework, schedule, cpu, memory string, replicas int32) {
+	cronJob := NewTestCronJob("hamster-cronjob", schedule)
+	cronJob.Spec.JobTemplate.Spec.Template.Spec.Containers = []apiv1.Container{SetupHamsterContainer(cpu, memory)}
+	for label, value := range hamsterLabels {
+		cronJob.Spec.JobTemplate.Spec.Template.Labels[label] = value
+	}
+	cronJob, err := createCronJob(f.ClientSet, f.Namespace.Name, cronJob)
+	gomega.Expect(err).NotTo(gomega.HaveOccurred())
+	err = waitForActiveJobs(f.ClientSet, f.Namespace.Name, cronJob.Name, 1)
+	gomega.Expect(err).NotTo(gomega.HaveOccurred())
+}
+
+// SetupHamsterContainer returns container with given amount of cpu and memory
+func SetupHamsterContainer(cpu, memory string) apiv1.Container {
+	cpuQuantity := ParseQuantityOrDie(cpu)
+	memoryQuantity := ParseQuantityOrDie(memory)
+
+	return apiv1.Container{
+		Name:  "hamster",
+		Image: "k8s.gcr.io/ubuntu-slim:0.1",
+		Resources: apiv1.ResourceRequirements{
+			Requests: apiv1.ResourceList{
+				apiv1.ResourceCPU:    cpuQuantity,
+				apiv1.ResourceMemory: memoryQuantity,
+			},
+		},
+		Command: []string{"/bin/sh"},
+		Args:    []string{"-c", "while true; do sleep 10 ; done"},
+	}
+}
+
+// SetupVPA creates and installs a simple hamster VPA for e2e test purposes.
+func SetupVPA(f *framework.Framework, cpu string, mode vpa_types.UpdateMode, targetRef *autoscaling.CrossVersionObjectReference) {
+	SetupVPAForNHamsters(f, 1, cpu, mode, targetRef)
+}
+
+// SetupVPAForNHamsters creates and installs a simple pod with n hamster containers for e2e test purposes.
+func SetupVPAForNHamsters(f *framework.Framework, n int, cpu string, mode vpa_types.UpdateMode, targetRef *autoscaling.CrossVersionObjectReference) {
+	vpaCRD := NewVPA(f, "hamster-vpa", targetRef)
+	vpaCRD.Spec.UpdatePolicy.UpdateMode = &mode
+
+	cpuQuantity := ParseQuantityOrDie(cpu)
+	resourceList := apiv1.ResourceList{apiv1.ResourceCPU: cpuQuantity}
+
+	containerRecommendations := []vpa_types.RecommendedContainerResources{}
+	for i := 0; i < n; i++ {
+		containerRecommendations = append(containerRecommendations,
+			vpa_types.RecommendedContainerResources{
+				ContainerName: GetHamsterContainerNameByIndex(i),
+				Target:        resourceList,
+				LowerBound:    resourceList,
+				UpperBound:    resourceList,
+			},
+		)
+	}
+	vpaCRD.Status.Recommendation = &vpa_types.RecommendedPodResources{
+		ContainerRecommendations: containerRecommendations,
+	}
+
 	InstallVPA(f, vpaCRD)
 }
 
@@ -392,7 +498,7 @@ func CheckNoPodsEvicted(f *framework.Framework, initialPodSet PodSet) {
 
 // WaitForVPAMatch pools VPA object until match function returns true. Returns
 // polled vpa object. On timeout returns error.
-func WaitForVPAMatch(c *vpa_clientset.Clientset, vpa *vpa_types.VerticalPodAutoscaler, match func(vpa *vpa_types.VerticalPodAutoscaler) bool) (*vpa_types.VerticalPodAutoscaler, error) {
+func WaitForVPAMatch(c vpa_clientset.Interface, vpa *vpa_types.VerticalPodAutoscaler, match func(vpa *vpa_types.VerticalPodAutoscaler) bool) (*vpa_types.VerticalPodAutoscaler, error) {
 	var polledVpa *vpa_types.VerticalPodAutoscaler
 	err := wait.PollImmediate(pollInterval, pollTimeout, func() (bool, error) {
 		var err error
@@ -416,7 +522,7 @@ func WaitForVPAMatch(c *vpa_clientset.Clientset, vpa *vpa_types.VerticalPodAutos
 
 // WaitForRecommendationPresent pools VPA object until recommendations are not empty. Returns
 // polled vpa object. On timeout returns error.
-func WaitForRecommendationPresent(c *vpa_clientset.Clientset, vpa *vpa_types.VerticalPodAutoscaler) (*vpa_types.VerticalPodAutoscaler, error) {
+func WaitForRecommendationPresent(c vpa_clientset.Interface, vpa *vpa_types.VerticalPodAutoscaler) (*vpa_types.VerticalPodAutoscaler, error) {
 	return WaitForVPAMatch(c, vpa, func(vpa *vpa_types.VerticalPodAutoscaler) bool {
 		return vpa.Status.Recommendation != nil && len(vpa.Status.Recommendation.ContainerRecommendations) != 0
 	})

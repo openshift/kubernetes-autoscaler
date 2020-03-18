@@ -19,7 +19,7 @@
 # K8S_TAG - k8s version to use for the dependencies update.
 # Suggested format is K8S_TAG=v1.10.3
 
-set -eou errexit pipefail nounset
+set -euo pipefail
 
 K8S_TAG=${K8S_TAG:-v1.16.2}
 K8S_TAG=${K8S_TAG#v}
@@ -40,6 +40,7 @@ function update_deps() {
             go mod download -json "${MOD}@kubernetes-${K8S_TAG}" |
             sed -n 's|.*"Version": "\(.*\)".*|\1|p'
         )
+        echo "Replacing ${MOD} with version ${V}"
         go mod edit "-replace=${MOD}=${MOD}@${V}"
     done
 }

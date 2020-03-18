@@ -367,7 +367,9 @@ func (feeder *clusterStateFeeder) LoadPods() {
 		}
 		feeder.clusterState.AddOrUpdatePod(pod.ID, pod.PodLabels, pod.Phase)
 		for _, container := range pod.Containers {
-			feeder.clusterState.AddOrUpdateContainer(container.ID, container.Request)
+			if err = feeder.clusterState.AddOrUpdateContainer(container.ID, container.Request); err != nil {
+				klog.Warningf("Failed to add container %+v. Reason: %+v", container.ID, err)
+			}
 		}
 	}
 }
@@ -383,6 +385,10 @@ func (feeder *clusterStateFeeder) LoadRealTimeMetrics() {
 	for _, containerMetrics := range containersMetrics {
 		for _, sample := range newContainerUsageSamplesWithKey(containerMetrics) {
 			if err := feeder.clusterState.AddSample(sample); err != nil {
+				// Not all pod states are tracked in memory saver mode
+				if _, isKeyError := err.(model.KeyError); isKeyError && feeder.memorySaveMode {
+					continue
+				}
 				klog.Warningf("Error adding metric sample for container %v: %v", sample.Container, err)
 				droppedSampleCount++
 			} else {
@@ -396,7 +402,9 @@ Loop:
 		select {
 		case oomInfo := <-feeder.oomChan:
 			klog.V(3).Infof("OOM detected %+v", oomInfo)
-			feeder.clusterState.RecordOOM(oomInfo.ContainerID, oomInfo.Timestamp, oomInfo.Memory)
+			if err = feeder.clusterState.RecordOOM(oomInfo.ContainerID, oomInfo.Timestamp, oomInfo.Memory); err != nil {
+				klog.Warningf("Failed to record OOM %+v. Reason: %+v", oomInfo, err)
+			}
 		default:
 			break Loop
 		}
@@ -450,15 +458,15 @@ func (feeder *clusterStateFeeder) validateTargetRef(vpa *vpa_types.VerticalPodAu
 		},
 		ApiVersion: vpa.Spec.TargetRef.APIVersion,
 	}
-	top, err := feeder.controllerFetcher.FindTopLevel(&k)
+	top, err := feeder.controllerFetcher.FindTopMostWellKnownOrScalable(&k)
 	if err != nil {
-		return false, condition{conditionType: vpa_types.ConfigUnsupported, delete: false, message: fmt.Sprintf("Error checking if target is a top level controller: %s", err)}
+		return false, condition{conditionType: vpa_types.ConfigUnsupported, delete: false, message: fmt.Sprintf("Error checking if target is a topmost well-known or scalable controller: %s", err)}
 	}
 	if top == nil {
-		return false, condition{conditionType: vpa_types.ConfigUnsupported, delete: false, message: fmt.Sprintf("Unknown error during checking if target is a top level controller: %s", err)}
+		return false, condition{conditionType: vpa_types.ConfigUnsupported, delete: false, message: fmt.Sprintf("Unknown error during checking if target is a topmost well-known or scalable controller: %s", err)}
 	}
 	if *top != k {
-		return false, condition{conditionType: vpa_types.ConfigUnsupported, delete: false, message: "The targetRef controller has a parent but it should point to a top-level controller"}
+		return false, condition{conditionType: vpa_types.ConfigUnsupported, delete: false, message: "The targetRef controller has a parent but it should point to a topmost well-known or scalable controller"}
 	}
 	return true, condition{}
 }

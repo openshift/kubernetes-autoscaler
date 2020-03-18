@@ -29,27 +29,20 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/metrics"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/daemonset"
-	"k8s.io/autoscaler/cluster-autoscaler/utils/deletetaint"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/errors"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/gpu"
 	kube_util "k8s.io/autoscaler/cluster-autoscaler/utils/kubernetes"
+	"k8s.io/autoscaler/cluster-autoscaler/utils/taints"
 	schedulernodeinfo "k8s.io/kubernetes/pkg/scheduler/nodeinfo"
 
 	"k8s.io/klog"
 )
 
-const (
-	// ReschedulerTaintKey is the name of the taint created by rescheduler.
-	ReschedulerTaintKey = "CriticalAddonsOnly"
-)
-
-type equivalenceGroupId int
-
 // GetNodeInfosForGroups finds NodeInfos for all node groups used to manage the given nodes. It also returns a node group to sample node mapping.
 func GetNodeInfosForGroups(nodes []*apiv1.Node, nodeInfoCache map[string]*schedulernodeinfo.NodeInfo, cloudProvider cloudprovider.CloudProvider, listers kube_util.ListerRegistry,
 	// TODO(mwielgus): This returns map keyed by url, while most code (including scheduler) uses node.Name for a key.
 	// TODO(mwielgus): Review error policy - sometimes we may continue with partial errors.
-	daemonsets []*appsv1.DaemonSet, predicateChecker *simulator.PredicateChecker, ignoredTaints TaintKeySet) (map[string]*schedulernodeinfo.NodeInfo, errors.AutoscalerError) {
+	daemonsets []*appsv1.DaemonSet, predicateChecker simulator.PredicateChecker, ignoredTaints taints.TaintKeySet) (map[string]*schedulernodeinfo.NodeInfo, errors.AutoscalerError) {
 	result := make(map[string]*schedulernodeinfo.NodeInfo)
 	seenGroups := make(map[string]bool)
 
@@ -172,14 +165,17 @@ func getPodsForNodes(listers kube_util.ListerRegistry) (map[string][]*apiv1.Pod,
 }
 
 // GetNodeInfoFromTemplate returns NodeInfo object built base on TemplateNodeInfo returned by NodeGroup.TemplateNodeInfo().
-func GetNodeInfoFromTemplate(nodeGroup cloudprovider.NodeGroup, daemonsets []*appsv1.DaemonSet, predicateChecker *simulator.PredicateChecker, ignoredTaints TaintKeySet) (*schedulernodeinfo.NodeInfo, errors.AutoscalerError) {
+func GetNodeInfoFromTemplate(nodeGroup cloudprovider.NodeGroup, daemonsets []*appsv1.DaemonSet, predicateChecker simulator.PredicateChecker, ignoredTaints taints.TaintKeySet) (*schedulernodeinfo.NodeInfo, errors.AutoscalerError) {
 	id := nodeGroup.Id()
 	baseNodeInfo, err := nodeGroup.TemplateNodeInfo()
 	if err != nil {
 		return nil, errors.ToAutoscalerError(errors.CloudProviderError, err)
 	}
 
-	pods := daemonset.GetDaemonSetPodsForNode(baseNodeInfo, daemonsets, predicateChecker)
+	pods, err := daemonset.GetDaemonSetPodsForNode(baseNodeInfo, daemonsets, predicateChecker)
+	if err != nil {
+		return nil, errors.ToAutoscalerError(errors.InternalError, err)
+	}
 	pods = append(pods, baseNodeInfo.Pods()...)
 	fullNodeInfo := schedulernodeinfo.NewNodeInfo(pods...)
 	fullNodeInfo.SetNode(baseNodeInfo.Node())
@@ -221,7 +217,7 @@ func deepCopyNodeInfo(nodeInfo *schedulernodeinfo.NodeInfo) (*schedulernodeinfo.
 	return newNodeInfo, nil
 }
 
-func sanitizeNodeInfo(nodeInfo *schedulernodeinfo.NodeInfo, nodeGroupName string, ignoredTaints TaintKeySet) (*schedulernodeinfo.NodeInfo, errors.AutoscalerError) {
+func sanitizeNodeInfo(nodeInfo *schedulernodeinfo.NodeInfo, nodeGroupName string, ignoredTaints taints.TaintKeySet) (*schedulernodeinfo.NodeInfo, errors.AutoscalerError) {
 	// Sanitize node name.
 	sanitizedNode, err := sanitizeTemplateNode(nodeInfo.Node(), nodeGroupName, ignoredTaints)
 	if err != nil {
@@ -244,7 +240,7 @@ func sanitizeNodeInfo(nodeInfo *schedulernodeinfo.NodeInfo, nodeGroupName string
 	return sanitizedNodeInfo, nil
 }
 
-func sanitizeTemplateNode(node *apiv1.Node, nodeGroup string, ignoredTaints TaintKeySet) (*apiv1.Node, errors.AutoscalerError) {
+func sanitizeTemplateNode(node *apiv1.Node, nodeGroup string, ignoredTaints taints.TaintKeySet) (*apiv1.Node, errors.AutoscalerError) {
 	newNode := node.DeepCopy()
 	nodeName := fmt.Sprintf("template-node-for-%s-%d", nodeGroup, rand.Int63())
 	newNode.Labels = make(map[string]string, len(node.Labels))
@@ -256,37 +252,7 @@ func sanitizeTemplateNode(node *apiv1.Node, nodeGroup string, ignoredTaints Tain
 		}
 	}
 	newNode.Name = nodeName
-	newTaints := make([]apiv1.Taint, 0)
-	for _, taint := range node.Spec.Taints {
-		// Rescheduler can put this taint on a node while evicting non-critical pods.
-		// New nodes will not have this taint and so we should strip it when creating
-		// template node.
-		switch taint.Key {
-		case ReschedulerTaintKey:
-			klog.V(4).Infof("Removing rescheduler taint when creating template from node %s", node.Name)
-			continue
-		case deletetaint.ToBeDeletedTaint:
-			klog.V(4).Infof("Removing autoscaler taint when creating template from node %s", node.Name)
-			continue
-		case deletetaint.DeletionCandidateTaint:
-			klog.V(4).Infof("Removing autoscaler soft taint when creating template from node %s", node.Name)
-			continue
-		}
-
-		// ignore conditional taints as they represent a transient node state.
-		if exists := NodeConditionTaints[taint.Key]; exists {
-			klog.V(4).Infof("Removing node condition taint %s, when creating template from node %s", taint.Key, node.Name)
-			continue
-		}
-
-		if exists := ignoredTaints[taint.Key]; exists {
-			klog.V(4).Infof("Removing ignored taint %s, when creating template from node %s", taint.Key, node.Name)
-			continue
-		}
-
-		newTaints = append(newTaints, taint)
-	}
-	newNode.Spec.Taints = newTaints
+	newNode.Spec.Taints = taints.SanitizeTaints(newNode.Spec.Taints, ignoredTaints)
 	return newNode, nil
 }
 
@@ -305,28 +271,6 @@ func hasHardInterPodAffinity(affinity *apiv1.Affinity) bool {
 		}
 	}
 	return false
-}
-
-func anyPodHasHardInterPodAffinity(pods []*apiv1.Pod) bool {
-	for _, pod := range pods {
-		if hasHardInterPodAffinity(pod.Spec.Affinity) {
-			return true
-		}
-	}
-	return false
-}
-
-// ConfigurePredicateCheckerForLoop can be run to update predicateChecker configuration
-// based on current state of the cluster.
-func ConfigurePredicateCheckerForLoop(unschedulablePods []*apiv1.Pod, schedulablePods []*apiv1.Pod, predicateChecker *simulator.PredicateChecker) {
-	podsWithAffinityFound := anyPodHasHardInterPodAffinity(unschedulablePods)
-	if !podsWithAffinityFound {
-		podsWithAffinityFound = anyPodHasHardInterPodAffinity(schedulablePods)
-	}
-	predicateChecker.SetAffinityPredicateEnabled(podsWithAffinityFound)
-	if !podsWithAffinityFound {
-		klog.V(1).Info("No pod using affinity / antiaffinity found in cluster, disabling affinity predicate for this loop")
-	}
 }
 
 // GetNodeCoresAndMemory extracts cpu and memory resources out of Node object

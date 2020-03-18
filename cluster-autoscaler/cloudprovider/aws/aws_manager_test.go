@@ -17,6 +17,7 @@ limitations under the License.
 package aws
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -28,6 +29,7 @@ import (
 	"testing"
 
 	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/ec2metadata"
 	"github.com/aws/aws-sdk-go/service/autoscaling"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/stretchr/testify/assert"
@@ -56,13 +58,13 @@ func TestGetRegion(t *testing.T) {
 	expected1 := "the-shire-1"
 	os.Setenv(key, expected1)
 	assert.Equal(t, expected1, getRegion())
-	// Ensure without environment variable, EC2 Metadata used... and it merely
-	// chops the last character off the Availability Zone.
+	// Ensure without environment variable, EC2 Metadata is used.
 	expected2 := "mordor-2"
-	expected2a := expected2 + "a"
+	expectedjson := ec2metadata.EC2InstanceIdentityDocument{Region: expected2}
+	js, _ := json.Marshal(expectedjson)
 	os.Unsetenv(key)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(expected2a))
+		w.Write(js)
 	}))
 	cfg := aws.NewConfig().WithEndpoint(server.URL)
 	assert.Equal(t, expected2, getRegion(cfg))
@@ -233,7 +235,7 @@ func TestFetchExplicitAsgs(t *testing.T) {
 	defer resetAWSRegion(os.LookupEnv("AWS_REGION"))
 	os.Setenv("AWS_REGION", "fanghorn")
 	// fetchExplicitASGs is called at manager creation time.
-	m, err := createAWSManagerInternal(nil, do, &autoScalingWrapper{s, map[string]string{}}, nil)
+	m, err := createAWSManagerInternal(nil, do, &autoScalingWrapper{s, newLaunchConfigurationInstanceTypeCache()}, nil)
 	assert.NoError(t, err)
 
 	asgs := m.asgCache.Get()
@@ -467,7 +469,7 @@ func TestFetchAutoAsgs(t *testing.T) {
 	defer resetAWSRegion(os.LookupEnv("AWS_REGION"))
 	os.Setenv("AWS_REGION", "fanghorn")
 	// fetchAutoASGs is called at manager creation time, via forceRefresh
-	m, err := createAWSManagerInternal(nil, do, &autoScalingWrapper{s, map[string]string{}}, nil)
+	m, err := createAWSManagerInternal(nil, do, &autoScalingWrapper{s, newLaunchConfigurationInstanceTypeCache()}, nil)
 	assert.NoError(t, err)
 
 	asgs := m.asgCache.Get()
