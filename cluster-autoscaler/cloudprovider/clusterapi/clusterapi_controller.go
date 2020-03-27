@@ -639,18 +639,28 @@ func (c *machineController) findScalableResourceProviderIDs(scalableResource *un
 	}
 
 	for _, machine := range machines {
-		// Failed Machines
-		// In some cases it is possible for a machine to have acquired a provider ID from the infrastructure and
-		// then become failed later. We want to ensure that a failed machine is not counted towards the total
-		// number of nodes in the cluster, for this reason we will detect a failed machine first, regardless
-		// of provider ID, and give it a normalized provider ID with failure message prepended.
-		failureMessage, found, err := unstructured.NestedString(machine.UnstructuredContent(), "status", "failureMessage")
+		providerID, found, err := unstructured.NestedString(machine.UnstructuredContent(), "spec", "providerID")
 		if err != nil {
 			return nil, err
 		}
 
 		if found {
-			// Provide a normalized ID to allow the autoscaler to track machines that will never
+			if providerID != "" {
+				providerIDs = append(providerIDs, providerID)
+				continue
+			}
+		}
+
+		klog.Warningf("Machine %q has no providerID", machine.GetName())
+
+		errorMessage, found, err := unstructured.NestedString(machine.UnstructuredContent(), "status", "errorMessage")
+		if err != nil {
+			return nil, err
+		}
+
+		if found {
+			klog.V(4).Infof("Status.ErrorMessage of machine %q is %q", machine.GetName(), errorMessage)
+			// Provide a fake ID to allow the autoscaler to track machines that will never
 			// become nodes and mark the nodegroup unhealthy after maxNodeProvisionTime.
 			// Fake ID needs to be recognised later and converted into a machine key.
 			// Use an underscore as a separator between namespace and name as it is not a
