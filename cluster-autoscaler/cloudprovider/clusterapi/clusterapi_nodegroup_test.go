@@ -1013,8 +1013,8 @@ func TestNodeGroupWithFailedMachine(t *testing.T) {
 		// Simulate a failed machine
 		machine := testConfig.machines[3].DeepCopy()
 		machine.Spec.ProviderID = nil
-		failureMessage := "FailureMessage"
-		machine.Status.FailureMessage = &failureMessage
+		errorMessage := "ErrorMessage"
+		machine.Status.ErrorMessage = &errorMessage
 		if err := controller.machineInformer.Informer().GetStore().Update(newUnstructuredFromMachine(machine)); err != nil {
 			t.Fatalf("unexpected error updating machine, got %v", err)
 		}

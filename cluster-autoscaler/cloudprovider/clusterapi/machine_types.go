@@ -64,7 +64,7 @@ type MachineStatus struct {
 	// +optional
 	NodeRef *corev1.ObjectReference `json:"nodeRef,omitempty"`
 
-	// FailureMessage will be set in the event that there is a terminal problem
+	// ErrorMessage will be set in the event that there is a terminal problem
 	// reconciling the Machine and will contain a more verbose string suitable
 	// for logging and human consumption.
 	//
@@ -81,7 +81,7 @@ type MachineStatus struct {
 	// can be added as events to the Machine object and/or logged in the
 	// controller's output.
 	// +optional
-	FailureMessage *string `json:"failureMessage,omitempty"`
+	ErrorMessage *string `json:"errorMessage,omitempty"`
 }
 
 // MachineList contains a list of Machine
