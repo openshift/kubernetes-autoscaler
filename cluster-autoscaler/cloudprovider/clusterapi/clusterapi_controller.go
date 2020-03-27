@@ -649,7 +649,7 @@ func (c *machineController) findScalableResourceProviderIDs(scalableResource *un
 		// then become failed later. We want to ensure that a failed machine is not counted towards the total
 		// number of nodes in the cluster, for this reason we will detect a failed machine first, regardless
 		// of provider ID, and give it a normalized provider ID with failure message prepended.
-		failureMessage, found, err := unstructured.NestedString(machine.UnstructuredContent(), "status", "failureMessage")
+		errorMessage, found, err := unstructured.NestedString(machine.UnstructuredContent(), "status", "errorMessage")
 		if err != nil {
 			return nil, err
 		}
@@ -660,7 +660,7 @@ func (c *machineController) findScalableResourceProviderIDs(scalableResource *un
 			// Fake ID needs to be recognised later and converted into a machine key.
 			// Use an underscore as a separator between namespace and name as it is not a
 			// valid character within a namespace name.
-			klog.V(4).Infof("Status.FailureMessage of machine %q is %q", machine.GetName(), failureMessage)
+			klog.V(4).Infof("Status.ErrorMessage of machine %q is %q", machine.GetName(), errorMessage)
 			providerIDs = append(providerIDs, createFailedMachineNormalizedProviderID(machine.GetNamespace(), machine.GetName()))
 			continue
 		}
