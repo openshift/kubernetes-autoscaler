@@ -440,8 +440,8 @@ func (c *machineController) machineSetProviderIDs(machineSet *MachineSet) ([]str
 			continue
 		}
 
-		if machine.Status.FailureMessage != nil {
-			klog.V(4).Infof("Status.FailureMessage of machine %q is %q", machine.Name, *machine.Status.FailureMessage)
+		if machine.Status.ErrorMessage != nil {
+			klog.V(4).Infof("Status.ErrorMessage of machine %q is %q", machine.Name, *machine.Status.ErrorMessage)
 			// Provide a fake ID that can be recognised later and converted into a machine key.
 			// Use an underscore as a separator between namespace and name as it is not a
 			// valid character within a namespace name.
