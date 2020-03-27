@@ -487,7 +487,7 @@ func TestNodeGroupDecreaseTargetSize(t *testing.T) {
 			if !tc.includeFailedMachineWithProviderID {
 				unstructured.RemoveNestedField(machine.Object, "spec", "providerID")
 			}
-			unstructured.SetNestedField(machine.Object, "FailureMessage", "status", "failureMessage")
+			unstructured.SetNestedField(machine.Object, "ErrorMessage", "status", "errorMessage")
 
 			if err := controller.UpdateResource(controller.machineInformer, controller.machineResource, machine); err != nil {
 				t.Fatalf("unexpected error updating machine, got %v", err)
@@ -1398,9 +1398,7 @@ func TestNodeGroupWithFailedMachine(t *testing.T) {
 		machine := testConfig.machines[3].DeepCopy()
 
 		unstructured.RemoveNestedField(machine.Object, "spec", "providerID")
-		if err := unstructured.SetNestedField(machine.Object, "FailureMessage", "status", "failureMessage"); err != nil {
-			t.Fatalf("unexpected error setting nested field: %v", err)
-		}
+		unstructured.SetNestedField(machine.Object, "ErrorMessage", "status", "errorMessage")
 
 		if err := controller.UpdateResource(controller.machineInformer, controller.machineResource, machine); err != nil {
 			t.Fatalf("unexpected error updating machine, got %v", err)
