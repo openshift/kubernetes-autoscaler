@@ -1197,9 +1197,7 @@ func TestNodeGroupWithFailedMachine(t *testing.T) {
 		machine := testConfig.machines[3].DeepCopy()
 
 		unstructured.RemoveNestedField(machine.Object, "spec", "providerID")
-		if err := unstructured.SetNestedField(machine.Object, "FailureMessage", "status", "failureMessage"); err != nil {
-			t.Fatalf("unexpected error setting nested field: %v", err)
-		}
+		unstructured.SetNestedField(machine.Object, "ErrorMessage", "status", "errorMessage")
 
 		if err := updateResource(controller.managementClient, controller.machineInformer, controller.machineResource, machine); err != nil {
 			t.Fatalf("unexpected error updating machine, got %v", err)
