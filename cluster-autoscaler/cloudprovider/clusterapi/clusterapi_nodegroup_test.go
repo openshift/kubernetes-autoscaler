@@ -168,10 +168,6 @@ func TestNodeGroupNewNodeGroupConstructor(t *testing.T) {
 			t.Errorf("expected %q, got %q", expectedDebug, ng.Debug())
 		}
 
-		if _, err := ng.TemplateNodeInfo(); err != cloudprovider.ErrNotImplemented {
-			t.Error("expected error")
-		}
-
 		if exists := ng.Exist(); !exists {
 			t.Errorf("expected %t, got %t", true, exists)
 		}
