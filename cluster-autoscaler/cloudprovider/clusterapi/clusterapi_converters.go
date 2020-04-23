@@ -82,9 +82,12 @@ func newMachineDeploymentFromUnstructured(u *unstructured.Unstructured) *Machine
 		}
 	}
 
-	replicas, found, err := unstructured.NestedInt64(u.Object, "spec", "replicas")
-	if err == nil && found {
+	if replicas, found, err := unstructured.NestedInt64(u.Object, "spec", "replicas"); err == nil && found {
 		machineDeployment.Spec.Replicas = pointer.Int32Ptr(int32(replicas))
+	}
+
+	if replicas, found, err := unstructured.NestedInt64(u.Object, "status", "replicas"); err == nil && found {
+		machineDeployment.Status.Replicas = int32(replicas)
 	}
 
 	return &machineDeployment
@@ -123,9 +126,12 @@ func newMachineSetFromUnstructured(u *unstructured.Unstructured) *MachineSet {
 		}
 	}
 
-	replicas, found, err := unstructured.NestedInt64(u.Object, "spec", "replicas")
-	if err == nil && found {
+	if replicas, found, err := unstructured.NestedInt64(u.Object, "spec", "replicas"); err == nil && found {
 		machineSet.Spec.Replicas = pointer.Int32Ptr(int32(replicas))
+	}
+
+	if replicas, found, err := unstructured.NestedInt64(u.Object, "status", "replicas"); err == nil && found {
+		machineSet.Status.Replicas = int32(replicas)
 	}
 
 	return &machineSet
@@ -192,6 +198,7 @@ func newUnstructuredFromMachineSet(m *MachineSet) *unstructured.Unstructured {
 	if m.Spec.Replicas != nil {
 		unstructured.SetNestedField(u.Object, int64(*m.Spec.Replicas), "spec", "replicas")
 	}
+	unstructured.SetNestedField(u.Object, int64(m.Status.Replicas), "status", "replicas")
 
 	return &u
 }
@@ -212,6 +219,7 @@ func newUnstructuredFromMachineDeployment(m *MachineDeployment) *unstructured.Un
 	if m.Spec.Replicas != nil {
 		unstructured.SetNestedField(u.Object, int64(*m.Spec.Replicas), "spec", "replicas")
 	}
+	unstructured.SetNestedField(u.Object, int64(m.Status.Replicas), "status", "replicas")
 
 	return &u
 }
