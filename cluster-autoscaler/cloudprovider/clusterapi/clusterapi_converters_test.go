@@ -125,12 +125,19 @@ func testMachineSetSpec() map[string]interface{} {
 	}
 }
 
+func testMachineSetStatus() map[string]interface{} {
+	return map[string]interface{}{
+		"replicas": int64(ctReplicas),
+	}
+}
+
 func testMachineSet() map[string]interface{} {
 	return map[string]interface{}{
 		"apiVersion": ctAPIVersion,
 		"kind":       ctKindMS,
 		"metadata":   testObjectMeta(),
 		"spec":       testMachineSetSpec(),
+		"status":     testMachineSetStatus(),
 	}
 }
 
@@ -140,12 +147,19 @@ func testMachineDeploymentSpec() map[string]interface{} {
 	return testMachineSetSpec()
 }
 
+func testMachineDeploymentStatus() map[string]interface{} {
+	// for now we can return a machineset spec as it is functionally the same
+	// as a machinedeploymentspec for these tests.
+	return testMachineSetStatus()
+}
+
 func testMachineDeployment() map[string]interface{} {
 	return map[string]interface{}{
 		"apiVersion": ctAPIVersion,
 		"kind":       ctKindMD,
 		"metadata":   testObjectMeta(),
-		"spec":       testMachineSetSpec(),
+		"spec":       testMachineDeploymentSpec(),
+		"status":     testMachineDeploymentStatus(),
 	}
 }
 
@@ -275,6 +289,12 @@ func TestConverterNewMachineSetFromUnstructured(t *testing.T) {
 			observed: *machineSet.Spec.Template.Spec.Taints[0].TimeAdded,
 			compare:  testTimeCompare,
 		},
+		{
+			name:     "MachineSet.Status.Replicas",
+			expected: int32(ctReplicas),
+			observed: machineSet.Status.Replicas,
+			compare:  testInt32Compare,
+		},
 	}
 
 	doCompares(testConfigs, t)
@@ -392,6 +412,12 @@ func TestConverterNewMachineDeploymentFromUnstructured(t *testing.T) {
 			expected: metav1.NewTime(ctTimestampNow.UTC()),
 			observed: *machineDeployment.Spec.Template.Spec.Taints[0].TimeAdded,
 			compare:  testTimeCompare,
+		},
+		{
+			name:     "MachineDeployment.Status.Replicas",
+			expected: int32(ctReplicas),
+			observed: machineDeployment.Status.Replicas,
+			compare:  testInt32Compare,
 		},
 	}
 
