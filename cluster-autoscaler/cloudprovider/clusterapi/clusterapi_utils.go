@@ -30,10 +30,11 @@ const (
 	nodeGroupMinSizeAnnotationKey = "machine.openshift.io/cluster-api-autoscaler-node-group-min-size"
 	nodeGroupMaxSizeAnnotationKey = "machine.openshift.io/cluster-api-autoscaler-node-group-max-size"
 
-	cpuKey     = "machine.openshift.io/vCPU"
-	memoryKey  = "machine.openshift.io/memoryMb"
-	gpuKey     = "machine.openshift.io/GPU"
-	maxPodsKey = "machine.openshift.io/maxPods"
+	cpuKey              = "machine.openshift.io/vCPU"
+	memoryKeyDeprecated = "machine.openshift.io/memoryMb"
+	memoryKey           = "machine.openshift.io/memory"
+	gpuKey              = "machine.openshift.io/GPU"
+	maxPodsKey          = "machine.openshift.io/maxPods"
 )
 
 var (
@@ -165,7 +166,12 @@ func normalizedProviderString(s string) normalizedProviderID {
 
 func scaleFromZeroEnabled(annotations map[string]string) bool {
 	cpu := annotations[cpuKey]
-	mem := annotations[memoryKey]
+
+	mem, ok := annotations[memoryKey]
+	if !ok {
+		// TODO(alberto): drop this fallback after removing the deprecated key from aws/azure/gcp controllers
+		mem = annotations[memoryKeyDeprecated]
+	}
 
 	if cpu != "" && mem != "" {
 		return true
@@ -188,6 +194,11 @@ func parseMemoryCapacity(annotations map[string]string) (resource.Quantity, erro
 	// the value for the memoryKey is expected to have the unit type included,
 	// eg "1024Mi". if only a number is present, we add the suffix "Mi".
 	val, exists := annotations[memoryKey]
+	if !exists {
+		// TODO(alberto): drop this fallback after removing the deprecated key from aws/azure/gcp controllers
+		val, exists = annotations[memoryKeyDeprecated]
+	}
+
 	if exists && val != "" {
 		// TODO remove this check once we ensured that the providers are using the correct values
 		if _, err := strconv.Atoi(val); err == nil {

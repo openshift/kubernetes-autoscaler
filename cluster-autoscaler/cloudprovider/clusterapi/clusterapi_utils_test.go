@@ -527,6 +527,16 @@ func TestParseMemoryCapacity(t *testing.T) {
 		annotations:      map[string]string{memoryKey: "8Gi"},
 		expectedError:    false,
 		expectedQuantity: resource.MustParse("8Gi"),
+	}, {
+		description:      "using deprecated annotation with unit type (Gi)",
+		annotations:      map[string]string{memoryKeyDeprecated: "8Gi"},
+		expectedError:    false,
+		expectedQuantity: resource.MustParse("8Gi"),
+	}, {
+		description:      "using deprecated annotation without unit type",
+		annotations:      map[string]string{memoryKeyDeprecated: "456"},
+		expectedError:    false,
+		expectedQuantity: resource.MustParse("456Mi"),
 	}} {
 		t.Run(tc.description, func(t *testing.T) {
 			got, err := parseMemoryCapacity(tc.annotations)
