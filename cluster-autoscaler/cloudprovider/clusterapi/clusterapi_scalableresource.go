@@ -17,8 +17,12 @@ limitations under the License.
 package clusterapi
 
 import (
+	"context"
+	"fmt"
+
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // scalableResource is a resource that can be scaled up and down by
@@ -52,6 +56,9 @@ type scalableResource interface {
 	// MarkMachineForDeletion marks machine for deletion
 	MarkMachineForDeletion(machine *Machine) error
 
+	// UnmarkMachineForDeletion unmarks machine for deletion
+	UnmarkMachineForDeletion(machine *Machine) error
+
 	Labels() map[string]string
 	Taints() []apiv1.Taint
 	CanScaleFromZero() bool
@@ -59,4 +66,24 @@ type scalableResource interface {
 	InstanceMemoryCapacity() (resource.Quantity, error)
 	InstanceGPUCapacity() (resource.Quantity, error)
 	InstanceMaxPodsCapacity() (resource.Quantity, error)
+}
+
+func unmarkMachineForDeletion(controller *machineController, machine *Machine) error {
+	u, err := controller.dynamicclient.Resource(*controller.machineResource).Namespace(machine.Namespace).Get(context.TODO(), machine.Name, metav1.GetOptions{})
+
+	if err != nil {
+		return err
+	}
+	if u == nil {
+		return fmt.Errorf("unknown machine %s", machine.Name)
+	}
+
+	annotations := u.GetAnnotations()
+	if _, ok := annotations[machineDeleteAnnotationKey]; ok {
+		delete(annotations, machineDeleteAnnotationKey)
+		u.SetAnnotations(annotations)
+		_, updateErr := controller.dynamicclient.Resource(*controller.machineResource).Namespace(u.GetNamespace()).Update(context.TODO(), u, metav1.UpdateOptions{})
+		return updateErr
+	}
+	return nil
 }
