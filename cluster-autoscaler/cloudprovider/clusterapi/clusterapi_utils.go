@@ -24,6 +24,7 @@ import (
 	"github.com/pkg/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/autoscaler/cluster-autoscaler/utils/units"
 )
 
 const (
@@ -185,16 +186,16 @@ func parseCPUCapacity(annotations map[string]string) (resource.Quantity, error) 
 }
 
 func parseMemoryCapacity(annotations map[string]string) (resource.Quantity, error) {
-	// the value for the memoryKey is expected to have the unit type included,
-	// eg "1024Mi". if only a number is present, we add the suffix "Mi".
+	// The value for the memoryKey is expected to be an integer representing Mebibytes. e.g. "1024".
+	// https://www.iec.ch/si/binary.htm
 	val, exists := annotations[memoryKey]
 	if exists && val != "" {
-		// TODO remove this check once we ensured that the providers are using the correct values
-		if _, err := strconv.Atoi(val); err == nil {
-			// value is a number, we will append "Mi" as the unit type
-			val = fmt.Sprintf("%sMi", val)
+		valInt, err := strconv.ParseInt(val, 10, 0)
+		if err != nil {
+			return zeroQuantity.DeepCopy(), fmt.Errorf("value %q from annotation %q expected to be an integer: %v", val, memoryKey, err)
 		}
-		return resource.ParseQuantity(val)
+		// Convert from Mebibytes to bytes
+		return *resource.NewQuantity(valInt*units.MiB, resource.DecimalSI), nil
 	}
 	return zeroQuantity.DeepCopy(), nil
 }
