@@ -101,6 +101,9 @@ func (ng *nodegroup) IncreaseSize(delta int) error {
 // group. This function should wait until node group size is updated.
 // Implementation required.
 func (ng *nodegroup) DeleteNodes(nodes []*corev1.Node) error {
+	ng.machineController.accessLock.Lock()
+	defer ng.machineController.accessLock.Unlock()
+
 	replicas, err := ng.scalableResource.Replicas()
 	if err != nil {
 		return err
