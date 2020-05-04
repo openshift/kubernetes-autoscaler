@@ -63,14 +63,23 @@ func (r machineSetScalableResource) Nodes() ([]string, error) {
 	return r.controller.machineSetProviderIDs(r.machineSet)
 }
 
-func (r machineSetScalableResource) Replicas() int32 {
-	if r.machineSet.Spec.Replicas == nil {
+func (r machineSetScalableResource) Replicas() (int32, error) {
+	freshMachineSet, err := r.controller.getMachineSet(r.machineSet.Namespace, r.machineSet.Name, metav1.GetOptions{})
+	if err != nil {
+		return 0, err
+	}
+
+	if freshMachineSet == nil {
+		return 0, fmt.Errorf("unknown machineSet %s", r.machineSet.Name)
+	}
+
+	if freshMachineSet.Spec.Replicas == nil {
 		klog.Warningf("MachineSet %q has nil spec.replicas. This is unsupported behaviour. Falling back to status.replicas.", r.machineSet.Name)
 	}
 
 	// If no value for replicas on the MachineSet spec, fallback to the status
 	// TODO: Remove this fallback once defaulting is implemented for MachineSet Replicas
-	return pointer.Int32PtrDerefOr(r.machineSet.Spec.Replicas, r.machineSet.Status.Replicas)
+	return pointer.Int32PtrDerefOr(freshMachineSet.Spec.Replicas, freshMachineSet.Status.Replicas), nil
 }
 
 func (r machineSetScalableResource) SetSize(nreplicas int32) error {
