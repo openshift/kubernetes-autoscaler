@@ -18,7 +18,6 @@ package clusterapi
 
 import (
 	"context"
-	"fmt"
 
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -70,12 +69,8 @@ type scalableResource interface {
 
 func unmarkMachineForDeletion(controller *machineController, machine *Machine) error {
 	u, err := controller.dynamicclient.Resource(*controller.machineResource).Namespace(machine.Namespace).Get(context.TODO(), machine.Name, metav1.GetOptions{})
-
 	if err != nil {
 		return err
-	}
-	if u == nil {
-		return fmt.Errorf("unknown machine %s", machine.Name)
 	}
 
 	annotations := u.GetAnnotations()
