@@ -510,7 +510,7 @@ func (c *machineController) machineSetNodeGroups() ([]*nodegroup, error) {
 		if ng.MaxSize()-ng.MinSize() > 0 {
 			if ng.scalableResource.CanScaleFromZero() {
 				nodegroups = append(nodegroups, ng)
-			} else if pointer.Int32PtrDerefOr(machineSet.Spec.Replicas, 0) > 0 {
+			} else if pointer.Int32PtrDerefOr(machineSet.Spec.Replicas, machineSet.Status.Replicas) > 0 {
 				nodegroups = append(nodegroups, ng)
 			}
 		}

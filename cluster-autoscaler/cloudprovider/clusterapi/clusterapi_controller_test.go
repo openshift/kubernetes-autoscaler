@@ -776,6 +776,10 @@ func TestControllerNodeGroups(t *testing.T) {
 	if _, err := controller.nodeGroups(); err == nil {
 		t.Fatalf("expected an error")
 	}
+	if err := deleteTestConfigs(t, controller, machineSetConfigs...); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertNodegroupLen(t, controller, 0)
 
 	// Test #8: machinedeployment with bad scaling bounds results in an error and no nodegroups
 	machineDeploymentConfigs = createMachineDeploymentTestConfigs("MachineDeployment", 2, 1, annotations)
@@ -785,6 +789,24 @@ func TestControllerNodeGroups(t *testing.T) {
 	if _, err := controller.nodeGroups(); err == nil {
 		t.Fatalf("expected an error")
 	}
+	if err := deleteTestConfigs(t, controller, machineDeploymentConfigs...); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertNodegroupLen(t, controller, 0)
+
+	annotations = map[string]string{
+		nodeGroupMinSizeAnnotationKey: "1",
+		nodeGroupMaxSizeAnnotationKey: "5",
+	}
+
+	// Test #9: machineset with nil replicas results in falling back to status count
+	machineSetConfigs = createMachineSetTestConfigs("MachineSet", 1, 1, annotations)
+	machineSetConfigs[0].machineSet.Status.Replicas = *machineSetConfigs[0].machineSet.Spec.Replicas
+	machineSetConfigs[0].machineSet.Spec.Replicas = nil
+	if err := addTestConfigs(t, controller, machineSetConfigs...); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertNodegroupLen(t, controller, 1)
 }
 
 func TestControllerNodeGroupsNodeCount(t *testing.T) {
