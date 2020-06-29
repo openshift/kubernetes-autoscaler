@@ -316,11 +316,10 @@ func TestNodeGroupIncreaseSizeErrors(t *testing.T) {
 
 func TestNodeGroupIncreaseSize(t *testing.T) {
 	type testCase struct {
-		description   string
-		delta         int
-		initialSpec   *int32
-		initialStatus int32
-		expected      int32
+		description string
+		delta       int
+		initial     int32
+		expected    int32
 	}
 
 	test := func(t *testing.T, tc *testCase, testConfig *testConfig) {
@@ -342,16 +341,8 @@ func TestNodeGroupIncreaseSize(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		// If initialSpec is nil, fallback to replica count from status
-		// TODO: Remove this fallback once defaulting is implemented for MachineSet Replicas
-		if tc.initialSpec != nil {
-			if currReplicas != int(pointer.Int32PtrDerefOr(tc.initialSpec, -1)) {
-				t.Errorf("initially expected %v, got %v", tc.initialSpec, currReplicas)
-			}
-		} else {
-			if currReplicas != int(tc.initialStatus) {
-				t.Errorf("initially expected %v, got %v", tc.initialStatus, currReplicas)
-			}
+		if currReplicas != int(tc.initial) {
+			t.Errorf("initially expected %v, got %v", tc.initial, currReplicas)
 		}
 
 		if err := ng.IncreaseSize(tc.delta); err != nil {
@@ -390,43 +381,21 @@ func TestNodeGroupIncreaseSize(t *testing.T) {
 	t.Run("MachineSet", func(t *testing.T) {
 		tc := testCase{
 			description: "increase by 1",
-			initialSpec: pointer.Int32Ptr(3),
+			initial:     3,
 			expected:    4,
 			delta:       1,
 		}
-		test(t, &tc, createMachineSetTestConfig(testNamespace, int(*tc.initialSpec), annotations))
+		test(t, &tc, createMachineSetTestConfig(testNamespace, int(tc.initial), annotations))
 	})
 
 	t.Run("MachineDeployment", func(t *testing.T) {
 		tc := testCase{
 			description: "increase by 1",
-			initialSpec: pointer.Int32Ptr(3),
+			initial:     3,
 			expected:    4,
 			delta:       1,
 		}
-		test(t, &tc, createMachineDeploymentTestConfig(testNamespace, int(*tc.initialSpec), annotations))
-	})
-
-	t.Run("MachineSet with nil Spec.Replicas", func(t *testing.T) {
-		tc := testCase{
-			description:   "increase by 3",
-			initialSpec:   nil,
-			initialStatus: 2,
-			expected:      5,
-			delta:         3,
-		}
-		test(t, &tc, createMachineSetTestConfig(testNamespace, int(tc.initialStatus), annotations))
-	})
-
-	t.Run("MachineDeployment with nil Spec.Replicas", func(t *testing.T) {
-		tc := testCase{
-			description:   "increase by 3",
-			initialSpec:   nil,
-			initialStatus: 2,
-			expected:      5,
-			delta:         3,
-		}
-		test(t, &tc, createMachineDeploymentTestConfig(testNamespace, int(tc.initialStatus), annotations))
+		test(t, &tc, createMachineDeploymentTestConfig(testNamespace, int(tc.initial), annotations))
 	})
 }
 
@@ -434,8 +403,7 @@ func TestNodeGroupDecreaseTargetSize(t *testing.T) {
 	type testCase struct {
 		description         string
 		delta               int
-		initialSpec         *int32
-		initialStatus       int32
+		initial             int32
 		targetSizeIncrement int32
 		expected            int32
 		expectedError       bool
@@ -492,16 +460,8 @@ func TestNodeGroupDecreaseTargetSize(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		// If initialSpec is nil, fallback to replica count from status
-		// TODO: Remove this fallback once defaulting is implemented for MachineSet Replicas
-		if tc.initialSpec != nil {
-			if currReplicas != int(*tc.initialSpec)+int(tc.targetSizeIncrement) {
-				t.Errorf("initially expected %v, got %v", tc.initialSpec, currReplicas)
-			}
-		} else {
-			if currReplicas != int(tc.initialStatus)+int(tc.targetSizeIncrement) {
-				t.Errorf("initially expected %v, got %v", tc.initialStatus, currReplicas)
-			}
+		if currReplicas != int(tc.initial)+int(tc.targetSizeIncrement) {
+			t.Errorf("initially expected %v, got %v", tc.initial, currReplicas)
 		}
 
 		if err := ng.DecreaseTargetSize(tc.delta); (err != nil) != tc.expectedError {
@@ -540,48 +500,36 @@ func TestNodeGroupDecreaseTargetSize(t *testing.T) {
 	t.Run("MachineSet", func(t *testing.T) {
 		tc := testCase{
 			description:         "Same number of existing instances and node group target size should error",
-			initialSpec:         pointer.Int32Ptr(3),
+			initial:             3,
 			targetSizeIncrement: 0,
 			expected:            3,
 			delta:               -1,
 			expectedError:       true,
 		}
-		test(t, &tc, createMachineSetTestConfig(testNamespace, int(*tc.initialSpec), annotations))
+		test(t, &tc, createMachineSetTestConfig(testNamespace, int(tc.initial), annotations))
 	})
 
 	t.Run("MachineSet", func(t *testing.T) {
 		tc := testCase{
 			description:         "A node group with targe size 4 but only 3 existing instances should decrease by 1",
-			initialSpec:         pointer.Int32Ptr(3),
+			initial:             3,
 			targetSizeIncrement: 1,
 			expected:            3,
 			delta:               -1,
 		}
-		test(t, &tc, createMachineSetTestConfig(testNamespace, int(*tc.initialSpec), annotations))
+		test(t, &tc, createMachineSetTestConfig(testNamespace, int(tc.initial), annotations))
 	})
 
 	t.Run("MachineDeployment", func(t *testing.T) {
 		tc := testCase{
 			description:         "Same number of existing instances and node group target size should error",
-			initialSpec:         pointer.Int32Ptr(3),
+			initial:             3,
 			targetSizeIncrement: 0,
 			expected:            3,
 			delta:               -1,
 			expectedError:       true,
 		}
-		test(t, &tc, createMachineDeploymentTestConfig(testNamespace, int(*tc.initialSpec), annotations))
-	})
-
-	t.Run("MachineSet with nil Spec.Replicas", func(t *testing.T) {
-		tc := testCase{
-			description:         "A node group with targe size 6 but only 4 existing instances should decrease by 2",
-			initialSpec:         nil,
-			initialStatus:       4,
-			targetSizeIncrement: 2,
-			expected:            4,
-			delta:               -2,
-		}
-		test(t, &tc, createMachineSetTestConfig(testNamespace, int(tc.initialStatus), annotations))
+		test(t, &tc, createMachineDeploymentTestConfig(testNamespace, int(tc.initial), annotations))
 	})
 }
 

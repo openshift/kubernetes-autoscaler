@@ -23,7 +23,6 @@ import (
 	"github.com/openshift/cluster-api/pkg/apis/machine/v1beta1"
 	machinev1beta1 "github.com/openshift/cluster-api/pkg/client/clientset_generated/clientset/typed/machine/v1beta1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/klog"
 	"k8s.io/utils/pointer"
 )
 
@@ -77,10 +76,7 @@ func (r machineDeploymentScalableResource) Nodes() ([]string, error) {
 }
 
 func (r machineDeploymentScalableResource) Replicas() int32 {
-	if r.machineDeployment.Spec.Replicas == nil {
-		klog.Warningf("MachineDeployment %q has nil spec.replicas. This is unsupported behaviour. Falling back to status.replicas.", r.machineDeployment.Name)
-	}
-	return pointer.Int32PtrDerefOr(r.machineDeployment.Spec.Replicas, r.machineDeployment.Status.Replicas)
+	return pointer.Int32PtrDerefOr(r.machineDeployment.Spec.Replicas, 0)
 }
 
 func (r machineDeploymentScalableResource) SetSize(nreplicas int32) error {
