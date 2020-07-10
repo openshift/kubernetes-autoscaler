@@ -23,10 +23,10 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
-	gpuapis "k8s.io/autoscaler/cluster-autoscaler/utils/gpu"
-	kubeletapis "k8s.io/kubernetes/pkg/kubelet/apis"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	schedulerframework "k8s.io/kubernetes/pkg/scheduler/framework/v1alpha1"
+
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 )
 
 const (
@@ -41,18 +41,10 @@ const (
 
 type nodegroup struct {
 	machineController *machineController
-	scalableResource  scalableResource
+	scalableResource  *unstructuredScalableResource
 }
 
 var _ cloudprovider.NodeGroup = (*nodegroup)(nil)
-
-func (ng *nodegroup) Name() string {
-	return ng.scalableResource.Name()
-}
-
-func (ng *nodegroup) Namespace() string {
-	return ng.scalableResource.Namespace()
-}
 
 func (ng *nodegroup) MinSize() int {
 	return ng.scalableResource.MinSize()
@@ -156,9 +148,6 @@ func (ng *nodegroup) DeleteNodes(nodes []*corev1.Node) error {
 			continue
 		}
 
-		if machine.Annotations == nil {
-			machine.Annotations = map[string]string{}
-		}
 		nodeGroup, err := ng.machineController.nodeGroupForNode(node)
 		if err != nil {
 			return err
@@ -169,7 +158,7 @@ func (ng *nodegroup) DeleteNodes(nodes []*corev1.Node) error {
 		}
 
 		if err := ng.scalableResource.SetSize(replicas - 1); err != nil {
-			nodeGroup.scalableResource.UnmarkMachineForDeletion(machine)
+			_ = nodeGroup.scalableResource.UnmarkMachineForDeletion(machine)
 			return err
 		}
 
@@ -225,7 +214,7 @@ func (ng *nodegroup) Debug() string {
 // Nodes returns a list of all nodes that belong to this node group.
 // This includes instances that might have not become a kubernetes node yet.
 func (ng *nodegroup) Nodes() ([]cloudprovider.Instance, error) {
-	nodes, err := ng.scalableResource.Nodes()
+	providerIDs, err := ng.scalableResource.ProviderIDs()
 	if err != nil {
 		return nil, err
 	}
@@ -234,10 +223,10 @@ func (ng *nodegroup) Nodes() ([]cloudprovider.Instance, error) {
 	// The IDs returned here are used to check if a node is registered or not and
 	// must match the ID on the Node object itself.
 	// https://github.com/kubernetes/autoscaler/blob/a973259f1852303ba38a3a61eeee8489cf4e1b13/cluster-autoscaler/clusterstate/clusterstate.go#L967-L985
-	instances := make([]cloudprovider.Instance, len(nodes))
-	for i := range nodes {
+	instances := make([]cloudprovider.Instance, len(providerIDs))
+	for i := range providerIDs {
 		instances[i] = cloudprovider.Instance{
-			Id: nodes[i],
+			Id: providerIDs[i],
 		}
 	}
 
@@ -351,7 +340,10 @@ func (ng *nodegroup) Exist() bool {
 // Create creates the node group on the cloud nodegroup side.
 // Implementation optional.
 func (ng *nodegroup) Create() (cloudprovider.NodeGroup, error) {
-	return nil, cloudprovider.ErrAlreadyExist
+	if ng.Exist() {
+		return nil, cloudprovider.ErrAlreadyExist
+	}
+	return nil, cloudprovider.ErrNotImplemented
 }
 
 // Delete deletes the node group on the cloud nodegroup side. This will
@@ -368,22 +360,12 @@ func (ng *nodegroup) Autoprovisioned() bool {
 	return false
 }
 
-func newNodegroupFromMachineSet(controller *machineController, machineSet *MachineSet) (*nodegroup, error) {
-	scalableResource, err := newMachineSetScalableResource(controller, machineSet)
+func newNodegroupFromScalableResource(controller *machineController, unstructuredScalableResource *unstructured.Unstructured) (*nodegroup, error) {
+	scalableResource, err := newUnstructuredScalableResource(controller, unstructuredScalableResource)
 	if err != nil {
 		return nil, err
 	}
-	return &nodegroup{
-		machineController: controller,
-		scalableResource:  scalableResource,
-	}, nil
-}
 
-func newNodegroupFromMachineDeployment(controller *machineController, machineDeployment *MachineDeployment) (*nodegroup, error) {
-	scalableResource, err := newMachineDeploymentScalableResource(controller, machineDeployment)
-	if err != nil {
-		return nil, err
-	}
 	return &nodegroup{
 		machineController: controller,
 		scalableResource:  scalableResource,
