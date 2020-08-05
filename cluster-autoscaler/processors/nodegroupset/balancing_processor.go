@@ -22,9 +22,9 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	"k8s.io/autoscaler/cluster-autoscaler/context"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/errors"
-	schedulernodeinfo "k8s.io/kubernetes/pkg/scheduler/nodeinfo"
+	schedulerframework "k8s.io/kubernetes/pkg/scheduler/framework/v1alpha1"
 
-	"k8s.io/klog"
+	klog "k8s.io/klog/v2"
 )
 
 // BalancingNodeGroupSetProcessor tries to keep similar node groups balanced on scale-up.
@@ -32,10 +32,10 @@ type BalancingNodeGroupSetProcessor struct {
 	Comparator NodeInfoComparator
 }
 
-// FindSimilarNodeGroups returns a list of NodeGroups similar to the given one.
-// Two groups are similar if the NodeInfos for them compare equal using IsNodeInfoSimilar.
+// FindSimilarNodeGroups returns a list of NodeGroups similar to the given one using the
+// BalancingNodeGroupSetProcessor's comparator function.
 func (b *BalancingNodeGroupSetProcessor) FindSimilarNodeGroups(context *context.AutoscalingContext, nodeGroup cloudprovider.NodeGroup,
-	nodeInfosForGroups map[string]*schedulernodeinfo.NodeInfo) ([]cloudprovider.NodeGroup, errors.AutoscalerError) {
+	nodeInfosForGroups map[string]*schedulerframework.NodeInfo) ([]cloudprovider.NodeGroup, errors.AutoscalerError) {
 
 	result := []cloudprovider.NodeGroup{}
 	nodeGroupId := nodeGroup.Id()
@@ -58,7 +58,7 @@ func (b *BalancingNodeGroupSetProcessor) FindSimilarNodeGroups(context *context.
 		}
 		comparator := b.Comparator
 		if comparator == nil {
-			comparator = IsNodeInfoSimilar
+			klog.Fatal("BalancingNodeGroupSetProcessor comparator not set")
 		}
 		if comparator(nodeInfo, ngNodeInfo) {
 			result = append(result, ng)

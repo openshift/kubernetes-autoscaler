@@ -17,6 +17,7 @@ limitations under the License.
 package autoscaling
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -133,12 +134,12 @@ var _ = RecommenderE2eDescribe("Checkpoints", func() {
 			},
 		}
 
-		_, err := vpaClientSet.AutoscalingV1beta2().VerticalPodAutoscalerCheckpoints(ns).Create(&checkpoint)
+		_, err := vpaClientSet.AutoscalingV1beta2().VerticalPodAutoscalerCheckpoints(ns).Create(context.TODO(), &checkpoint, metav1.CreateOptions{})
 		gomega.Expect(err).NotTo(gomega.HaveOccurred())
 
 		time.Sleep(15 * time.Minute)
 
-		list, err := vpaClientSet.AutoscalingV1beta2().VerticalPodAutoscalerCheckpoints(ns).List(metav1.ListOptions{})
+		list, err := vpaClientSet.AutoscalingV1beta2().VerticalPodAutoscalerCheckpoints(ns).List(context.TODO(), metav1.ListOptions{})
 		gomega.Expect(err).NotTo(gomega.HaveOccurred())
 		gomega.Expect(list.Items).To(gomega.BeEmpty())
 	})
@@ -286,15 +287,14 @@ var _ = RecommenderE2eDescribe("VPA CRD object", func() {
 		vpaCRD := createVpaCRDWithMinMaxAllowed(f, nil, maxAllowed)
 
 		ginkgo.By("Waiting for recommendation to be filled")
-		vpa, err := WaitForRecommendationPresent(vpaClientSet, vpaCRD)
+		vpa, err := WaitForUncappedCPURecommendationAbove(vpaClientSet, vpaCRD, maxMilliCpu)
+		gomega.Expect(err).NotTo(gomega.HaveOccurred(), fmt.Sprintf(
+			"Timed out waiting for uncapped cpu recommendation above %d mCPU", maxMilliCpu))
 		gomega.Expect(err).NotTo(gomega.HaveOccurred())
 		gomega.Expect(vpa.Status.Recommendation.ContainerRecommendations).Should(gomega.HaveLen(1))
 		cpu := getMilliCpu(vpa.Status.Recommendation.ContainerRecommendations[0].Target)
 		gomega.Expect(cpu).Should(gomega.BeNumerically("<=", maxMilliCpu),
 			fmt.Sprintf("target cpu recommendation should be less than or equal to %dm", maxMilliCpu))
-		cpuUncapped := getMilliCpu(vpa.Status.Recommendation.ContainerRecommendations[0].UncappedTarget)
-		gomega.Expect(cpuUncapped).Should(gomega.BeNumerically(">", maxMilliCpu),
-			fmt.Sprintf("uncapped target cpu recommendation should be greater than %dm", maxMilliCpu))
 	})
 })
 
@@ -380,7 +380,7 @@ func createVpaCRDWithContainerScalingModes(f *framework.Framework, modes ...vpa_
 func deleteRecommender(c clientset.Interface) error {
 	namespace := "kube-system"
 	listOptions := metav1.ListOptions{}
-	podList, err := c.CoreV1().Pods(namespace).List(listOptions)
+	podList, err := c.CoreV1().Pods(namespace).List(context.TODO(), listOptions)
 	if err != nil {
 		fmt.Println("Could not list pods.", err)
 		return err
@@ -389,7 +389,7 @@ func deleteRecommender(c clientset.Interface) error {
 	for _, pod := range podList.Items {
 		if strings.HasPrefix(pod.Name, "vpa-recommender") {
 			fmt.Print("Deleting pod.", namespace, pod.Name)
-			err := c.CoreV1().Pods(namespace).Delete(pod.Name, &metav1.DeleteOptions{})
+			err := c.CoreV1().Pods(namespace).Delete(context.TODO(), pod.Name, metav1.DeleteOptions{})
 			if err != nil {
 				return err
 			}

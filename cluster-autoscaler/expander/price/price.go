@@ -28,9 +28,9 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/expander"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/gpu"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/units"
-	schedulernodeinfo "k8s.io/kubernetes/pkg/scheduler/nodeinfo"
+	schedulerframework "k8s.io/kubernetes/pkg/scheduler/framework/v1alpha1"
 
-	"k8s.io/klog"
+	klog "k8s.io/klog/v2"
 )
 
 // *************
@@ -87,7 +87,7 @@ func NewStrategy(cloudProvider cloudprovider.CloudProvider,
 }
 
 // BestOption selects option based on cost and preferred node type.
-func (p *priceBased) BestOption(expansionOptions []expander.Option, nodeInfos map[string]*schedulernodeinfo.NodeInfo) *expander.Option {
+func (p *priceBased) BestOption(expansionOptions []expander.Option, nodeInfos map[string]*schedulerframework.NodeInfo) *expander.Option {
 	var bestOption *expander.Option
 	bestOptionScore := 0.0
 	now := time.Now()

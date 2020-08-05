@@ -3,6 +3,8 @@ apiVersion: apiextensions.k8s.io/v1beta1
 kind: CustomResourceDefinition
 metadata:
   name: verticalpodautoscalers.autoscaling.k8s.io
+  annotations:
+    "api-approved.kubernetes.io": "https://github.com/kubernetes/kubernetes/pull/63797"
 spec:
   group: autoscaling.k8s.io
   scope: Namespaced
@@ -46,11 +48,28 @@ spec:
                   type: array
                   items:
                     type: object
+                    properties:
+                      containerName:
+                        type: string
+                      mode:
+                        type: string
+                        enum: ["Auto", "Off"]
+                      minAllowed:
+                        type: object
+                      maxAllowed:
+                        type: object
+                      controlledResources:
+                        type: array
+                        items:
+                          type: string
+                          enum: ["cpu", "memory"]
 ---
 apiVersion: apiextensions.k8s.io/v1beta1
 kind: CustomResourceDefinition
 metadata:
   name: verticalpodautoscalercheckpoints.autoscaling.k8s.io
+  annotations:
+    "api-approved.kubernetes.io": "https://github.com/kubernetes/kubernetes/pull/63797"
 spec:
   group: autoscaling.k8s.io
   scope: Namespaced

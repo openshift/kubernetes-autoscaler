@@ -28,16 +28,16 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Azure/go-autorest/autorest"
-	"github.com/Azure/go-autorest/autorest/adal"
-	"github.com/Azure/go-autorest/autorest/azure"
-
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	"k8s.io/autoscaler/cluster-autoscaler/config/dynamic"
-	"k8s.io/klog"
+	klog "k8s.io/klog/v2"
 	providerazure "k8s.io/legacy-cloud-providers/azure"
 	azclients "k8s.io/legacy-cloud-providers/azure/clients"
 	"k8s.io/legacy-cloud-providers/azure/retry"
+
+	"github.com/Azure/go-autorest/autorest"
+	"github.com/Azure/go-autorest/autorest/adal"
+	"github.com/Azure/go-autorest/autorest/azure"
 )
 
 const (
@@ -66,8 +66,12 @@ const (
 	backoffJitterDefault   = 1.0
 
 	// rate limit
-	rateLimitQPSDefault    = 1.0
-	rateLimitBucketDefault = 5
+	rateLimitQPSDefault         float32 = 1.0
+	rateLimitBucketDefault              = 5
+	rateLimitReadQPSEnvVar              = "RATE_LIMIT_READ_QPS"
+	rateLimitReadBucketsEnvVar          = "RATE_LIMIT_READ_BUCKETS"
+	rateLimitWriteQPSEnvVar             = "RATE_LIMIT_WRITE_QPS"
+	rateLimitWriteBucketsEnvVar         = "RATE_LIMIT_WRITE_BUCKETS"
 )
 
 var validLabelAutoDiscovererKeys = strings.Join([]string{
@@ -148,24 +152,59 @@ type Config struct {
 }
 
 // InitializeCloudProviderRateLimitConfig initializes rate limit configs.
-func InitializeCloudProviderRateLimitConfig(config *CloudProviderRateLimitConfig) {
+func InitializeCloudProviderRateLimitConfig(config *CloudProviderRateLimitConfig) error {
 	if config == nil {
-		return
+		return nil
 	}
 
 	// Assign read rate limit defaults if no configuration was passed in.
 	if config.CloudProviderRateLimitQPS == 0 {
-		config.CloudProviderRateLimitQPS = rateLimitQPSDefault
+		if rateLimitQPSFromEnv := os.Getenv(rateLimitReadQPSEnvVar); rateLimitQPSFromEnv != "" {
+			rateLimitQPS, err := strconv.ParseFloat(rateLimitQPSFromEnv, 0)
+			if err != nil {
+				return fmt.Errorf("failed to parse %s: %q, %v", rateLimitReadQPSEnvVar, rateLimitQPSFromEnv, err)
+			}
+			config.CloudProviderRateLimitQPS = float32(rateLimitQPS)
+		} else {
+			config.CloudProviderRateLimitQPS = rateLimitQPSDefault
+		}
 	}
+
 	if config.CloudProviderRateLimitBucket == 0 {
-		config.CloudProviderRateLimitBucket = rateLimitBucketDefault
+		if rateLimitBucketFromEnv := os.Getenv(rateLimitReadBucketsEnvVar); rateLimitBucketFromEnv != "" {
+			rateLimitBucket, err := strconv.ParseInt(rateLimitBucketFromEnv, 10, 0)
+			if err != nil {
+				return fmt.Errorf("failed to parse %s: %q, %v", rateLimitReadBucketsEnvVar, rateLimitBucketFromEnv, err)
+			}
+			config.CloudProviderRateLimitBucket = int(rateLimitBucket)
+		} else {
+			config.CloudProviderRateLimitBucket = rateLimitBucketDefault
+		}
 	}
-	// Assing write rate limit defaults if no configuration was passed in.
+
+	// Assign write rate limit defaults if no configuration was passed in.
 	if config.CloudProviderRateLimitQPSWrite == 0 {
-		config.CloudProviderRateLimitQPSWrite = config.CloudProviderRateLimitQPS
+		if rateLimitQPSWriteFromEnv := os.Getenv(rateLimitWriteQPSEnvVar); rateLimitQPSWriteFromEnv != "" {
+			rateLimitQPSWrite, err := strconv.ParseFloat(rateLimitQPSWriteFromEnv, 0)
+			if err != nil {
+				return fmt.Errorf("failed to parse %s: %q, %v", rateLimitWriteQPSEnvVar, rateLimitQPSWriteFromEnv, err)
+			}
+			config.CloudProviderRateLimitQPSWrite = float32(rateLimitQPSWrite)
+		} else {
+			config.CloudProviderRateLimitQPSWrite = config.CloudProviderRateLimitQPS
+		}
 	}
+
 	if config.CloudProviderRateLimitBucketWrite == 0 {
-		config.CloudProviderRateLimitBucketWrite = config.CloudProviderRateLimitBucket
+		if rateLimitBucketWriteFromEnv := os.Getenv(rateLimitWriteBucketsEnvVar); rateLimitBucketWriteFromEnv != "" {
+			rateLimitBucketWrite, err := strconv.ParseInt(rateLimitBucketWriteFromEnv, 10, 0)
+			if err != nil {
+				return fmt.Errorf("failed to parse %s: %q, %v", rateLimitWriteBucketsEnvVar, rateLimitBucketWriteFromEnv, err)
+			}
+			config.CloudProviderRateLimitBucketWrite = int(rateLimitBucketWrite)
+		} else {
+			config.CloudProviderRateLimitBucketWrite = config.CloudProviderRateLimitBucket
+		}
 	}
 
 	config.InterfaceRateLimit = overrideDefaultRateLimitConfig(&config.RateLimitConfig, config.InterfaceRateLimit)
@@ -173,6 +212,8 @@ func InitializeCloudProviderRateLimitConfig(config *CloudProviderRateLimitConfig
 	config.StorageAccountRateLimit = overrideDefaultRateLimitConfig(&config.RateLimitConfig, config.StorageAccountRateLimit)
 	config.DiskRateLimit = overrideDefaultRateLimitConfig(&config.RateLimitConfig, config.DiskRateLimit)
 	config.VirtualMachineScaleSetRateLimit = overrideDefaultRateLimitConfig(&config.RateLimitConfig, config.VirtualMachineScaleSetRateLimit)
+
+	return nil
 }
 
 // overrideDefaultRateLimitConfig overrides the default CloudProviderRateLimitConfig.
@@ -358,7 +399,11 @@ func CreateAzureManager(configReader io.Reader, discoveryOpts cloudprovider.Node
 			return nil, fmt.Errorf("failed to parse CLOUD_PROVIDER_RATE_LIMIT: %q, %v", cloudProviderRateLimit, err)
 		}
 	}
-	InitializeCloudProviderRateLimitConfig(&cfg.CloudProviderRateLimitConfig)
+
+	err = InitializeCloudProviderRateLimitConfig(&cfg.CloudProviderRateLimitConfig)
+	if err != nil {
+		return nil, err
+	}
 
 	// Defaulting vmType to vmss.
 	if cfg.VMType == "" {
@@ -626,31 +671,38 @@ func (m *AzureManager) listScaleSets(filter []labelAutoDiscoveryConfig) ([]cloud
 			if minSize, err := strconv.Atoi(*val); err == nil {
 				spec.MinSize = minSize
 			} else {
-				return asgs, fmt.Errorf("invalid minimum size specified for vmss: %s", err)
+				klog.Warningf("ignoring nodegroup %q because of invalid minimum size specified for vmss: %s", *scaleSet.Name, err)
+				continue
 			}
 		} else {
-			return asgs, fmt.Errorf("no minimum size specified for vmss: %s", *scaleSet.Name)
+			klog.Warningf("ignoring nodegroup %q because of no minimum size specified for vmss", *scaleSet.Name)
+			continue
 		}
 		if spec.MinSize < 0 {
-			return asgs, fmt.Errorf("minimum size must be a non-negative number of nodes")
+			klog.Warningf("ignoring nodegroup %q because of minimum size must be a non-negative number of nodes", *scaleSet.Name)
+			continue
 		}
 		if val, ok := scaleSet.Tags["max"]; ok {
 			if maxSize, err := strconv.Atoi(*val); err == nil {
 				spec.MaxSize = maxSize
 			} else {
-				return asgs, fmt.Errorf("invalid maximum size specified for vmss: %s", err)
+				klog.Warningf("ignoring nodegroup %q because of invalid maximum size specified for vmss: %s", *scaleSet.Name, err)
+				continue
 			}
 		} else {
-			return asgs, fmt.Errorf("no maximum size specified for vmss: %s", *scaleSet.Name)
-		}
-		if spec.MaxSize < 1 {
-			return asgs, fmt.Errorf("maximum size must be greater than 1 node")
+			klog.Warningf("ignoring nodegroup %q because of no maximum size specified for vmss", *scaleSet.Name)
+			continue
 		}
 		if spec.MaxSize < spec.MinSize {
-			return asgs, fmt.Errorf("maximum size must be greater than minimum size")
+			klog.Warningf("ignoring nodegroup %q because of maximum size must be greater than minimum size: max=%d < min=%d", *scaleSet.Name, spec.MaxSize, spec.MinSize)
+			continue
 		}
 
-		asg, _ := NewScaleSet(spec, m)
+		asg, err := NewScaleSet(spec, m)
+		if err != nil {
+			klog.Warningf("ignoring nodegroup %q %s", *scaleSet.Name, err)
+			continue
+		}
 		asgs = append(asgs, asg)
 	}
 

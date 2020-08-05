@@ -25,10 +25,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
 	utilexec "k8s.io/utils/exec"
 	"k8s.io/utils/keymutex"
-	utilpath "k8s.io/utils/path"
 )
 
 // Mounter provides the default implementation of mount.Interface
@@ -79,14 +78,15 @@ func (mounter *Mounter) MountSensitive(source string, target string, fstype stri
 		sanitizedOptionsForLogging, source, target, fstype)
 	bindSource := source
 
-	// tell it's going to mount azure disk or azure file according to options
 	if bind, _, _, _ := MakeBindOptsSensitive(options, sensitiveOptions); bind {
-		// mount azure disk
 		bindSource = NormalizeWindowsPath(source)
 	} else {
-		if len(options) < 2 {
+		allOptions := []string{}
+		allOptions = append(allOptions, options...)
+		allOptions = append(allOptions, sensitiveOptions...)
+		if len(allOptions) < 2 {
 			klog.Warningf("mount options(%q) command number(%d) less than 2, source:%q, target:%q, skip mounting",
-				sanitizedOptionsForLogging, len(options), source, target)
+				sanitizedOptionsForLogging, len(allOptions), source, target)
 			return nil
 		}
 
@@ -99,13 +99,13 @@ func (mounter *Mounter) MountSensitive(source string, target string, fstype stri
 		getSMBMountMutex.LockKey(source)
 		defer getSMBMountMutex.UnlockKey(source)
 
-		if output, err := newSMBMapping(options[0], options[1], source); err != nil {
+		if output, err := newSMBMapping(allOptions[0], allOptions[1], source); err != nil {
 			if isSMBMappingExist(source) {
 				klog.V(2).Infof("SMB Mapping(%s) already exists, now begin to remove and remount", source)
 				if output, err := removeSMBMapping(source); err != nil {
 					return fmt.Errorf("Remove-SmbGlobalMapping failed: %v, output: %q", err, output)
 				}
-				if output, err := newSMBMapping(options[0], options[1], source); err != nil {
+				if output, err := newSMBMapping(allOptions[0], allOptions[1], source); err != nil {
 					return fmt.Errorf("New-SmbGlobalMapping remount failed: %v, output: %q", err, output)
 				}
 			} else {
@@ -114,10 +114,12 @@ func (mounter *Mounter) MountSensitive(source string, target string, fstype stri
 		}
 	}
 
-	if output, err := exec.Command("cmd", "/c", "mklink", "/D", target, bindSource).CombinedOutput(); err != nil {
+	output, err := exec.Command("cmd", "/c", "mklink", "/D", target, bindSource).CombinedOutput()
+	if err != nil {
 		klog.Errorf("mklink failed: %v, source(%q) target(%q) output: %q", err, bindSource, target, string(output))
 		return err
 	}
+	klog.V(2).Infof("mklink source(%q) on target(%q) successfully, output: %q", bindSource, target, string(output))
 
 	return nil
 }
@@ -182,19 +184,10 @@ func (mounter *Mounter) IsLikelyNotMountPoint(file string) (bool, error) {
 	if err != nil {
 		return true, err
 	}
-	// If current file is a symlink, then it is a mountpoint.
-	if stat.Mode()&os.ModeSymlink != 0 {
-		target, err := os.Readlink(file)
-		if err != nil {
-			return true, fmt.Errorf("readlink error: %v", err)
-		}
-		exists, err := utilpath.Exists(utilpath.CheckFollowSymlink, target)
-		if err != nil {
-			return true, err
-		}
-		return !exists, nil
-	}
 
+	if stat.Mode()&os.ModeSymlink != 0 {
+		return false, err
+	}
 	return true, nil
 }
 
@@ -241,11 +234,12 @@ func (mounter *SafeFormatAndMount) formatAndMountSensitive(source string, target
 	}
 	driverPath := driveLetter + ":"
 	target = NormalizeWindowsPath(target)
-	klog.V(4).Infof("Attempting to formatAndMount disk: %s %s %s", fstype, driverPath, target)
-	if output, err := mounter.Exec.Command("cmd", "/c", "mklink", "/D", target, driverPath).CombinedOutput(); err != nil {
-		klog.Errorf("mklink failed: %v, output: %q", err, string(output))
+	output, err := mounter.Exec.Command("cmd", "/c", "mklink", "/D", target, driverPath).CombinedOutput()
+	if err != nil {
+		klog.Errorf("mklink(%s, %s) failed: %v, output: %q", target, driverPath, err, string(output))
 		return err
 	}
+	klog.V(2).Infof("formatAndMount disk(%s) fstype(%s) on(%s) with output(%s) successfully", driverPath, fstype, target, string(output))
 	return nil
 }
 

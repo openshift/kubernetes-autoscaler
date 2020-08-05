@@ -39,7 +39,7 @@ import (
 	"golang.org/x/oauth2/google"
 	gce "google.golang.org/api/compute/v1"
 	gcfg "gopkg.in/gcfg.v1"
-	"k8s.io/klog"
+	klog "k8s.io/klog/v2"
 )
 
 const (
@@ -492,7 +492,7 @@ func (m *gceManagerImpl) getCpuAndMemoryForMachineType(machineType string, zone 
 	if strings.HasPrefix(machineType, "custom-") {
 		return parseCustomMachineType(machineType)
 	}
-	machine := m.cache.GetMachineFromCache(machineType, zone)
+	machine, _ := m.cache.GetMachineFromCache(machineType, zone)
 	if machine == nil {
 		machine, err = m.GceService.FetchMachineType(zone, machineType)
 		if err != nil {

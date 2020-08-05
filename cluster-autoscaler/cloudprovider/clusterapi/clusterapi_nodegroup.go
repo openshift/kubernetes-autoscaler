@@ -18,25 +18,16 @@ package clusterapi
 
 import (
 	"fmt"
-	"math/rand"
 
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/resource"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
-	gpuapis "k8s.io/autoscaler/cluster-autoscaler/utils/gpu"
-	kubeletapis "k8s.io/kubernetes/pkg/kubelet/apis"
-	schedulernodeinfo "k8s.io/kubernetes/pkg/scheduler/nodeinfo"
+	schedulerframework "k8s.io/kubernetes/pkg/scheduler/framework/v1alpha1"
 )
 
 const (
-	machineDeleteAnnotationKey = "machine.openshift.io/cluster-api-delete-machine"
-	machineAnnotationKey       = "machine.openshift.io/machine"
+	machineDeleteAnnotationKey = "cluster.k8s.io/delete-machine"
+	machineAnnotationKey       = "cluster.k8s.io/machine"
 	debugFormat                = "%s (min: %d, max: %d, replicas: %d)"
-
-	// This default for the maximum number of pods comes from the machine-config-operator
-	// see https://github.com/openshift/machine-config-operator/blob/2f1bd6d99131fa4471ed95543a51dec3d5922b2b/templates/worker/01-worker-kubelet/_base/files/kubelet.yaml#L19
-	defaultMaxPods = 250
 )
 
 type nodegroup struct {
@@ -251,68 +242,9 @@ func (ng *nodegroup) Nodes() ([]cloudprovider.Instance, error) {
 // fully populated Node object, with all of the labels, capacity and
 // allocatable information as well as all pods that are started on the
 // node by default, using manifest (most likely only kube-proxy).
-func (ng *nodegroup) TemplateNodeInfo() (*schedulernodeinfo.NodeInfo, error) {
-	if !ng.scalableResource.CanScaleFromZero() {
-		return nil, cloudprovider.ErrNotImplemented
-	}
-
-	cpu, err := ng.scalableResource.InstanceCPUCapacity()
-	if err != nil {
-		return nil, err
-	}
-
-	mem, err := ng.scalableResource.InstanceMemoryCapacity()
-	if err != nil {
-		return nil, err
-	}
-
-	gpu, err := ng.scalableResource.InstanceGPUCapacity()
-	if err != nil {
-		return nil, err
-	}
-
-	pod, err := ng.scalableResource.InstanceMaxPodsCapacity()
-	if err != nil {
-		return nil, err
-	}
-
-	if cpu.IsZero() || mem.IsZero() {
-		return nil, cloudprovider.ErrNotImplemented
-	}
-
-	if gpu.IsZero() {
-		gpu = zeroQuantity.DeepCopy()
-	}
-
-	if pod.IsZero() {
-		pod = *resource.NewQuantity(defaultMaxPods, resource.DecimalSI)
-	}
-
-	capacity := map[corev1.ResourceName]resource.Quantity{
-		corev1.ResourceCPU:        cpu,
-		corev1.ResourceMemory:     mem,
-		corev1.ResourcePods:       pod,
-		gpuapis.ResourceNvidiaGPU: gpu,
-	}
-
-	nodeName := fmt.Sprintf("%s-asg-%d", ng.Name(), rand.Int63())
-	node := corev1.Node{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:   nodeName,
-			Labels: map[string]string{},
-		},
-	}
-
-	node.Status.Capacity = capacity
-	node.Status.Allocatable = capacity
-	node.Status.Conditions = cloudprovider.BuildReadyConditions()
-	node.Spec.Taints = ng.scalableResource.Taints()
-	node.Labels = cloudprovider.JoinStringMaps(ng.scalableResource.Labels(), buildGenericLabels(nodeName))
-
-	nodeInfo := schedulernodeinfo.NewNodeInfo(cloudprovider.BuildKubeProxy(ng.Name()))
-	nodeInfo.SetNode(&node)
-
-	return nodeInfo, nil
+// Implementation optional.
+func (ng *nodegroup) TemplateNodeInfo() (*schedulerframework.NodeInfo, error) {
+	return nil, cloudprovider.ErrNotImplemented
 }
 
 // Exist checks if the node group really exists on the cloud nodegroup
@@ -362,14 +294,4 @@ func newNodegroupFromMachineDeployment(controller *machineController, machineDep
 		machineController: controller,
 		scalableResource:  scalableResource,
 	}, nil
-}
-
-func buildGenericLabels(nodeName string) map[string]string {
-	// TODO revisit this function and add an explanation about what these
-	// labels are used for, or remove them if not necessary
-	m := make(map[string]string)
-	m[kubeletapis.LabelArch] = cloudprovider.DefaultArch
-	m[kubeletapis.LabelOS] = cloudprovider.DefaultOS
-	m[corev1.LabelHostname] = nodeName
-	return m
 }

@@ -23,53 +23,60 @@ import (
 	testprovider "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/test"
 	"k8s.io/autoscaler/cluster-autoscaler/context"
 	. "k8s.io/autoscaler/cluster-autoscaler/utils/test"
-	schedulernodeinfo "k8s.io/kubernetes/pkg/scheduler/nodeinfo"
+	schedulerframework "k8s.io/kubernetes/pkg/scheduler/framework/v1alpha1"
 
 	"github.com/stretchr/testify/assert"
 )
 
 func TestIsAzureNodeInfoSimilar(t *testing.T) {
+	comparator := CreateAzureNodeInfoComparator([]string{"example.com/ready"})
 	n1 := BuildTestNode("node1", 1000, 2000)
 	n1.ObjectMeta.Labels["test-label"] = "test-value"
 	n1.ObjectMeta.Labels["character"] = "thing"
 	n2 := BuildTestNode("node2", 1000, 2000)
 	n2.ObjectMeta.Labels["test-label"] = "test-value"
 	// No node-pool labels.
-	checkNodesSimilar(t, n1, n2, IsAzureNodeInfoSimilar, false)
+	checkNodesSimilar(t, n1, n2, comparator, false)
 	// Empty agentpool labels
 	n1.ObjectMeta.Labels["agentpool"] = ""
 	n2.ObjectMeta.Labels["agentpool"] = ""
-	checkNodesSimilar(t, n1, n2, IsAzureNodeInfoSimilar, false)
+	checkNodesSimilar(t, n1, n2, comparator, false)
 	// Only one non empty
 	n1.ObjectMeta.Labels["agentpool"] = ""
 	n2.ObjectMeta.Labels["agentpool"] = "foo"
-	checkNodesSimilar(t, n1, n2, IsAzureNodeInfoSimilar, false)
+	checkNodesSimilar(t, n1, n2, comparator, false)
 	// Only one present
 	delete(n1.ObjectMeta.Labels, "agentpool")
 	n2.ObjectMeta.Labels["agentpool"] = "foo"
-	checkNodesSimilar(t, n1, n2, IsAzureNodeInfoSimilar, false)
+	checkNodesSimilar(t, n1, n2, comparator, false)
 	// Different vales
 	n1.ObjectMeta.Labels["agentpool"] = "foo1"
 	n2.ObjectMeta.Labels["agentpool"] = "foo2"
-	checkNodesSimilar(t, n1, n2, IsAzureNodeInfoSimilar, false)
+	checkNodesSimilar(t, n1, n2, comparator, false)
 	// Same values
 	n1.ObjectMeta.Labels["agentpool"] = "foo"
 	n2.ObjectMeta.Labels["agentpool"] = "foo"
-	checkNodesSimilar(t, n1, n2, IsAzureNodeInfoSimilar, true)
+	checkNodesSimilar(t, n1, n2, comparator, true)
 	// Same labels except for agentpool
 	delete(n1.ObjectMeta.Labels, "character")
 	n1.ObjectMeta.Labels["agentpool"] = "foo"
 	n2.ObjectMeta.Labels["agentpool"] = "bar"
-	checkNodesSimilar(t, n1, n2, IsAzureNodeInfoSimilar, true)
+	checkNodesSimilar(t, n1, n2, comparator, true)
+	// Custom label
+	n1.ObjectMeta.Labels["example.com/ready"] = "true"
+	n2.ObjectMeta.Labels["example.com/ready"] = "false"
+	checkNodesSimilar(t, n1, n2, comparator, true)
 }
 
 func TestFindSimilarNodeGroupsAzureBasic(t *testing.T) {
-	processor := &BalancingNodeGroupSetProcessor{Comparator: IsAzureNodeInfoSimilar}
-	basicSimilarNodeGroupsTest(t, processor)
+	context := &context.AutoscalingContext{}
+	ni1, ni2, ni3 := buildBasicNodeGroups(context)
+	processor := &BalancingNodeGroupSetProcessor{Comparator: CreateAzureNodeInfoComparator([]string{})}
+	basicSimilarNodeGroupsTest(t, context, processor, ni1, ni2, ni3)
 }
 
 func TestFindSimilarNodeGroupsAzureByLabel(t *testing.T) {
-	processor := &BalancingNodeGroupSetProcessor{Comparator: IsAzureNodeInfoSimilar}
+	processor := &BalancingNodeGroupSetProcessor{Comparator: CreateAzureNodeInfoComparator([]string{})}
 	context := &context.AutoscalingContext{}
 
 	n1 := BuildTestNode("n1", 1000, 1000)
@@ -81,12 +88,12 @@ func TestFindSimilarNodeGroupsAzureByLabel(t *testing.T) {
 	provider.AddNode("ng1", n1)
 	provider.AddNode("ng2", n2)
 
-	ni1 := schedulernodeinfo.NewNodeInfo()
+	ni1 := schedulerframework.NewNodeInfo()
 	ni1.SetNode(n1)
-	ni2 := schedulernodeinfo.NewNodeInfo()
+	ni2 := schedulerframework.NewNodeInfo()
 	ni2.SetNode(n2)
 
-	nodeInfosForGroups := map[string]*schedulernodeinfo.NodeInfo{
+	nodeInfosForGroups := map[string]*schedulerframework.NodeInfo{
 		"ng1": ni1, "ng2": ni2,
 	}
 
@@ -110,7 +117,7 @@ func TestFindSimilarNodeGroupsAzureByLabel(t *testing.T) {
 	n3 := BuildTestNode("n1", 1000, 1000)
 	provider.AddNodeGroup("ng3", 1, 10, 1)
 	provider.AddNode("ng3", n3)
-	ni3 := schedulernodeinfo.NewNodeInfo()
+	ni3 := schedulerframework.NewNodeInfo()
 	ni3.SetNode(n3)
 	nodeInfosForGroups["ng3"] = ni3
 	ng3, _ := provider.NodeGroupForNode(n3)

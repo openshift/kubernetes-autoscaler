@@ -17,6 +17,7 @@ limitations under the License.
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -55,7 +56,7 @@ func patchVpa(vpaClient vpa_api.VerticalPodAutoscalerInterface, vpaName string, 
 		return
 	}
 
-	return vpaClient.Patch(vpaName, types.JSONPatchType, bytes)
+	return vpaClient.Patch(context.TODO(), vpaName, types.JSONPatchType, bytes, meta.PatchOptions{})
 }
 
 // UpdateVpaStatusIfNeeded updates the status field of the VPA API object.
@@ -75,10 +76,11 @@ func UpdateVpaStatusIfNeeded(vpaClient vpa_api.VerticalPodAutoscalerInterface, v
 	return nil, nil
 }
 
-// NewAllVpasLister returns VerticalPodAutoscalerLister configured to fetch all VPA objects.
+// NewVpasLister returns VerticalPodAutoscalerLister configured to fetch all VPA objects from namespace,
+// set namespace to k8sapiv1.NamespaceAll to select all namespaces.
 // The method blocks until vpaLister is initially populated.
-func NewAllVpasLister(vpaClient *vpa_clientset.Clientset, stopChannel <-chan struct{}) vpa_lister.VerticalPodAutoscalerLister {
-	vpaListWatch := cache.NewListWatchFromClient(vpaClient.AutoscalingV1().RESTClient(), "verticalpodautoscalers", core.NamespaceAll, fields.Everything())
+func NewVpasLister(vpaClient *vpa_clientset.Clientset, stopChannel <-chan struct{}, namespace string) vpa_lister.VerticalPodAutoscalerLister {
+	vpaListWatch := cache.NewListWatchFromClient(vpaClient.AutoscalingV1().RESTClient(), "verticalpodautoscalers", namespace, fields.Everything())
 	indexer, controller := cache.NewIndexerInformer(vpaListWatch,
 		&vpa_types.VerticalPodAutoscaler{},
 		1*time.Hour,
@@ -164,6 +166,15 @@ func GetContainerResourcePolicy(containerName string, policy *vpa_types.PodResou
 	return defaultPolicy
 }
 
+// GetContainerControlledValues returns controlled resource values
+func GetContainerControlledValues(name string, vpaResourcePolicy *vpa_types.PodResourcePolicy) vpa_types.ContainerControlledValues {
+	containerPolicy := GetContainerResourcePolicy(name, vpaResourcePolicy)
+	if containerPolicy == nil || containerPolicy.ControlledValues == nil {
+		return vpa_types.ContainerControlledValuesRequestsAndLimits
+	}
+	return *containerPolicy.ControlledValues
+}
+
 // CreateOrUpdateVpaCheckpoint updates the status field of the VPA Checkpoint API object.
 // If object doesn't exits it is created.
 func CreateOrUpdateVpaCheckpoint(vpaCheckpointClient vpa_api.VerticalPodAutoscalerCheckpointInterface,
@@ -178,9 +189,9 @@ func CreateOrUpdateVpaCheckpoint(vpaCheckpointClient vpa_api.VerticalPodAutoscal
 	if err != nil {
 		return fmt.Errorf("Cannot marshal VPA checkpoint status patches %+v. Reason: %+v", patches, err)
 	}
-	_, err = vpaCheckpointClient.Patch(vpaCheckpoint.ObjectMeta.Name, types.JSONPatchType, bytes)
+	_, err = vpaCheckpointClient.Patch(context.TODO(), vpaCheckpoint.ObjectMeta.Name, types.JSONPatchType, bytes, meta.PatchOptions{})
 	if err != nil && strings.Contains(err.Error(), fmt.Sprintf("\"%s\" not found", vpaCheckpoint.ObjectMeta.Name)) {
-		_, err = vpaCheckpointClient.Create(vpaCheckpoint)
+		_, err = vpaCheckpointClient.Create(context.TODO(), vpaCheckpoint, meta.CreateOptions{})
 	}
 	if err != nil {
 		return fmt.Errorf("Cannot save checkpoint for vpa %v container %v. Reason: %+v", vpaCheckpoint.ObjectMeta.Name, vpaCheckpoint.Spec.ContainerName, err)

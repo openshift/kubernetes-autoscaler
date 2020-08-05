@@ -25,7 +25,7 @@ import (
 	apiv1 "k8s.io/api/core/v1"
 
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
-	schedulernodeinfo "k8s.io/kubernetes/pkg/scheduler/nodeinfo"
+	schedulerframework "k8s.io/kubernetes/pkg/scheduler/framework/v1alpha1"
 )
 
 const (
@@ -114,10 +114,10 @@ func (n *NodeGroup) DeleteNodes(nodes []*apiv1.Node) error {
 	for _, node := range nodes {
 		nodeID, ok := node.Labels[nodeIDLabel]
 		if !ok {
-			// CA creates fake node objects to represent upcoming VMs that haven't
-			// registered as nodes yet. They have node.Spec.ProviderID set. Use
-			// that as nodeID.
-			nodeID = node.Spec.ProviderID
+			// CA creates fake node objects to represent upcoming VMs that
+			// haven't registered as nodes yet. We cannot delete the node at
+			// this point.
+			return fmt.Errorf("cannot delete node %q with provider ID %q on node pool %q: node ID label %q is missing", node.Name, node.Spec.ProviderID, n.id, nodeIDLabel)
 		}
 
 		_, err := n.client.DeleteNode(ctx, n.clusterID, n.id, nodeID, nil)
@@ -144,7 +144,7 @@ func (n *NodeGroup) DecreaseTargetSize(delta int) error {
 	}
 
 	targetSize := n.nodePool.Count + delta
-	if targetSize <= n.MinSize() {
+	if targetSize < n.MinSize() {
 		return fmt.Errorf("size decrease is too small. current: %d desired: %d min: %d",
 			n.nodePool.Count, targetSize, n.MinSize())
 	}
@@ -194,14 +194,14 @@ func (n *NodeGroup) Nodes() ([]cloudprovider.Instance, error) {
 	return toInstances(n.nodePool.Nodes), nil
 }
 
-// TemplateNodeInfo returns a schedulernodeinfo.NodeInfo structure of an empty
+// TemplateNodeInfo returns a schedulerframework.NodeInfo structure of an empty
 // (as if just started) node. This will be used in scale-up simulations to
 // predict what would a new node look like if a node group was expanded. The
 // returned NodeInfo is expected to have a fully populated Node object, with
 // all of the labels, capacity and allocatable information as well as all pods
 // that are started on the node by default, using manifest (most likely only
 // kube-proxy). Implementation optional.
-func (n *NodeGroup) TemplateNodeInfo() (*schedulernodeinfo.NodeInfo, error) {
+func (n *NodeGroup) TemplateNodeInfo() (*schedulerframework.NodeInfo, error) {
 	return nil, cloudprovider.ErrNotImplemented
 }
 

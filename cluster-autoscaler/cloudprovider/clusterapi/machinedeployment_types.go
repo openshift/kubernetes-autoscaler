@@ -37,9 +37,8 @@ type MachineDeploymentSpec struct {
 
 // MachineDeploymentStatus is the internal autoscaler Schema for MachineDeploymentStatus
 type MachineDeploymentStatus struct {
-	// Total number of non-terminated machines targeted by this deployment
-	// (their labels match the selector).
-	// +optional
+	// Number of desired machines. Defaults to 1.
+	// This is a pointer to distinguish between explicit zero and not specified.
 	Replicas int32 `json:"replicas,omitempty"`
 }
 

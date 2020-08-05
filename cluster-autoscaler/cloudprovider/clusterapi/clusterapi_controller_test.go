@@ -88,13 +88,13 @@ func mustCreateTestController(t *testing.T, testConfigs ...*testConfig) (*machin
 					GroupVersion: fmt.Sprintf("%s/v1beta1", customCAPIGroup),
 					APIResources: []v1.APIResource{
 						{
-							Name: "machinedeployments",
+							Name: resourceNameMachineDeployment,
 						},
 						{
-							Name: "machinesets",
+							Name: resourceNameMachineSet,
 						},
 						{
-							Name: "machines",
+							Name: resourceNameMachine,
 						},
 					},
 				},
@@ -102,13 +102,13 @@ func mustCreateTestController(t *testing.T, testConfigs ...*testConfig) (*machin
 					GroupVersion: fmt.Sprintf("%s/v1alpha3", defaultCAPIGroup),
 					APIResources: []v1.APIResource{
 						{
-							Name: "machinedeployments",
+							Name: resourceNameMachineDeployment,
 						},
 						{
-							Name: "machinesets",
+							Name: resourceNameMachineSet,
 						},
 						{
-							Name: "machines",
+							Name: resourceNameMachine,
 						},
 					},
 				},
@@ -776,10 +776,6 @@ func TestControllerNodeGroups(t *testing.T) {
 	if _, err := controller.nodeGroups(); err == nil {
 		t.Fatalf("expected an error")
 	}
-	if err := deleteTestConfigs(t, controller, machineSetConfigs...); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	assertNodegroupLen(t, controller, 0)
 
 	// Test #8: machinedeployment with bad scaling bounds results in an error and no nodegroups
 	machineDeploymentConfigs = createMachineDeploymentTestConfigs("MachineDeployment", 2, 1, annotations)
@@ -789,24 +785,6 @@ func TestControllerNodeGroups(t *testing.T) {
 	if _, err := controller.nodeGroups(); err == nil {
 		t.Fatalf("expected an error")
 	}
-	if err := deleteTestConfigs(t, controller, machineDeploymentConfigs...); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	assertNodegroupLen(t, controller, 0)
-
-	annotations = map[string]string{
-		nodeGroupMinSizeAnnotationKey: "1",
-		nodeGroupMaxSizeAnnotationKey: "5",
-	}
-
-	// Test #9: machineset with nil replicas results in falling back to status count
-	machineSetConfigs = createMachineSetTestConfigs("MachineSet", 1, 1, annotations)
-	machineSetConfigs[0].machineSet.Status.Replicas = *machineSetConfigs[0].machineSet.Spec.Replicas
-	machineSetConfigs[0].machineSet.Spec.Replicas = nil
-	if err := addTestConfigs(t, controller, machineSetConfigs...); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	assertNodegroupLen(t, controller, 1)
 }
 
 func TestControllerNodeGroupsNodeCount(t *testing.T) {
@@ -1176,6 +1154,70 @@ func TestGetAPIGroupPreferredVersion(t *testing.T) {
 			}
 			if version != tc.preferredVersion {
 				t.Errorf("expected %v, got: %v", tc.preferredVersion, version)
+			}
+		})
+	}
+}
+
+func TestGroupVersionHasResource(t *testing.T) {
+	testCases := []struct {
+		description  string
+		APIGroup     string
+		resourceName string
+		expected     bool
+		error        bool
+	}{
+		{
+			description:  "true when it finds resource",
+			resourceName: resourceNameMachineDeployment,
+			APIGroup:     fmt.Sprintf("%s/v1alpha3", defaultCAPIGroup),
+			expected:     true,
+			error:        false,
+		},
+		{
+			description:  "false when it does not find resource",
+			resourceName: "resourceDoesNotExist",
+			APIGroup:     fmt.Sprintf("%s/v1alpha3", defaultCAPIGroup),
+			expected:     false,
+			error:        false,
+		},
+		{
+			description:  "error when invalid groupVersion",
+			resourceName: resourceNameMachineDeployment,
+			APIGroup:     "APIGroupDoesNotExist",
+			expected:     false,
+			error:        true,
+		},
+	}
+
+	discoveryClient := &fakediscovery.FakeDiscovery{
+		Fake: &clientgotesting.Fake{
+			Resources: []*v1.APIResourceList{
+				{
+					GroupVersion: fmt.Sprintf("%s/v1alpha3", defaultCAPIGroup),
+					APIResources: []v1.APIResource{
+						{
+							Name: resourceNameMachineDeployment,
+						},
+						{
+							Name: resourceNameMachineSet,
+						},
+						{
+							Name: resourceNameMachine,
+						},
+					},
+				},
+			},
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.description, func(t *testing.T) {
+			got, err := groupVersionHasResource(discoveryClient, tc.APIGroup, tc.resourceName)
+			if (err != nil) != tc.error {
+				t.Errorf("expected to have error: %t. Had an error: %t", tc.error, err != nil)
+			}
+			if got != tc.expected {
+				t.Errorf("expected %v, got: %v", tc.expected, got)
 			}
 		})
 	}

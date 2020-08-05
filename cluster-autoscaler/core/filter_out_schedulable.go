@@ -20,25 +20,30 @@ import (
 	"sort"
 	"time"
 
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/autoscaler/cluster-autoscaler/context"
+	"k8s.io/autoscaler/cluster-autoscaler/core/utils"
 	"k8s.io/autoscaler/cluster-autoscaler/metrics"
-	"k8s.io/autoscaler/cluster-autoscaler/processors/pods"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator"
 
 	apiv1 "k8s.io/api/core/v1"
-	"k8s.io/klog"
+	klog "k8s.io/klog/v2"
 	"k8s.io/kubernetes/pkg/api/v1/pod"
 )
 
-type filterOutSchedulablePodListProcessor struct{}
+type filterOutSchedulablePodListProcessor struct {
+	schedulablePodsNodeHints map[types.UID]string
+}
 
 // NewFilterOutSchedulablePodListProcessor creates a PodListProcessor filtering out schedulable pods
-func NewFilterOutSchedulablePodListProcessor() pods.PodListProcessor {
-	return &filterOutSchedulablePodListProcessor{}
+func NewFilterOutSchedulablePodListProcessor() *filterOutSchedulablePodListProcessor {
+	return &filterOutSchedulablePodListProcessor{
+		schedulablePodsNodeHints: make(map[types.UID]string),
+	}
 }
 
 // Process filters out pods which are schedulable from list of unschedulable pods.
-func (filterOutSchedulablePodListProcessor) Process(
+func (p *filterOutSchedulablePodListProcessor) Process(
 	context *context.AutoscalingContext,
 	unschedulablePods []*apiv1.Pod) ([]*apiv1.Pod, error) {
 	// We need to check whether pods marked as unschedulable are actually unschedulable.
@@ -61,7 +66,7 @@ func (filterOutSchedulablePodListProcessor) Process(
 	filterOutSchedulableStart := time.Now()
 	var unschedulablePodsToHelp []*apiv1.Pod
 
-	unschedulablePodsToHelp, err := filterOutSchedulableByPacking(unschedulablePods, context.ClusterSnapshot,
+	unschedulablePodsToHelp, err := p.filterOutSchedulableByPacking(unschedulablePods, context.ClusterSnapshot,
 		context.PredicateChecker)
 
 	if err != nil {
@@ -79,17 +84,18 @@ func (filterOutSchedulablePodListProcessor) Process(
 	return unschedulablePodsToHelp, nil
 }
 
-func (filterOutSchedulablePodListProcessor) CleanUp() {
+func (p *filterOutSchedulablePodListProcessor) CleanUp() {
 }
 
 // filterOutSchedulableByPacking checks whether pods from <unschedulableCandidates> marked as
 // unschedulable can be scheduled on free capacity on existing nodes by trying to pack the pods. It
 // tries to pack the higher priority pods first. It takes into account pods that are bound to node
 // and will be scheduled after lower priority pod preemption.
-func filterOutSchedulableByPacking(
+func (p *filterOutSchedulablePodListProcessor) filterOutSchedulableByPacking(
 	unschedulableCandidates []*apiv1.Pod,
 	clusterSnapshot simulator.ClusterSnapshot,
 	predicateChecker simulator.PredicateChecker) ([]*apiv1.Pod, error) {
+	unschedulablePodsCache := make(utils.PodSchedulableMap)
 
 	// Sort unschedulable pods by importance
 	sort.Slice(unschedulableCandidates, func(i, j int) bool {
@@ -99,8 +105,53 @@ func filterOutSchedulableByPacking(
 	// Pods which remain unschedulable
 	var unschedulablePods []*apiv1.Pod
 
-	// Bin pack
+	// Try to schedule based on hints
+	podsFilteredUsingHints := 0
+	podsToCheckAgainstAllNodes := make([]*apiv1.Pod, 0, len(unschedulableCandidates))
 	for _, pod := range unschedulableCandidates {
+		scheduledOnHintedNode := false
+		if hintedNodeName, hintFound := p.schedulablePodsNodeHints[pod.UID]; hintFound {
+			if predicateChecker.CheckPredicates(clusterSnapshot, pod, hintedNodeName) == nil {
+				// We treat predicate error and missing node error here in the same way
+				scheduledOnHintedNode = true
+				podsFilteredUsingHints++
+				klog.V(4).Infof("Pod %s.%s marked as unschedulable can be scheduled on node %s (based on hinting). Ignoring"+
+					" in scale up.", pod.Namespace, pod.Name, hintedNodeName)
+
+				if err := clusterSnapshot.AddPod(pod, hintedNodeName); err != nil {
+					return nil, err
+				}
+			}
+		}
+
+		if !scheduledOnHintedNode {
+			podsToCheckAgainstAllNodes = append(podsToCheckAgainstAllNodes, pod)
+			delete(p.schedulablePodsNodeHints, pod.UID)
+		}
+	}
+	klog.V(4).Infof("Filtered out %d pods using hints", podsFilteredUsingHints)
+
+	// Cleanup hints map
+	foundPods := make(map[types.UID]bool)
+	for _, pod := range unschedulableCandidates {
+		foundPods[pod.UID] = true
+	}
+	for hintedPodUID := range p.schedulablePodsNodeHints {
+		if !foundPods[hintedPodUID] {
+			delete(p.schedulablePodsNodeHints, hintedPodUID)
+		}
+	}
+
+	// Try to bin pack remaining pods
+	unschedulePodsCacheHitCounter := 0
+	for _, pod := range podsToCheckAgainstAllNodes {
+		_, found := unschedulablePodsCache.Get(pod)
+		if found {
+			// Cache hit for similar pod; assuming unschedulable without running predicates
+			unschedulablePods = append(unschedulablePods, pod)
+			unschedulePodsCacheHitCounter++
+			continue
+		}
 		nodeName, err := predicateChecker.FitsAnyNode(clusterSnapshot, pod)
 		if err == nil {
 			klog.V(4).Infof("Pod %s.%s marked as unschedulable can be scheduled on node %s. Ignoring"+
@@ -108,11 +159,15 @@ func filterOutSchedulableByPacking(
 			if err := clusterSnapshot.AddPod(pod, nodeName); err != nil {
 				return nil, err
 			}
+			// Store hint for pod placement
+			p.schedulablePodsNodeHints[pod.UID] = nodeName
 		} else {
 			unschedulablePods = append(unschedulablePods, pod)
+			// cache negative result
+			unschedulablePodsCache.Set(pod, nil)
 		}
 	}
-
+	klog.V(4).Infof("%v pods were kept as unschedulable based on caching", unschedulePodsCacheHitCounter)
 	klog.V(4).Infof("%v pods marked as unschedulable can be scheduled.", len(unschedulableCandidates)-len(unschedulablePods))
 	return unschedulablePods, nil
 }

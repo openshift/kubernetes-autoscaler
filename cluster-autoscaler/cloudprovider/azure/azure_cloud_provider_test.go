@@ -17,22 +17,25 @@ limitations under the License.
 package azure
 
 import (
+	"fmt"
+	"io/ioutil"
+	"os"
 	"testing"
-
-	"github.com/Azure/azure-sdk-for-go/services/compute/mgmt/2019-07-01/compute"
-	"github.com/Azure/azure-sdk-for-go/services/resources/mgmt/2017-05-10/resources"
-	"github.com/Azure/go-autorest/autorest/azure"
-	"github.com/stretchr/testify/assert"
 
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
+	"k8s.io/autoscaler/cluster-autoscaler/config"
+	azclients "k8s.io/legacy-cloud-providers/azure/clients"
+	"k8s.io/legacy-cloud-providers/azure/clients/vmssclient/mockvmssclient"
+	"k8s.io/legacy-cloud-providers/azure/clients/vmssvmclient/mockvmssvmclient"
+
+	"github.com/Azure/azure-sdk-for-go/services/resources/mgmt/2017-05-10/resources"
+	"github.com/Azure/go-autorest/autorest/azure"
+	"github.com/golang/mock/gomock"
+	"github.com/stretchr/testify/assert"
 )
 
 func newTestAzureManager(t *testing.T) *AzureManager {
-	vmssName := "test-asg"
-	skuName := "Standard_D4_v2"
-	location := "eastus"
-	var vmssCapacity int64 = 3
 	manager := &AzureManager{
 		env:                  azure.PublicCloud,
 		explicitlyConfigured: make(map[string]bool),
@@ -43,31 +46,9 @@ func newTestAzureManager(t *testing.T) *AzureManager {
 		},
 
 		azClient: &azClient{
-			disksClient:           &DisksClientMock{},
-			interfacesClient:      &InterfacesClientMock{},
-			storageAccountsClient: &AccountsClientMock{},
 			deploymentsClient: &DeploymentsClientMock{
 				FakeStore: make(map[string]resources.DeploymentExtended),
 			},
-			virtualMachinesClient: &VirtualMachinesClientMock{
-				FakeStore: make(map[string]map[string]compute.VirtualMachine),
-			},
-			virtualMachineScaleSetsClient: &VirtualMachineScaleSetsClientMock{
-				FakeStore: map[string]map[string]compute.VirtualMachineScaleSet{
-					"test": {
-						"test-asg": {
-							Name: &vmssName,
-							Sku: &compute.Sku{
-								Capacity: &vmssCapacity,
-								Name:     &skuName,
-							},
-							VirtualMachineScaleSetProperties: &compute.VirtualMachineScaleSetProperties{},
-							Location:                         &location,
-						},
-					},
-				},
-			},
-			virtualMachineScaleSetVMsClient: &VirtualMachineScaleSetVMsClientMock{},
 		},
 	}
 
@@ -115,7 +96,20 @@ func TestNodeGroups(t *testing.T) {
 }
 
 func TestNodeGroupForNode(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	expectedVMSSVMs := newTestVMSSVMList(3)
+	expectedScaleSets := newTestVMSSList(3, "test-asg", "eastus")
+
 	provider := newTestProvider(t)
+	mockVMSSClient := mockvmssclient.NewMockInterface(ctrl)
+	mockVMSSClient.EXPECT().List(gomock.Any(), provider.azureManager.config.ResourceGroup).Return(expectedScaleSets, nil)
+	provider.azureManager.azClient.virtualMachineScaleSetsClient = mockVMSSClient
+	mockVMSSVMClient := mockvmssvmclient.NewMockInterface(ctrl)
+	mockVMSSVMClient.EXPECT().List(gomock.Any(), provider.azureManager.config.ResourceGroup, "test-asg", gomock.Any()).Return(expectedVMSSVMs, nil).AnyTimes()
+	provider.azureManager.azClient.virtualMachineScaleSetVMsClient = mockVMSSVMClient
+
 	registered := provider.azureManager.RegisterAsg(
 		newTestScaleSet(provider.azureManager, "test-asg"))
 	assert.True(t, registered)
@@ -123,7 +117,7 @@ func TestNodeGroupForNode(t *testing.T) {
 
 	node := &apiv1.Node{
 		Spec: apiv1.NodeSpec{
-			ProviderID: "azure://" + fakeVirtualMachineScaleSetVMID,
+			ProviderID: "azure://" + fmt.Sprintf(fakeVirtualMachineScaleSetVMID, 0),
 		},
 	}
 	// refresh cache
@@ -162,4 +156,116 @@ func TestNodeGroupForNodeWithNoProviderId(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.Equal(t, group, nil)
+}
+
+func TestBuildAzure(t *testing.T) {
+	expectedConfig := &Config{
+		Cloud:               "AzurePublicCloud",
+		Location:            "southeastasia",
+		TenantID:            "tenantId",
+		SubscriptionID:      "subId",
+		ResourceGroup:       "rg",
+		VMType:              "vmss",
+		AADClientID:         "clientId",
+		AADClientSecret:     "clientsecret",
+		MaxDeploymentsCount: 10,
+		CloudProviderRateLimitConfig: CloudProviderRateLimitConfig{
+			RateLimitConfig: azclients.RateLimitConfig{
+				CloudProviderRateLimit:            false,
+				CloudProviderRateLimitBucket:      5,
+				CloudProviderRateLimitBucketWrite: 5,
+				CloudProviderRateLimitQPS:         1,
+				CloudProviderRateLimitQPSWrite:    1,
+			},
+			InterfaceRateLimit: &azclients.RateLimitConfig{
+				CloudProviderRateLimit:            false,
+				CloudProviderRateLimitBucket:      5,
+				CloudProviderRateLimitBucketWrite: 5,
+				CloudProviderRateLimitQPS:         1,
+				CloudProviderRateLimitQPSWrite:    1,
+			},
+			VirtualMachineRateLimit: &azclients.RateLimitConfig{
+				CloudProviderRateLimit:            false,
+				CloudProviderRateLimitBucket:      5,
+				CloudProviderRateLimitBucketWrite: 5,
+				CloudProviderRateLimitQPS:         1,
+				CloudProviderRateLimitQPSWrite:    1,
+			},
+			StorageAccountRateLimit: &azclients.RateLimitConfig{
+				CloudProviderRateLimit:            false,
+				CloudProviderRateLimitBucket:      5,
+				CloudProviderRateLimitBucketWrite: 5,
+				CloudProviderRateLimitQPS:         1,
+				CloudProviderRateLimitQPSWrite:    1,
+			},
+			DiskRateLimit: &azclients.RateLimitConfig{
+				CloudProviderRateLimit:            false,
+				CloudProviderRateLimitBucket:      5,
+				CloudProviderRateLimitBucketWrite: 5,
+				CloudProviderRateLimitQPS:         1,
+				CloudProviderRateLimitQPSWrite:    1,
+			},
+			VirtualMachineScaleSetRateLimit: &azclients.RateLimitConfig{
+				CloudProviderRateLimit:            false,
+				CloudProviderRateLimitBucket:      5,
+				CloudProviderRateLimitBucketWrite: 5,
+				CloudProviderRateLimitQPS:         1,
+				CloudProviderRateLimitQPSWrite:    1,
+			},
+		},
+	}
+
+	cloudConfig := "cfg.json"
+	azureCfg := `{
+		"cloud": "AzurePublicCloud",
+		"tenantId": "tenantId",
+		"subscriptionId": "subId",
+		"aadClientId": "clientId",
+		"aadClientSecret": "clientsecret",
+		"resourceGroup": "rg",
+		"location": "southeastasia"
+	}`
+	err := ioutil.WriteFile(cloudConfig, []byte(azureCfg), 0644)
+	assert.Nil(t, err)
+	defer os.Remove(cloudConfig)
+
+	os.Setenv("ARM_CLOUD", "AzurePublicCloud")
+	os.Setenv("LOCATION", "southeastasia")
+	os.Setenv("ARM_RESOURCE_GROUP", "rg")
+	os.Setenv("ARM_SUBSCRIPTION_ID", "subId")
+	os.Setenv("ARM_TENANT_ID", "tenantId")
+	os.Setenv("ARM_CLIENT_ID", "clientId")
+	os.Setenv("ARM_CLIENT_SECRET", "clientsecret")
+
+	resourceLimiter := &cloudprovider.ResourceLimiter{}
+	discoveryOptions := cloudprovider.NodeGroupDiscoveryOptions{}
+
+	testCases := []struct {
+		name        string
+		cloudConfig string
+	}{
+		{
+			name:        "BuildAzure should create Azure Manager using cloud-config file",
+			cloudConfig: cloudConfig,
+		},
+		{
+			name: "BuildAzure should create Azure Manager using environment variable",
+		},
+	}
+
+	for _, test := range testCases {
+		opts := config.AutoscalingOptions{
+			CloudConfig: test.cloudConfig,
+		}
+		cloudProvider := BuildAzure(opts, discoveryOptions, resourceLimiter)
+		assert.Equal(t, expectedConfig, cloudProvider.(*AzureCloudProvider).azureManager.config, test.name)
+	}
+
+	os.Unsetenv("ARM_CLOUD")
+	os.Unsetenv("LOCATION")
+	os.Unsetenv("ARM_RESOURCE_GROUP")
+	os.Unsetenv("ARM_SUBSCRIPTION_ID")
+	os.Unsetenv("ARM_TENANT_ID")
+	os.Unsetenv("ARM_CLIENT_ID")
+	os.Unsetenv("ARM_CLIENT_SECRET")
 }

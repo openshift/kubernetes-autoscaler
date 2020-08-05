@@ -32,6 +32,8 @@ import (
 
 var (
 	testPodID       = PodID{"namespace-1", "pod-1"}
+	testPodID3      = PodID{"namespace-1", "pod-3"}
+	testPodID4      = PodID{"namespace-1", "pod-4"}
 	testContainerID = ContainerID{testPodID, "container-1"}
 	testVpaID       = VpaID{"namespace-1", "vpa-1"}
 	testAnnotations = vpaAnnotationsMap{"key-1": "value-1"}
@@ -235,13 +237,15 @@ func TestMissingKeys(t *testing.T) {
 }
 
 func addVpa(cluster *ClusterState, id VpaID, annotations vpaAnnotationsMap, selector string) *Vpa {
-	var apiObject vpa_types.VerticalPodAutoscaler
-	apiObject.Namespace = id.Namespace
-	apiObject.Name = id.VpaName
-	apiObject.Annotations = annotations
+	apiObject := test.VerticalPodAutoscaler().WithNamespace(id.Namespace).
+		WithName(id.VpaName).WithContainer(testContainerID.ContainerName).WithAnnotations(annotations).Get()
+	return addVpaObject(cluster, id, apiObject, selector)
+}
+
+func addVpaObject(cluster *ClusterState, id VpaID, vpa *vpa_types.VerticalPodAutoscaler, selector string) *Vpa {
 	labelSelector, _ := metav1.ParseToLabelSelector(selector)
 	parsedSelector, _ := metav1.LabelSelectorAsSelector(labelSelector)
-	err := cluster.AddOrUpdateVpa(&apiObject, parsedSelector)
+	err := cluster.AddOrUpdateVpa(vpa, parsedSelector)
 	if err != nil {
 		klog.Fatalf("AddOrUpdateVpa() failed: %v", err)
 	}
@@ -338,6 +342,147 @@ func TestUpdatePodSelector(t *testing.T) {
 	// Update the VPA selector to match the Pod again.
 	vpa = addVpa(cluster, testVpaID, testAnnotations, "label-1 = value-1")
 	assert.Contains(t, vpa.aggregateContainerStates, cluster.aggregateStateKeyForContainerID(testContainerID))
+}
+
+// Test setting ResourcePolicy and UpdatePolicy on adding or updating VPA object
+func TestAddOrUpdateVPAPolicies(t *testing.T) {
+	testVpaBuilder := test.VerticalPodAutoscaler().WithName(testVpaID.VpaName).
+		WithNamespace(testVpaID.Namespace).WithContainer(testContainerID.ContainerName)
+	updateModeAuto := vpa_types.UpdateModeAuto
+	updateModeOff := vpa_types.UpdateModeOff
+	scalingModeAuto := vpa_types.ContainerScalingModeAuto
+	scalingModeOff := vpa_types.ContainerScalingModeOff
+	cases := []struct {
+		name                string
+		oldVpa              *vpa_types.VerticalPodAutoscaler
+		newVpa              *vpa_types.VerticalPodAutoscaler
+		resourcePolicy      *vpa_types.PodResourcePolicy
+		expectedScalingMode *vpa_types.ContainerScalingMode
+		expectedUpdateMode  *vpa_types.UpdateMode
+	}{
+		{
+			name:   "Defaults to auto",
+			oldVpa: nil,
+			newVpa: testVpaBuilder.WithUpdateMode(vpa_types.UpdateModeOff).Get(),
+			// Container scaling mode is a separate concept from update mode in the VPA object,
+			// hence the UpdateModeOff does not influence container scaling mode here.
+			expectedScalingMode: &scalingModeAuto,
+			expectedUpdateMode:  &updateModeOff,
+		}, {
+			name:   "Default scaling mode set to Off",
+			oldVpa: nil,
+			newVpa: testVpaBuilder.WithUpdateMode(vpa_types.UpdateModeAuto).Get(),
+			resourcePolicy: &vpa_types.PodResourcePolicy{
+				ContainerPolicies: []vpa_types.ContainerResourcePolicy{
+					{
+						ContainerName: "*",
+						Mode:          &scalingModeOff,
+					},
+				},
+			},
+			expectedScalingMode: &scalingModeOff,
+			expectedUpdateMode:  &updateModeAuto,
+		}, {
+			name:   "Explicit scaling mode set to Off",
+			oldVpa: nil,
+			newVpa: testVpaBuilder.WithUpdateMode(vpa_types.UpdateModeAuto).Get(),
+			resourcePolicy: &vpa_types.PodResourcePolicy{
+				ContainerPolicies: []vpa_types.ContainerResourcePolicy{
+					{
+						ContainerName: testContainerID.ContainerName,
+						Mode:          &scalingModeOff,
+					},
+				},
+			},
+			expectedScalingMode: &scalingModeOff,
+			expectedUpdateMode:  &updateModeAuto,
+		}, {
+			name:   "Other container has explicit scaling mode Off",
+			oldVpa: nil,
+			newVpa: testVpaBuilder.WithUpdateMode(vpa_types.UpdateModeAuto).Get(),
+			resourcePolicy: &vpa_types.PodResourcePolicy{
+				ContainerPolicies: []vpa_types.ContainerResourcePolicy{
+					{
+						ContainerName: "other-container",
+						Mode:          &scalingModeOff,
+					},
+				},
+			},
+			expectedScalingMode: &scalingModeAuto,
+			expectedUpdateMode:  &updateModeAuto,
+		}, {
+			name:   "Scaling mode to default Off",
+			oldVpa: testVpaBuilder.WithUpdateMode(vpa_types.UpdateModeAuto).Get(),
+			newVpa: testVpaBuilder.WithUpdateMode(vpa_types.UpdateModeAuto).Get(),
+			resourcePolicy: &vpa_types.PodResourcePolicy{
+				ContainerPolicies: []vpa_types.ContainerResourcePolicy{
+					{
+						ContainerName: "*",
+						Mode:          &scalingModeOff,
+					},
+				},
+			},
+			expectedScalingMode: &scalingModeOff,
+			expectedUpdateMode:  &updateModeAuto,
+		}, {
+			name:   "Scaling mode to explicit Off",
+			oldVpa: testVpaBuilder.WithUpdateMode(vpa_types.UpdateModeAuto).Get(),
+			newVpa: testVpaBuilder.WithUpdateMode(vpa_types.UpdateModeAuto).Get(),
+			resourcePolicy: &vpa_types.PodResourcePolicy{
+				ContainerPolicies: []vpa_types.ContainerResourcePolicy{
+					{
+						ContainerName: testContainerID.ContainerName,
+						Mode:          &scalingModeOff,
+					},
+				},
+			},
+			expectedScalingMode: &scalingModeOff,
+			expectedUpdateMode:  &updateModeAuto,
+		},
+		// Tests checking changes to UpdateMode.
+		{
+			name:                "UpdateMode from Off to Auto",
+			oldVpa:              testVpaBuilder.WithUpdateMode(vpa_types.UpdateModeOff).Get(),
+			newVpa:              testVpaBuilder.WithUpdateMode(vpa_types.UpdateModeAuto).Get(),
+			expectedScalingMode: &scalingModeAuto,
+			expectedUpdateMode:  &updateModeAuto,
+		}, {
+			name:                "UpdateMode from Auto to Off",
+			oldVpa:              testVpaBuilder.WithUpdateMode(vpa_types.UpdateModeAuto).Get(),
+			newVpa:              testVpaBuilder.WithUpdateMode(vpa_types.UpdateModeOff).Get(),
+			expectedScalingMode: &scalingModeAuto,
+			expectedUpdateMode:  &updateModeOff,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cluster := NewClusterState()
+			addTestPod(cluster)
+			addTestContainer(cluster)
+			if tc.oldVpa != nil {
+				oldVpa := addVpaObject(cluster, testVpaID, tc.oldVpa, testSelectorStr)
+				if !assert.Contains(t, cluster.Vpas, testVpaID) {
+					t.FailNow()
+				}
+				assert.Len(t, oldVpa.aggregateContainerStates, 1, "Expected one container aggregation in VPA %v", testVpaID)
+				for containerName, aggregation := range oldVpa.aggregateContainerStates {
+					assert.Equal(t, &scalingModeAuto, aggregation.GetScalingMode(), "Unexpected scaling mode for container %s", containerName)
+				}
+			}
+			tc.newVpa.Spec.ResourcePolicy = tc.resourcePolicy
+			addVpaObject(cluster, testVpaID, tc.newVpa, testSelectorStr)
+			vpa, found := cluster.Vpas[testVpaID]
+			if !assert.True(t, found, "VPA %+v not found in cluster state.", testVpaID) {
+				t.FailNow()
+			}
+			assert.Equal(t, tc.expectedUpdateMode, vpa.UpdateMode)
+			assert.Len(t, vpa.aggregateContainerStates, 1, "Expected one container aggregation in VPA %v", testVpaID)
+			for containerName, aggregation := range vpa.aggregateContainerStates {
+				assert.Equal(t, tc.expectedUpdateMode, aggregation.UpdateMode, "Unexpected update mode for container %s", containerName)
+				assert.Equal(t, tc.expectedScalingMode, aggregation.GetScalingMode(), "Unexpected scaling mode for container %s", containerName)
+			}
+		})
+	}
 }
 
 // Verify that two copies of the same AggregateStateKey are equal.
@@ -558,13 +703,13 @@ func TestVPAWithMatchingPods(t *testing.T) {
 		name          string
 		vpaSelector   string
 		pods          []podDesc
-		expectedMatch bool
+		expectedMatch int
 	}{
 		{
 			name:          "No pods",
 			vpaSelector:   testSelectorStr,
 			pods:          []podDesc{},
-			expectedMatch: false,
+			expectedMatch: 0,
 		},
 		{
 			name:        "VPA with matching pod",
@@ -576,7 +721,7 @@ func TestVPAWithMatchingPods(t *testing.T) {
 					apiv1.PodRunning,
 				},
 			},
-			expectedMatch: true,
+			expectedMatch: 1,
 		},
 		{
 			name:        "No matching pod",
@@ -588,11 +733,34 @@ func TestVPAWithMatchingPods(t *testing.T) {
 					apiv1.PodRunning,
 				},
 			},
-			expectedMatch: false,
+			expectedMatch: 0,
+		},
+		{
+			name:        "VPA with 2 matching pods, 1 not matching",
+			vpaSelector: testSelectorStr,
+			pods: []podDesc{
+				{
+					testPodID,
+					emptyLabels, // does not match VPA
+					apiv1.PodRunning,
+				},
+				{
+					testPodID3,
+					testLabels,
+					apiv1.PodRunning,
+				},
+				{
+					testPodID4,
+					testLabels,
+					apiv1.PodRunning,
+				},
+			},
+			expectedMatch: 2,
 		},
 	}
+	// Run with adding VPA first
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
+		t.Run(tc.name+", VPA first", func(t *testing.T) {
 			cluster := NewClusterState()
 			vpa := addVpa(cluster, testVpaID, testAnnotations, tc.vpaSelector)
 			for _, podDesc := range tc.pods {
@@ -600,7 +768,20 @@ func TestVPAWithMatchingPods(t *testing.T) {
 				containerID := ContainerID{testPodID, "foo"}
 				assert.NoError(t, cluster.AddOrUpdateContainer(containerID, testRequest))
 			}
-			assert.Equal(t, tc.expectedMatch, cluster.VpasWithMatchingPods[vpa.ID])
+			assert.Equal(t, tc.expectedMatch, cluster.Vpas[vpa.ID].PodCount)
+		})
+	}
+	// Run with adding Pods first
+	for _, tc := range cases {
+		t.Run(tc.name+", Pods first", func(t *testing.T) {
+			cluster := NewClusterState()
+			for _, podDesc := range tc.pods {
+				cluster.AddOrUpdatePod(podDesc.id, podDesc.labels, podDesc.phase)
+				containerID := ContainerID{testPodID, "foo"}
+				assert.NoError(t, cluster.AddOrUpdateContainer(containerID, testRequest))
+			}
+			vpa := addVpa(cluster, testVpaID, testAnnotations, tc.vpaSelector)
+			assert.Equal(t, tc.expectedMatch, cluster.Vpas[vpa.ID].PodCount)
 		})
 	}
 }

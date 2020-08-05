@@ -25,6 +25,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	vpa_types "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/apis/autoscaling.k8s.io/v1"
+	metrics_quality "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/metrics/quality"
+	vpa_api_util "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/vpa"
 )
 
 // Map from VPA annotation key to value.
@@ -106,6 +108,8 @@ type Vpa struct {
 	IsV1Beta1API bool
 	// TargetRef points to the controller managing the set of pods.
 	TargetRef *autoscaling.CrossVersionObjectReference
+	// PodCount contains number of live Pods matching a given VPA object.
+	PodCount int
 }
 
 // NewVpa returns a new Vpa with a given ID and pod selector. Doesn't set the
@@ -120,37 +124,38 @@ func NewVpa(id VpaID, selector labels.Selector, created time.Time) *Vpa {
 		Annotations:                     make(vpaAnnotationsMap),
 		Conditions:                      make(vpaConditionsMap),
 		IsV1Beta1API:                    false,
+		PodCount:                        0,
 	}
 	return vpa
 }
 
 // UseAggregationIfMatching checks if the given aggregation matches (contributes to) this VPA
-// and adds it to the set of VPA's aggregations if that is the case. Returns true
-// if the aggregation matches VPA.
-func (vpa *Vpa) UseAggregationIfMatching(aggregationKey AggregateStateKey, aggregation *AggregateContainerState) bool {
+// and adds it to the set of VPA's aggregations if that is the case.
+func (vpa *Vpa) UseAggregationIfMatching(aggregationKey AggregateStateKey, aggregation *AggregateContainerState) {
 	if vpa.UsesAggregation(aggregationKey) {
-		return true
+		// Already linked, we can return quickly.
+		return
 	}
 	if vpa.matchesAggregation(aggregationKey) {
 		vpa.aggregateContainerStates[aggregationKey] = aggregation
 		aggregation.IsUnderVPA = true
 		aggregation.UpdateMode = vpa.UpdateMode
-		return true
+		aggregation.UpdateFromPolicy(vpa_api_util.GetContainerResourcePolicy(aggregationKey.ContainerName(), vpa.ResourcePolicy))
 	}
-	return false
 }
 
 // UpdateRecommendation updates the recommended resources in the VPA and its
 // aggregations with the given recommendation.
 func (vpa *Vpa) UpdateRecommendation(recommendation *vpa_types.RecommendedPodResources) {
-	vpa.Recommendation = recommendation
 	for _, containerRecommendation := range recommendation.ContainerRecommendations {
 		for container, state := range vpa.aggregateContainerStates {
 			if container.ContainerName() == containerRecommendation.ContainerName {
+				metrics_quality.ObserveRecommendationChange(state.LastRecommendation, containerRecommendation.UncappedTarget, vpa.UpdateMode, vpa.PodCount)
 				state.LastRecommendation = containerRecommendation.UncappedTarget
 			}
 		}
 	}
+	vpa.Recommendation = recommendation
 }
 
 // UsesAggregation returns true iff an aggregation with the given key contributes to the VPA.
@@ -200,6 +205,33 @@ func (vpa *Vpa) matchesAggregation(aggregationKey AggregateStateKey) bool {
 		return false
 	}
 	return vpa.PodSelector != nil && vpa.PodSelector.Matches(aggregationKey.Labels())
+}
+
+// SetResourcePolicy updates the resource policy of the VPA and the scaling
+// policies of aggregators under this VPA.
+func (vpa *Vpa) SetResourcePolicy(resourcePolicy *vpa_types.PodResourcePolicy) {
+	if resourcePolicy == vpa.ResourcePolicy {
+		return
+	}
+	vpa.ResourcePolicy = resourcePolicy
+	for container, state := range vpa.aggregateContainerStates {
+		state.UpdateFromPolicy(vpa_api_util.GetContainerResourcePolicy(container.ContainerName(), vpa.ResourcePolicy))
+	}
+}
+
+// SetUpdateMode updates the update mode of the VPA and aggregators under this VPA.
+func (vpa *Vpa) SetUpdateMode(updatePolicy *vpa_types.PodUpdatePolicy) {
+	if updatePolicy == nil {
+		vpa.UpdateMode = nil
+	} else {
+		if updatePolicy.UpdateMode == vpa.UpdateMode {
+			return
+		}
+		vpa.UpdateMode = updatePolicy.UpdateMode
+	}
+	for _, state := range vpa.aggregateContainerStates {
+		state.UpdateMode = vpa.UpdateMode
+	}
 }
 
 // UpdateConditions updates the conditions of VPA objects based on it's state.

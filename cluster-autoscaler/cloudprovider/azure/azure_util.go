@@ -29,8 +29,9 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
-	"github.com/Azure/azure-sdk-for-go/services/compute/mgmt/2019-07-01/compute"
+	"github.com/Azure/azure-sdk-for-go/services/compute/mgmt/2019-12-01/compute"
 	azStorage "github.com/Azure/azure-sdk-for-go/storage"
 	"github.com/Azure/go-autorest/autorest"
 	"github.com/Azure/go-autorest/autorest/to"
@@ -38,7 +39,7 @@ import (
 	"golang.org/x/crypto/pkcs12"
 
 	"k8s.io/autoscaler/cluster-autoscaler/version"
-	"k8s.io/klog"
+	klog "k8s.io/klog/v2"
 	"k8s.io/legacy-cloud-providers/azure/retry"
 )
 
@@ -229,12 +230,12 @@ func decodePkcs12(pkcs []byte, password string) (*x509.Certificate, *rsa.Private
 	return certificate, rsaPrivateKey, nil
 }
 
-// configureUserAgent configures the autorest client with a user agent that
-// includes "autoscaler" and the full client version string
-// example:
-// Azure-SDK-for-Go/7.0.1-beta arm-network/2016-09-01; cluster-autoscaler/v1.7.0-alpha.2.711+a2fadef8170bb0-dirty;
+func getUserAgentExtension() string {
+	return fmt.Sprintf("cluster-autoscaler/v%s", version.ClusterAutoscalerVersion)
+}
+
 func configureUserAgent(client *autorest.Client) {
-	client.UserAgent = fmt.Sprintf("%s; cluster-autoscaler/v%s", client.UserAgent, version.ClusterAutoscalerVersion)
+	client.UserAgent = fmt.Sprintf("%s; %s", client.UserAgent, getUserAgentExtension())
 }
 
 // normalizeForK8sVMASScalingUp takes a template and removes elements that are unwanted in a K8s VMAS scale up/down case
@@ -595,6 +596,10 @@ func readDeploymentParameters(paramFilePath string) (map[string]interface{}, err
 
 func getContextWithCancel() (context.Context, context.CancelFunc) {
 	return context.WithCancel(context.Background())
+}
+
+func getContextWithTimeout(timeout time.Duration) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), timeout)
 }
 
 // checkExistsFromError inspects an error and returns a true if err is nil,

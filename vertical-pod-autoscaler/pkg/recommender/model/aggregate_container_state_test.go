@@ -110,13 +110,14 @@ func TestAggregateStateByContainerName(t *testing.T) {
 	assert.Equal(t, 1, aggregateResources["app-B"].TotalSamplesCount)
 	assert.Equal(t, 1, aggregateResources["app-C"].TotalSamplesCount)
 
+	config := GetAggregationsConfig()
 	// Compute the expected histograms for the "app-A" containers.
-	expectedCPUHistogram := util.NewDecayingHistogram(CPUHistogramOptions, CPUHistogramDecayHalfLife)
+	expectedCPUHistogram := util.NewDecayingHistogram(config.CPUHistogramOptions, config.CPUHistogramDecayHalfLife)
 	expectedCPUHistogram.Merge(cluster.findOrCreateAggregateContainerState(containers[0]).AggregateCPUUsage)
 	expectedCPUHistogram.Merge(cluster.findOrCreateAggregateContainerState(containers[2]).AggregateCPUUsage)
 	actualCPUHistogram := aggregateResources["app-A"].AggregateCPUUsage
 
-	expectedMemoryHistogram := util.NewDecayingHistogram(MemoryHistogramOptions, MemoryHistogramDecayHalfLife)
+	expectedMemoryHistogram := util.NewDecayingHistogram(config.MemoryHistogramOptions, config.MemoryHistogramDecayHalfLife)
 	expectedMemoryHistogram.AddSample(2e9, 1.0, cluster.GetContainer(containers[0]).WindowEnd)
 	expectedMemoryHistogram.AddSample(4e9, 1.0, cluster.GetContainer(containers[2]).WindowEnd)
 	actualMemoryHistogram := aggregateResources["app-A"].AggregateMemoryPeaks
@@ -207,4 +208,86 @@ func TestAggregateContainerStateIsExpired(t *testing.T) {
 	csEmpty.CreationTime = testTimestamp
 	assert.False(t, csEmpty.isExpired(testTimestamp.Add(7*24*time.Hour)))
 	assert.True(t, csEmpty.isExpired(testTimestamp.Add(8*24*time.Hour)))
+}
+
+func TestUpdateFromPolicyScalingMode(t *testing.T) {
+	scalingModeAuto := vpa_types.ContainerScalingModeAuto
+	scalingModeOff := vpa_types.ContainerScalingModeOff
+	testCases := []struct {
+		name     string
+		policy   *vpa_types.ContainerResourcePolicy
+		expected *vpa_types.ContainerScalingMode
+	}{
+		{
+			name: "Explicit auto scaling mode",
+			policy: &vpa_types.ContainerResourcePolicy{
+				Mode: &scalingModeAuto,
+			},
+			expected: &scalingModeAuto,
+		}, {
+			name: "Off scaling mode",
+			policy: &vpa_types.ContainerResourcePolicy{
+				Mode: &scalingModeOff,
+			},
+			expected: &scalingModeOff,
+		}, {
+			name:     "No mode specified - default to Auto",
+			policy:   &vpa_types.ContainerResourcePolicy{},
+			expected: &scalingModeAuto,
+		}, {
+			name:     "Nil policy - default to Auto",
+			policy:   nil,
+			expected: &scalingModeAuto,
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			cs := NewAggregateContainerState()
+			cs.UpdateFromPolicy(tc.policy)
+			assert.Equal(t, tc.expected, cs.GetScalingMode())
+		})
+	}
+}
+
+func TestUpdateFromPolicyControlledResources(t *testing.T) {
+	testCases := []struct {
+		name     string
+		policy   *vpa_types.ContainerResourcePolicy
+		expected []ResourceName
+	}{
+		{
+			name: "Explicit ControlledResources",
+			policy: &vpa_types.ContainerResourcePolicy{
+				ControlledResources: &[]apiv1.ResourceName{apiv1.ResourceCPU, apiv1.ResourceMemory},
+			},
+			expected: []ResourceName{ResourceCPU, ResourceMemory},
+		}, {
+			name: "Empty ControlledResources",
+			policy: &vpa_types.ContainerResourcePolicy{
+				ControlledResources: &[]apiv1.ResourceName{},
+			},
+			expected: []ResourceName{},
+		}, {
+			name: "ControlledResources with one resource",
+			policy: &vpa_types.ContainerResourcePolicy{
+				ControlledResources: &[]apiv1.ResourceName{apiv1.ResourceMemory},
+			},
+			expected: []ResourceName{ResourceMemory},
+		}, {
+			name:     "No ControlledResources specified - used default",
+			policy:   &vpa_types.ContainerResourcePolicy{},
+			expected: []ResourceName{ResourceCPU, ResourceMemory},
+		}, {
+			name:     "Nil policy - use default",
+			policy:   nil,
+			expected: []ResourceName{ResourceCPU, ResourceMemory},
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			cs := NewAggregateContainerState()
+			cs.UpdateFromPolicy(tc.policy)
+			assert.Equal(t, tc.expected, cs.GetControlledResources())
+		})
+	}
 }

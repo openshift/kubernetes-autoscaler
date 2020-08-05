@@ -27,7 +27,7 @@ import (
 	"strings"
 	"syscall"
 
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
 	utilexec "k8s.io/utils/exec"
 	utilio "k8s.io/utils/io"
 )
@@ -103,7 +103,7 @@ func (mounter *Mounter) MountSensitive(source string, target string, fstype stri
 }
 
 // doMount runs the mount command. mounterPath is the path to mounter binary if containerized mounter is used.
-// sensitiveOptions is an extention of options except they will not be logged (because they may contain sensitive material)
+// sensitiveOptions is an extension of options except they will not be logged (because they may contain sensitive material)
 func (mounter *Mounter) doMount(mounterPath string, mountCmd string, source string, target string, fstype string, options []string, sensitiveOptions []string) error {
 	mountArgs, mountArgsLogStr := MakeMountArgsSensitive(source, target, fstype, options, sensitiveOptions)
 	if len(mounterPath) > 0 {
@@ -187,7 +187,7 @@ func MakeMountArgs(source, target, fstype string, options []string) (mountArgs [
 }
 
 // MakeMountArgsSensitive makes the arguments to the mount(8) command.
-// sensitiveOptions is an extention of options except they will not be logged (because they may contain sensitive material)
+// sensitiveOptions is an extension of options except they will not be logged (because they may contain sensitive material)
 func MakeMountArgsSensitive(source, target, fstype string, options []string, sensitiveOptions []string) (mountArgs []string, mountArgsLogStr string) {
 	// Build mount command as follows:
 	//   mount [-t $fstype] [-o $options] [$source] $target
@@ -314,33 +314,6 @@ func (mounter *SafeFormatAndMount) checkAndRepairFilesystem(source string) error
 	return nil
 }
 
-// checkAndRepairXfsFilesystem checks and repairs xfs filesystem using command xfs_repair.
-func (mounter *SafeFormatAndMount) checkAndRepairXfsFilesystem(source string) error {
-	klog.V(4).Infof("Checking for issues with xfs_repair on disk: %s", source)
-
-	args := []string{source}
-	checkArgs := []string{"-n", source}
-
-	// check-only using "xfs_repair -n", if the exit status is not 0, perform a "xfs_repair"
-	_, err := mounter.Exec.Command("xfs_repair", checkArgs...).CombinedOutput()
-	if err != nil {
-		if err == utilexec.ErrExecutableNotFound {
-			klog.Warningf("'xfs_repair' not found on system; continuing mount without running 'xfs_repair'.")
-			return nil
-		} else {
-			klog.Warningf("Filesystem corruption was detected for %s, running xfs_repair to repair", source)
-			out, err := mounter.Exec.Command("xfs_repair", args...).CombinedOutput()
-			if err != nil {
-				return NewMountError(HasFilesystemErrors, "'xfs_repair' found errors on device %s but could not correct them: %s\n", source, out)
-			} else {
-				klog.Infof("Device %s has errors which were corrected by xfs_repair.", source)
-				return nil
-			}
-		}
-	}
-	return nil
-}
-
 // formatAndMount uses unix utils to format and mount the given disk
 func (mounter *SafeFormatAndMount) formatAndMountSensitive(source string, target string, fstype string, options []string, sensitiveOptions []string) error {
 	readOnly := false
@@ -410,14 +383,7 @@ func (mounter *SafeFormatAndMount) formatAndMountSensitive(source string, target
 
 		if !readOnly {
 			// Run check tools on the disk to fix repairable issues, only do this for formatted volumes requested as rw.
-			var err error
-			switch existingFormat {
-			case "xfs":
-				err = mounter.checkAndRepairXfsFilesystem(source)
-			default:
-				err = mounter.checkAndRepairFilesystem(source)
-			}
-
+			err := mounter.checkAndRepairFilesystem(source)
 			if err != nil {
 				return err
 			}

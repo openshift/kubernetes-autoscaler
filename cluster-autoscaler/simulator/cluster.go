@@ -23,8 +23,8 @@ import (
 
 	"k8s.io/autoscaler/cluster-autoscaler/utils/drain"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/errors"
-	"k8s.io/autoscaler/cluster-autoscaler/utils/glogx"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/gpu"
+	"k8s.io/autoscaler/cluster-autoscaler/utils/klogx"
 	kube_util "k8s.io/autoscaler/cluster-autoscaler/utils/kubernetes"
 	pod_util "k8s.io/autoscaler/cluster-autoscaler/utils/pod"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/tpu"
@@ -32,9 +32,9 @@ import (
 	apiv1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1beta1"
 	"k8s.io/apimachinery/pkg/api/resource"
-	schedulernodeinfo "k8s.io/kubernetes/pkg/scheduler/nodeinfo"
+	schedulerframework "k8s.io/kubernetes/pkg/scheduler/framework/v1alpha1"
 
-	"k8s.io/klog"
+	klog "k8s.io/klog/v2"
 )
 
 var (
@@ -215,7 +215,7 @@ func FindEmptyNodesToRemove(snapshot ClusterSnapshot, candidates []string) []str
 // CalculateUtilization calculates utilization of a node, defined as maximum of (cpu, memory) or gpu utilization
 // based on if the node has GPU or not. Per resource utilization is the sum of requests for it divided by allocatable.
 // It also returns the individual cpu, memory and gpu utilization.
-func CalculateUtilization(node *apiv1.Node, nodeInfo *schedulernodeinfo.NodeInfo, skipDaemonSetPods, skipMirrorPods bool, gpuLabel string) (utilInfo UtilizationInfo, err error) {
+func CalculateUtilization(node *apiv1.Node, nodeInfo *schedulerframework.NodeInfo, skipDaemonSetPods, skipMirrorPods bool, gpuLabel string) (utilInfo UtilizationInfo, err error) {
 	if gpu.NodeHasGpu(gpuLabel, node) {
 		gpuUtil, err := calculateUtilizationOfResource(node, nodeInfo, gpu.ResourceNvidiaGPU, skipDaemonSetPods, skipMirrorPods)
 		if err != nil {
@@ -250,7 +250,7 @@ func CalculateUtilization(node *apiv1.Node, nodeInfo *schedulernodeinfo.NodeInfo
 	return utilization, nil
 }
 
-func calculateUtilizationOfResource(node *apiv1.Node, nodeInfo *schedulernodeinfo.NodeInfo, resourceName apiv1.ResourceName, skipDaemonSetPods, skipMirrorPods bool) (float64, error) {
+func calculateUtilizationOfResource(node *apiv1.Node, nodeInfo *schedulerframework.NodeInfo, resourceName apiv1.ResourceName, skipDaemonSetPods, skipMirrorPods bool) (float64, error) {
 	nodeAllocatable, found := node.Status.Allocatable[resourceName]
 	if !found {
 		return 0, fmt.Errorf("failed to get %v from %s", resourceName, node.Name)
@@ -259,16 +259,16 @@ func calculateUtilizationOfResource(node *apiv1.Node, nodeInfo *schedulernodeinf
 		return 0, fmt.Errorf("%v is 0 at %s", resourceName, node.Name)
 	}
 	podsRequest := resource.MustParse("0")
-	for _, pod := range nodeInfo.Pods() {
+	for _, podInfo := range nodeInfo.Pods {
 		// factor daemonset pods out of the utilization calculations
-		if skipDaemonSetPods && pod_util.IsDaemonSetPod(pod) {
+		if skipDaemonSetPods && pod_util.IsDaemonSetPod(podInfo.Pod) {
 			continue
 		}
 		// factor mirror pods out of the utilization calculations
-		if skipMirrorPods && pod_util.IsMirrorPod(pod) {
+		if skipMirrorPods && pod_util.IsMirrorPod(podInfo.Pod) {
 			continue
 		}
-		for _, container := range pod.Spec.Containers {
+		for _, container := range podInfo.Pod.Spec.Containers {
 			if resourceValue, found := container.Resources.Requests[resourceName]; found {
 				podsRequest.Add(resourceValue)
 			}
@@ -295,11 +295,11 @@ func findPlaceFor(removedNode string, pods []*apiv1.Pod, nodes map[string]bool,
 		return fmt.Sprintf("%s/%s", pod.Namespace, pod.Name)
 	}
 
-	loggingQuota := glogx.PodsLoggingQuota()
+	loggingQuota := klogx.PodsLoggingQuota()
 
 	tryNodeForPod := func(nodename string, pod *apiv1.Pod) bool {
 		if err := predicateChecker.CheckPredicates(clusterSnapshot, pod, nodename); err != nil {
-			glogx.V(4).UpTo(loggingQuota).Infof("Evaluation %s for %s/%s -> %v", nodename, pod.Namespace, pod.Name, err.VerboseMessage())
+			klogx.V(4).UpTo(loggingQuota).Infof("Evaluation %s for %s/%s -> %v", nodename, pod.Namespace, pod.Name, err.VerboseMessage())
 			return false
 		}
 
@@ -353,7 +353,7 @@ func findPlaceFor(removedNode string, pods []*apiv1.Pod, nodes map[string]bool,
 				}
 			}
 			if !foundPlace {
-				glogx.V(4).Over(loggingQuota).Infof("%v other nodes evaluated for %s/%s", -loggingQuota.Left(), pod.Namespace, pod.Name)
+				klogx.V(4).Over(loggingQuota).Infof("%v other nodes evaluated for %s/%s", -loggingQuota.Left(), pod.Namespace, pod.Name)
 				return fmt.Errorf("failed to find place for %s", podKey(pod))
 			}
 		}
