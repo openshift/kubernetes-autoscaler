@@ -1,4 +1,4 @@
-FROM registry.svc.ci.openshift.org/ocp/builder:golang-1.12 AS builder
+FROM registry.svc.ci.openshift.org/ocp/builder:golang-1.14 AS builder
 WORKDIR /go/src/k8s.io/autoscaler/vertical-pod-autoscaler
 COPY . .
 RUN go build ./pkg/admission-controller
