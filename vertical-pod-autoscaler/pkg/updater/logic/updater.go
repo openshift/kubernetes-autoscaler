@@ -74,10 +74,12 @@ func NewUpdater(
 	evictionRateBurst int,
 	evictionToleranceFraction float64,
 	useAdmissionControllerStatus bool,
+	statusNamespace string,
 	recommendationProcessor vpa_api_util.RecommendationProcessor,
 	evictionAdmission priority.PodEvictionAdmission,
 	selectorFetcher target.VpaTargetSelectorFetcher,
 	priorityProcessor priority.PriorityProcessor,
+	namespace string,
 ) (Updater, error) {
 	evictionRateLimiter := getRateLimiter(evictionRateLimit, evictionRateBurst)
 	factory, err := eviction.NewPodsEvictionRestrictionFactory(kubeClient, minReplicasForEvicition, evictionToleranceFraction)
@@ -85,8 +87,8 @@ func NewUpdater(
 		return nil, fmt.Errorf("Failed to create eviction restriction factory: %v", err)
 	}
 	return &updater{
-		vpaLister:                    vpa_api_util.NewAllVpasLister(vpaClient, make(chan struct{})),
-		podLister:                    newPodLister(kubeClient),
+		vpaLister:                    vpa_api_util.NewVpasLister(vpaClient, make(chan struct{}), namespace),
+		podLister:                    newPodLister(kubeClient, namespace),
 		eventRecorder:                newEventRecorder(kubeClient),
 		evictionFactory:              factory,
 		recommendationProcessor:      recommendationProcessor,
@@ -98,7 +100,7 @@ func NewUpdater(
 		statusValidator: status.NewValidator(
 			kubeClient,
 			status.AdmissionControllerStatusName,
-			status.AdmissionControllerStatusNamespace,
+			statusNamespace,
 		),
 	}, nil
 }
@@ -177,11 +179,31 @@ func (u *updater) RunOnce(ctx context.Context) {
 	}
 	timer.ObserveStep("AdmissionInit")
 
+	// wrappers for metrics which are computed every loop run
+	controlledPodsCounter := metrics_updater.NewControlledPodsCounter()
+	evictablePodsCounter := metrics_updater.NewEvictablePodsCounter()
+	vpasWithEvictablePodsCounter := metrics_updater.NewVpasWithEvictablePodsCounter()
+	vpasWithEvictedPodsCounter := metrics_updater.NewVpasWithEvictedPodsCounter()
+
+	// using defer to protect against 'return' after evictionRateLimiter.Wait
+	defer controlledPodsCounter.Observe()
+	defer evictablePodsCounter.Observe()
+	defer vpasWithEvictablePodsCounter.Observe()
+	defer vpasWithEvictedPodsCounter.Observe()
+
+	// NOTE: this loop assumes that controlledPods are filtered
+	// to contain only Pods controlled by a VPA in auto or recreate mode
 	for vpa, livePods := range controlledPods {
+		vpaSize := len(livePods)
+		controlledPodsCounter.Add(vpaSize, vpaSize)
 		evictionLimiter := u.evictionFactory.NewPodsEvictionRestriction(livePods)
 		podsForUpdate := u.getPodsUpdateOrder(filterNonEvictablePods(livePods, evictionLimiter), vpa)
+		evictablePodsCounter.Add(vpaSize, len(podsForUpdate))
 
+		withEvictable := false
+		withEvicted := false
 		for _, pod := range podsForUpdate {
+			withEvictable = true
 			if !evictionLimiter.CanEvict(pod) {
 				continue
 			}
@@ -194,7 +216,17 @@ func (u *updater) RunOnce(ctx context.Context) {
 			evictErr := evictionLimiter.Evict(pod, u.eventRecorder)
 			if evictErr != nil {
 				klog.Warningf("evicting pod %v failed: %v", pod.Name, evictErr)
+			} else {
+				withEvicted = true
+				metrics_updater.AddEvictedPod(vpaSize)
 			}
+		}
+
+		if withEvictable {
+			vpasWithEvictablePodsCounter.Add(vpaSize, 1)
+		}
+		if withEvicted {
+			vpasWithEvictedPodsCounter.Add(vpaSize, 1)
 		}
 	}
 	timer.ObserveStep("EvictPods")
@@ -248,7 +280,7 @@ func filterDeletedPods(pods []*apiv1.Pod) []*apiv1.Pod {
 	return result
 }
 
-func newPodLister(kubeClient kube_client.Interface) v1lister.PodLister {
+func newPodLister(kubeClient kube_client.Interface, namespace string) v1lister.PodLister {
 	selector := fields.ParseSelectorOrDie("spec.nodeName!=" + "" + ",status.phase!=" +
 		string(apiv1.PodSucceeded) + ",status.phase!=" + string(apiv1.PodFailed))
 	podListWatch := cache.NewListWatchFromClient(kubeClient.CoreV1().RESTClient(), "pods", apiv1.NamespaceAll, selector)

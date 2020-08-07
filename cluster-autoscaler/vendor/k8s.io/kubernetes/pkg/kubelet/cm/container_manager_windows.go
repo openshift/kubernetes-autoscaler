@@ -24,7 +24,7 @@ package cm
 import (
 	"fmt"
 
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
 	"k8s.io/utils/mount"
 
 	v1 "k8s.io/api/core/v1"
@@ -42,7 +42,7 @@ import (
 	"k8s.io/kubernetes/pkg/kubelet/lifecycle"
 	"k8s.io/kubernetes/pkg/kubelet/pluginmanager/cache"
 	"k8s.io/kubernetes/pkg/kubelet/status"
-	schedulernodeinfo "k8s.io/kubernetes/pkg/scheduler/nodeinfo"
+	schedulerframework "k8s.io/kubernetes/pkg/scheduler/framework/v1alpha1"
 )
 
 type containerManagerImpl struct {
@@ -52,6 +52,14 @@ type containerManagerImpl struct {
 	cadvisorInterface cadvisor.Interface
 	// Config of this node.
 	nodeConfig NodeConfig
+}
+
+type noopWindowsResourceAllocator struct{}
+
+func (ra *noopWindowsResourceAllocator) Admit(attrs *lifecycle.PodAdmitAttributes) lifecycle.PodAdmitResult {
+	return lifecycle.PodAdmitResult{
+		Admit: true,
+	}
 }
 
 func (cm *containerManagerImpl) Start(node *v1.Node,
@@ -157,7 +165,7 @@ func (cm *containerManagerImpl) GetResources(pod *v1.Pod, container *v1.Containe
 	return &kubecontainer.RunContainerOptions{}, nil
 }
 
-func (cm *containerManagerImpl) UpdatePluginResources(*schedulernodeinfo.NodeInfo, *lifecycle.PodAdmitAttributes) error {
+func (cm *containerManagerImpl) UpdatePluginResources(*schedulerframework.NodeInfo, *lifecycle.PodAdmitAttributes) error {
 	return nil
 }
 
@@ -178,7 +186,7 @@ func (cm *containerManagerImpl) ShouldResetExtendedResourceCapacity() bool {
 }
 
 func (cm *containerManagerImpl) GetAllocateResourcesPodAdmitHandler() lifecycle.PodAdmitHandler {
-	return nil
+	return &noopWindowsResourceAllocator{}
 }
 
 func (cm *containerManagerImpl) UpdateAllocatedDevices() {

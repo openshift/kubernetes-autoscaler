@@ -28,8 +28,8 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	"k8s.io/autoscaler/cluster-autoscaler/config"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/errors"
-	"k8s.io/klog"
-	schedulernodeinfo "k8s.io/kubernetes/pkg/scheduler/nodeinfo"
+	klog "k8s.io/klog/v2"
+	schedulerframework "k8s.io/kubernetes/pkg/scheduler/framework/v1alpha1"
 )
 
 const (
@@ -49,16 +49,13 @@ var (
 type awsCloudProvider struct {
 	awsManager      *AwsManager
 	resourceLimiter *cloudprovider.ResourceLimiter
-	// InstanceTypes is a map of ec2 resources
-	instanceTypes map[string]*InstanceType
 }
 
 // BuildAwsCloudProvider builds CloudProvider implementation for AWS.
-func BuildAwsCloudProvider(awsManager *AwsManager, instanceTypes map[string]*InstanceType, resourceLimiter *cloudprovider.ResourceLimiter) (cloudprovider.CloudProvider, error) {
+func BuildAwsCloudProvider(awsManager *AwsManager, resourceLimiter *cloudprovider.ResourceLimiter) (cloudprovider.CloudProvider, error) {
 	aws := &awsCloudProvider{
 		awsManager:      awsManager,
 		resourceLimiter: resourceLimiter,
-		instanceTypes:   instanceTypes,
 	}
 	return aws, nil
 }
@@ -318,7 +315,7 @@ func (ng *AwsNodeGroup) Nodes() ([]cloudprovider.Instance, error) {
 }
 
 // TemplateNodeInfo returns a node template for this node group.
-func (ng *AwsNodeGroup) TemplateNodeInfo() (*schedulernodeinfo.NodeInfo, error) {
+func (ng *AwsNodeGroup) TemplateNodeInfo() (*schedulerframework.NodeInfo, error) {
 	template, err := ng.awsManager.getAsgTemplate(ng.asg)
 	if err != nil {
 		return nil, err
@@ -329,7 +326,7 @@ func (ng *AwsNodeGroup) TemplateNodeInfo() (*schedulernodeinfo.NodeInfo, error) 
 		return nil, err
 	}
 
-	nodeInfo := schedulernodeinfo.NewNodeInfo(cloudprovider.BuildKubeProxy(ng.asg.Name))
+	nodeInfo := schedulerframework.NewNodeInfo(cloudprovider.BuildKubeProxy(ng.asg.Name))
 	nodeInfo.SetNode(node)
 	return nodeInfo, nil
 }
@@ -347,10 +344,8 @@ func BuildAWS(opts config.AutoscalingOptions, do cloudprovider.NodeGroupDiscover
 	}
 
 	// Generate EC2 list
-	var instanceTypes map[string]*InstanceType
-	var lastUpdateTime string
+	instanceTypes, lastUpdateTime := GetStaticEC2InstanceTypes()
 	if opts.AWSUseStaticInstanceList {
-		instanceTypes, lastUpdateTime = GetStaticEC2InstanceTypes()
 		klog.Warningf("Use static EC2 Instance Types and list could be outdated. Last update time: %s", lastUpdateTime)
 	} else {
 		region, err := GetCurrentAwsRegion()
@@ -358,10 +353,21 @@ func BuildAWS(opts config.AutoscalingOptions, do cloudprovider.NodeGroupDiscover
 			klog.Fatalf("Failed to get AWS Region: %v", err)
 		}
 
-		instanceTypes, err = GenerateEC2InstanceTypes(region)
+		generatedInstanceTypes, err := GenerateEC2InstanceTypes(region)
 		if err != nil {
 			klog.Fatalf("Failed to generate AWS EC2 Instance Types: %v", err)
 		}
+		// fallback on the static list if we miss any instance types in the generated output
+		// credits to: https://github.com/lyft/cni-ipvlan-vpc-k8s/pull/80
+		for k, v := range instanceTypes {
+			_, ok := generatedInstanceTypes[k]
+			if ok {
+				continue
+			}
+			klog.Infof("Using static instance type %s", k)
+			generatedInstanceTypes[k] = v
+		}
+		instanceTypes = generatedInstanceTypes
 
 		keys := make([]string, 0, len(instanceTypes))
 		for key := range instanceTypes {
@@ -371,12 +377,12 @@ func BuildAWS(opts config.AutoscalingOptions, do cloudprovider.NodeGroupDiscover
 		klog.Infof("Successfully load %d EC2 Instance Types %s", len(keys), keys)
 	}
 
-	manager, err := CreateAwsManager(config, do)
+	manager, err := CreateAwsManager(config, do, instanceTypes)
 	if err != nil {
 		klog.Fatalf("Failed to create AWS Manager: %v", err)
 	}
 
-	provider, err := BuildAwsCloudProvider(manager, instanceTypes, rl)
+	provider, err := BuildAwsCloudProvider(manager, rl)
 	if err != nil {
 		klog.Fatalf("Failed to create AWS cloud provider: %v", err)
 	}

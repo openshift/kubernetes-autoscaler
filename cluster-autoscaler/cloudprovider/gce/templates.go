@@ -31,11 +31,15 @@ import (
 	kubeletapis "k8s.io/kubernetes/pkg/kubelet/apis"
 
 	"github.com/ghodss/yaml"
-	"k8s.io/klog"
+	klog "k8s.io/klog/v2"
 )
 
 // GceTemplateBuilder builds templates for GCE nodes.
 type GceTemplateBuilder struct{}
+
+// TODO: This should be imported from sigs.k8s.io/gcp-compute-persistent-disk-csi-driver/pkg/common/constants.go
+// This key is applicable to both GCE and GKE
+const gceCSITopologyKeyZone = "topology.gke.io/zone"
 
 func (t *GceTemplateBuilder) getAcceleratorCount(accelerators []*gce.AcceleratorConfig) int64 {
 	count := int64(0)
@@ -211,6 +215,7 @@ func BuildGenericLabels(ref GceRef, machineType string, nodeName string, os Oper
 	}
 	result[apiv1.LabelZoneRegion] = ref.Zone[:ix]
 	result[apiv1.LabelZoneFailureDomain] = ref.Zone
+	result[gceCSITopologyKeyZone] = ref.Zone
 	result[apiv1.LabelHostname] = nodeName
 	return result, nil
 }

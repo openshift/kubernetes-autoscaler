@@ -17,6 +17,7 @@ limitations under the License.
 package eviction
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -24,7 +25,6 @@ import (
 	apiv1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1beta1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	metrics_updater "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/metrics/updater"
 	appsinformer "k8s.io/client-go/informers/apps/v1"
 	coreinformer "k8s.io/client-go/informers/core/v1"
 	kube_client "k8s.io/client-go/kubernetes"
@@ -134,14 +134,13 @@ func (e *podsEvictionRestrictionImpl) Evict(podToEvict *apiv1.Pod, eventRecorder
 			Name:      podToEvict.Name,
 		},
 	}
-	err := e.client.CoreV1().Pods(podToEvict.Namespace).Evict(eviction)
+	err := e.client.CoreV1().Pods(podToEvict.Namespace).Evict(context.TODO(), eviction)
 	if err != nil {
 		klog.Errorf("failed to evict pod %s/%s, error: %v", podToEvict.Namespace, podToEvict.Name, err)
 		return err
 	}
 	eventRecorder.Event(podToEvict, apiv1.EventTypeNormal, "EvictedByVPA",
 		"Pod was evicted by VPA Updater to apply resource recommendation.")
-	metrics_updater.AddEvictedPod()
 
 	if podToEvict.Status.Phase != apiv1.PodPending {
 		singleGroupStats, present := e.creatorToSingleGroupStatsMap[cr]

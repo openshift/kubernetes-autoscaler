@@ -35,7 +35,7 @@ import (
 	kubeinformers "k8s.io/client-go/informers"
 	kubeclient "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
-	"k8s.io/klog"
+	klog "k8s.io/klog/v2"
 	"k8s.io/utils/pointer"
 )
 
@@ -44,8 +44,11 @@ const (
 	nodeProviderIDIndex    = "nodeProviderIDIndex"
 	defaultCAPIGroup       = "machine.openshift.io"
 	// CAPIGroupEnvVar contains the environment variable name which allows overriding defaultCAPIGroup.
-	CAPIGroupEnvVar     = "CAPI_GROUP"
-	failedMachinePrefix = "failed-machine-"
+	CAPIGroupEnvVar               = "CAPI_GROUP"
+	resourceNameMachine           = "machines"
+	resourceNameMachineSet        = "machinesets"
+	resourceNameMachineDeployment = "machinedeployments"
+	failedMachinePrefix           = "failed-machine-"
 )
 
 // machineController watches for Nodes, Machines, MachineSets and
@@ -188,7 +191,6 @@ func (c *machineController) run(stopCh <-chan struct{}) error {
 		c.machineInformer.Informer().HasSynced,
 		c.machineSetInformer.Informer().HasSynced,
 	}
-
 	if c.machineDeploymentResource != nil {
 		syncFuncs = append(syncFuncs, c.machineDeploymentInformer.Informer().HasSynced)
 	}
@@ -327,43 +329,45 @@ func newMachineController(
 	CAPIGroup := getCAPIGroup()
 	CAPIVersion, err := getAPIGroupPreferredVersion(discoveryclient, CAPIGroup)
 	if err != nil {
-		panic("CAPIVersion")
+		return nil, fmt.Errorf("could not find preferred version for CAPI group %q: %v", CAPIGroup, err)
 	}
 	klog.Infof("Using version %q for API group %q", CAPIVersion, CAPIGroup)
 
-	var machineDeploymentResource *schema.GroupVersionResource
+	var gvrMachineDeployment *schema.GroupVersionResource
 	var machineDeploymentInformer informers.GenericInformer
 
-	isMachineDeploymentEnabled, err := isMachineDeploymentEnabled(discoveryclient, fmt.Sprintf("%s/%s", CAPIGroup, CAPIVersion))
+	machineDeployment, err := groupVersionHasResource(discoveryclient,
+		fmt.Sprintf("%s/%s", CAPIGroup, CAPIVersion), resourceNameMachineDeployment)
 	if err != nil {
-		return nil, fmt.Errorf("failed to validate if machineDeployment is enabled: %v", err)
+		return nil, fmt.Errorf("failed to validate if resource %q is available for group %q: %v",
+			resourceNameMachineDeployment, fmt.Sprintf("%s/%s", CAPIGroup, CAPIVersion), err)
 	}
 
-	if isMachineDeploymentEnabled {
-		klog.Info("machineDeployment resource is enabled")
-		machineDeploymentResource, _ = schema.ParseResourceArg(fmt.Sprintf("machinedeployments.%v.%v", CAPIVersion, CAPIGroup))
-		if machineDeploymentResource == nil {
-			panic("MachineDeployment")
+	if machineDeployment {
+		gvrMachineDeployment = &schema.GroupVersionResource{
+			Group:    CAPIGroup,
+			Version:  CAPIVersion,
+			Resource: resourceNameMachineDeployment,
 		}
-		machineDeploymentInformer = informerFactory.ForResource(*machineDeploymentResource)
+		machineDeploymentInformer = informerFactory.ForResource(*gvrMachineDeployment)
 		machineDeploymentInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{})
 	}
 
-	machineSetResource, _ := schema.ParseResourceArg(fmt.Sprintf("machinesets.%v.%v", CAPIVersion, CAPIGroup))
-	if machineSetResource == nil {
-		panic("MachineSetResource")
+	gvrMachineSet := &schema.GroupVersionResource{
+		Group:    CAPIGroup,
+		Version:  CAPIVersion,
+		Resource: resourceNameMachineSet,
 	}
-
-	machineResource, _ := schema.ParseResourceArg(fmt.Sprintf("machines.%v.%v", CAPIVersion, CAPIGroup))
-	if machineResource == nil {
-		panic("machineResource")
-	}
-
-	machineInformer := informerFactory.ForResource(*machineResource)
-	machineSetInformer := informerFactory.ForResource(*machineSetResource)
-
-	machineInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{})
+	machineSetInformer := informerFactory.ForResource(*gvrMachineSet)
 	machineSetInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{})
+
+	gvrMachine := &schema.GroupVersionResource{
+		Group:    CAPIGroup,
+		Version:  CAPIVersion,
+		Resource: resourceNameMachine,
+	}
+	machineInformer := informerFactory.ForResource(*gvrMachine)
+	machineInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{})
 
 	nodeInformer := kubeInformerFactory.Core().V1().Nodes().Informer()
 	nodeInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{})
@@ -388,25 +392,24 @@ func newMachineController(
 		machineSetInformer:        machineSetInformer,
 		nodeInformer:              nodeInformer,
 		dynamicclient:             dynamicclient,
-		machineSetResource:        machineSetResource,
-		machineResource:           machineResource,
-		machineDeploymentResource: machineDeploymentResource,
+		machineSetResource:        gvrMachineSet,
+		machineResource:           gvrMachine,
+		machineDeploymentResource: gvrMachineDeployment,
 	}, nil
 }
 
-func isMachineDeploymentEnabled(client discovery.DiscoveryInterface, groupVersion string) (bool, error) {
+func groupVersionHasResource(client discovery.DiscoveryInterface, groupVersion, resourceName string) (bool, error) {
 	resourceList, err := client.ServerResourcesForGroupVersion(groupVersion)
 	if err != nil {
 		return false, fmt.Errorf("failed to get ServerGroups: %v", err)
 	}
 
-	for _, resource := range resourceList.APIResources {
-		klog.Infof("Resource %q available", resource.Name)
-		if resource.Name == "machinedeployments" {
+	for _, r := range resourceList.APIResources {
+		klog.Infof("Resource %q available", r.Name)
+		if r.Name == resourceName {
 			return true, nil
 		}
 	}
-
 	return false, nil
 }
 
@@ -550,6 +553,7 @@ func (c *machineController) nodeGroups() ([]*nodegroup, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	if c.machineDeploymentResource != nil {
 		machineDeployments, err := c.machineDeploymentNodeGroups()
 		if err != nil {
@@ -557,6 +561,7 @@ func (c *machineController) nodeGroups() ([]*nodegroup, error) {
 		}
 		machineSets = append(machineSets, machineDeployments...)
 	}
+
 	return machineSets, nil
 }
 

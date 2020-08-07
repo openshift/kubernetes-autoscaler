@@ -22,7 +22,7 @@ import (
 	"fmt"
 	"strconv"
 
-	"k8s.io/klog"
+	klog "k8s.io/klog/v2"
 
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/baiducloud/baiducloud-sdk-go/bce"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/baiducloud/baiducloud-sdk-go/util"
@@ -62,13 +62,14 @@ type CceCluster struct {
 
 // CceGroup defines autoscaling group
 type CceGroup struct {
-	InstanceType int    `json:"instanceType"`
-	CPU          int    `json:"cpu,omitempty"`
-	Memory       int    `json:"memory,omitempty"`
-	GpuCount     int    `json:"gpuCount,omitempty"`
-	GpuCard      string `json:"gpuCard,omitempty"`
-	DiskSize     int    `json:"diskSize,omitempty"`
-	Tags         []Tag  `json:"tags"`
+	InstanceType     int    `json:"instanceType"`
+	CPU              int    `json:"cpu,omitempty"`
+	Memory           int    `json:"memory,omitempty"`
+	GpuCount         int    `json:"gpuCount,omitempty"`
+	GpuCard          string `json:"gpuCard,omitempty"`
+	DiskSize         int    `json:"diskSize,omitempty"`
+	EphemeralStorage int    `json:"ephemeralStorage,omitempty"`
+	Tags             []Tag  `json:"tags"`
 }
 
 // Tag defines label

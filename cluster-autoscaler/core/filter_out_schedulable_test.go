@@ -21,11 +21,13 @@ import (
 	"testing"
 	"time"
 
-	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator"
 	. "k8s.io/autoscaler/cluster-autoscaler/utils/test"
 
 	apiv1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/pointer"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -35,9 +37,19 @@ func TestFilterOutSchedulableByPacking(t *testing.T) {
 	// - add more nodes
 	// - add better naming for pods/scenarios
 
+	p2Owner := metav1.OwnerReference{
+		UID:        "controler_a",
+		Controller: pointer.BoolPtr(true),
+	}
+
 	p1 := BuildTestPod("p1", 1500, 200000)
-	p2_1 := BuildTestPod("p2_2", 3000, 200000)
+
+	// define owner to enable caching
+	p2_1 := BuildTestPod("p2_1", 3000, 200000)
+	p2_1.ObjectMeta.OwnerReferences = append(p2_1.ObjectMeta.OwnerReferences, p2Owner)
 	p2_2 := BuildTestPod("p2_2", 3000, 200000)
+	p2_2.ObjectMeta.OwnerReferences = append(p2_2.ObjectMeta.OwnerReferences, p2Owner)
+
 	p3_1 := BuildTestPod("p3_1", 300, 200000)
 	p3_2 := BuildTestPod("p3_2", 300, 200000)
 
@@ -58,36 +70,32 @@ func TestFilterOutSchedulableByPacking(t *testing.T) {
 	SetNodeReadyState(node, true, time.Time{})
 
 	tests := []struct {
-		name                   string
-		nodes                  []*apiv1.Node
-		scheduledPods          []*apiv1.Pod
-		pendingPods            []*apiv1.Pod
-		expectedPendingPods    []*apiv1.Pod
-		expectedPodsInSnapshot []*apiv1.Pod
+		name                    string
+		nodes                   []*apiv1.Node
+		scheduledPods           []*apiv1.Pod
+		pendingPods             []*apiv1.Pod
+		expectedFilteredOutPods []*apiv1.Pod
 	}{
 		{
-			name:                   "scenario 1",
-			nodes:                  []*apiv1.Node{node},
-			scheduledPods:          []*apiv1.Pod{scheduledPod1},
-			pendingPods:            []*apiv1.Pod{p1, p2_1, p2_2, p3_1, p3_2},
-			expectedPendingPods:    []*apiv1.Pod{p2_1, p2_2, p3_2},
-			expectedPodsInSnapshot: []*apiv1.Pod{scheduledPod1, p1, p3_1},
+			name:                    "scenario 1",
+			nodes:                   []*apiv1.Node{node},
+			scheduledPods:           []*apiv1.Pod{scheduledPod1},
+			pendingPods:             []*apiv1.Pod{p1, p2_1, p2_2, p3_1, p3_2},
+			expectedFilteredOutPods: []*apiv1.Pod{p1, p3_1},
 		},
 		{
-			name:                   "scenario 2",
-			nodes:                  []*apiv1.Node{node},
-			scheduledPods:          []*apiv1.Pod{scheduledPod1, scheduledPod2},
-			pendingPods:            []*apiv1.Pod{p1, p2_1, p2_2, p3_1, p3_2},
-			expectedPendingPods:    []*apiv1.Pod{p1, p2_1, p2_2, p3_2},
-			expectedPodsInSnapshot: []*apiv1.Pod{scheduledPod1, scheduledPod2, p3_1},
+			name:                    "scenario 2",
+			nodes:                   []*apiv1.Node{node},
+			scheduledPods:           []*apiv1.Pod{scheduledPod1, scheduledPod2},
+			pendingPods:             []*apiv1.Pod{p1, p2_1, p2_2, p3_1, p3_2},
+			expectedFilteredOutPods: []*apiv1.Pod{p3_1},
 		},
 		{
-			name:                   "scenario 3",
-			nodes:                  []*apiv1.Node{node},
-			scheduledPods:          []*apiv1.Pod{scheduledPod1},
-			pendingPods:            []*apiv1.Pod{p1, p2_1, p2_2, p3_1, p3_2, p4},
-			expectedPendingPods:    []*apiv1.Pod{p1, p2_1, p2_2, p3_1, p3_2},
-			expectedPodsInSnapshot: []*apiv1.Pod{scheduledPod1, p4},
+			name:                    "scenario 3",
+			nodes:                   []*apiv1.Node{node},
+			scheduledPods:           []*apiv1.Pod{scheduledPod1},
+			pendingPods:             []*apiv1.Pod{p1, p2_1, p2_2, p3_1, p3_2, p4},
+			expectedFilteredOutPods: []*apiv1.Pod{p4},
 		},
 	}
 	for _, tt := range tests {
@@ -105,14 +113,65 @@ func TestFilterOutSchedulableByPacking(t *testing.T) {
 				assert.NoError(t, err)
 			}
 
-			stillPendingPods, err := filterOutSchedulableByPacking(tt.pendingPods, clusterSnapshot, predicateChecker)
+			filterOutSchedulablePodListProcessor := NewFilterOutSchedulablePodListProcessor()
+
+			err = clusterSnapshot.Fork()
 			assert.NoError(t, err)
-			assert.ElementsMatch(t, stillPendingPods, tt.expectedPendingPods, "pending pods differ")
+
+			var expectedPodsInSnapshot = tt.scheduledPods
+			for _, pod := range tt.expectedFilteredOutPods {
+				expectedPodsInSnapshot = append(expectedPodsInSnapshot, pod)
+			}
+
+			var expectedPendingPods []*apiv1.Pod
+			for _, pod := range tt.pendingPods {
+				filteredOut := false
+				for _, filteredOutPod := range tt.expectedFilteredOutPods {
+					if pod == filteredOutPod {
+						filteredOut = true
+					}
+				}
+				if !filteredOut {
+					expectedPendingPods = append(expectedPendingPods, pod)
+				}
+			}
+
+			stillPendingPods, err := filterOutSchedulablePodListProcessor.filterOutSchedulableByPacking(tt.pendingPods, clusterSnapshot, predicateChecker)
+			assert.NoError(t, err)
+			assert.ElementsMatch(t, stillPendingPods, expectedPendingPods, "pending pods differ")
 
 			// Check if snapshot was correctly modified
-			podsInSnapshot, err := clusterSnapshot.Pods().List(labels.Everything())
+			nodeInfos, err := clusterSnapshot.NodeInfos().List()
 			assert.NoError(t, err)
-			assert.ElementsMatch(t, podsInSnapshot, tt.expectedPodsInSnapshot, "pods in snapshot differ")
+			var podsInSnapshot []*apiv1.Pod
+			for _, nodeInfo := range nodeInfos {
+				for _, podInfo := range nodeInfo.Pods {
+					podsInSnapshot = append(podsInSnapshot, podInfo.Pod)
+				}
+			}
+			assert.ElementsMatch(t, podsInSnapshot, expectedPodsInSnapshot, "pods in snapshot differ")
+
+			// Verify hints map; it is very whitebox but better than nothing
+			var podUidsInHintsMap []types.UID
+			for uid := range filterOutSchedulablePodListProcessor.schedulablePodsNodeHints {
+				podUidsInHintsMap = append(podUidsInHintsMap, uid)
+			}
+			var expectedFilteredOutPodUids []types.UID
+			for _, pod := range tt.expectedFilteredOutPods {
+				expectedFilteredOutPodUids = append(expectedFilteredOutPodUids, pod.UID)
+			}
+			assert.ElementsMatch(t, expectedFilteredOutPodUids, podUidsInHintsMap)
+
+			// reset snapshot to initial state and run filterOutSchedulableByPacking with hinting map filled in
+			err = clusterSnapshot.Revert()
+			assert.NoError(t, err)
+			err = clusterSnapshot.Fork()
+			assert.NoError(t, err)
+
+			stillPendingPods, err = filterOutSchedulablePodListProcessor.filterOutSchedulableByPacking(tt.pendingPods, clusterSnapshot, predicateChecker)
+			assert.NoError(t, err)
+			assert.ElementsMatch(t, stillPendingPods, expectedPendingPods, "pending pods differ (with hints map)")
+
 		})
 	}
 }
@@ -199,7 +258,8 @@ func BenchmarkFilterOutSchedulableByPacking(b *testing.B) {
 				b.ResetTimer()
 
 				for i := 0; i < b.N; i++ {
-					if stillPending, err := filterOutSchedulableByPacking(pendingPods, clusterSnapshot, predicateChecker); err != nil {
+					filterOutSchedulablePodListProcessor := NewFilterOutSchedulablePodListProcessor()
+					if stillPending, err := filterOutSchedulablePodListProcessor.filterOutSchedulableByPacking(pendingPods, clusterSnapshot, predicateChecker); err != nil {
 						assert.NoError(b, err)
 					} else if len(stillPending) < tc.pendingPods {
 						assert.Equal(b, len(stillPending), tc.pendingPods)

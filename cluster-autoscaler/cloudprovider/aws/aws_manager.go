@@ -40,7 +40,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/gpu"
-	"k8s.io/klog"
+	klog "k8s.io/klog/v2"
 	kubeletapis "k8s.io/kubernetes/pkg/kubelet/apis"
 	provider_aws "k8s.io/legacy-cloud-providers/aws"
 )
@@ -61,6 +61,7 @@ type AwsManager struct {
 	ec2Service         ec2Wrapper
 	asgCache           *asgCache
 	lastRefresh        time.Time
+	instanceTypes      map[string]*InstanceType
 }
 
 type asgTemplate struct {
@@ -174,6 +175,7 @@ func createAWSManagerInternal(
 	discoveryOpts cloudprovider.NodeGroupDiscoveryOptions,
 	autoScalingService *autoScalingWrapper,
 	ec2Service *ec2Wrapper,
+	instanceTypes map[string]*InstanceType,
 ) (*AwsManager, error) {
 
 	cfg, err := readAWSCloudConfig(configReader)
@@ -219,6 +221,7 @@ func createAWSManagerInternal(
 		autoScalingService: *autoScalingService,
 		ec2Service:         *ec2Service,
 		asgCache:           cache,
+		instanceTypes:      instanceTypes,
 	}
 
 	if err := manager.forceRefresh(); err != nil {
@@ -244,8 +247,8 @@ func readAWSCloudConfig(config io.Reader) (*provider_aws.CloudConfig, error) {
 }
 
 // CreateAwsManager constructs awsManager object.
-func CreateAwsManager(configReader io.Reader, discoveryOpts cloudprovider.NodeGroupDiscoveryOptions) (*AwsManager, error) {
-	return createAWSManagerInternal(configReader, discoveryOpts, nil, nil)
+func CreateAwsManager(configReader io.Reader, discoveryOpts cloudprovider.NodeGroupDiscoveryOptions, instanceTypes map[string]*InstanceType) (*AwsManager, error) {
+	return createAWSManagerInternal(configReader, discoveryOpts, nil, nil, instanceTypes)
 }
 
 // Refresh is called before every main loop and can be used to dynamically update cloud provider state.
@@ -317,7 +320,7 @@ func (m *AwsManager) getAsgTemplate(asg *asg) (*asgTemplate, error) {
 		return nil, err
 	}
 
-	if t, ok := InstanceTypes[instanceTypeName]; ok {
+	if t, ok := m.instanceTypes[instanceTypeName]; ok {
 		return &asgTemplate{
 			InstanceType: t,
 			Region:       region,
@@ -366,8 +369,8 @@ func (m *AwsManager) buildNodeFromTemplate(asg *asg, template *asgTemplate) (*ap
 	node.Status.Capacity[apiv1.ResourceMemory] = *resource.NewQuantity(template.InstanceType.MemoryMb*1024*1024, resource.DecimalSI)
 
 	resourcesFromTags := extractAllocatableResourcesFromAsg(template.Tags)
-	if val, ok := resourcesFromTags["ephemeral-storage"]; ok {
-		node.Status.Capacity[apiv1.ResourceEphemeralStorage] = *val
+	for resourceName, val := range resourcesFromTags {
+		node.Status.Capacity[apiv1.ResourceName(resourceName)] = *val
 	}
 
 	// TODO: use proper allocatable!!

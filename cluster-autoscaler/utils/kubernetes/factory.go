@@ -23,8 +23,7 @@ import (
 	"k8s.io/client-go/kubernetes/scheme"
 	v1core "k8s.io/client-go/kubernetes/typed/core/v1"
 	kube_record "k8s.io/client-go/tools/record"
-
-	"k8s.io/klog"
+	klog "k8s.io/klog/v2"
 )
 
 // CreateEventRecorder creates an event recorder to send custom events to Kubernetes to be recorded for targeted Kubernetes objects
@@ -32,7 +31,14 @@ func CreateEventRecorder(kubeClient clientset.Interface) kube_record.EventRecord
 	eventBroadcaster := kube_record.NewBroadcaster()
 	eventBroadcaster.StartLogging(klog.V(4).Infof)
 	if _, isfake := kubeClient.(*fake.Clientset); !isfake {
-		eventBroadcaster.StartRecordingToSink(&v1core.EventSinkImpl{Interface: v1core.New(kubeClient.CoreV1().RESTClient()).Events("")})
+		actualSink := &v1core.EventSinkImpl{Interface: v1core.New(kubeClient.CoreV1().RESTClient()).Events("")}
+		// EventBroadcaster has a StartLogging() method but the throttling options from getCorrelationOptions() get applied only to
+		// actual sinks, which makes it throttle the actual events, but not the corresponding log lines. This leads to massive spam
+		// in the Cluster Autoscaler log which can eventually fill up a whole disk. As a workaround, event logging is added
+		// as a wrapper to the actual sink.
+		// TODO: Do this natively if https://github.com/kubernetes/kubernetes/issues/90168 gets implemented.
+		sinkWithLogging := WrapEventSinkWithLogging(actualSink)
+		eventBroadcaster.StartRecordingToSink(sinkWithLogging)
 	}
 	return eventBroadcaster.NewRecorder(scheme.Scheme, clientv1.EventSource{Component: "cluster-autoscaler"})
 }

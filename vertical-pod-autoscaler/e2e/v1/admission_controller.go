@@ -17,6 +17,7 @@ limitations under the License.
 package autoscaling
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -163,6 +164,44 @@ var _ = AdmissionControllerE2eDescribe("Admission-controller", func() {
 			gomega.Expect(*pod.Spec.Containers[0].Resources.Requests.Memory()).To(gomega.Equal(ParseQuantityOrDie("200Mi")))
 			gomega.Expect(float64(pod.Spec.Containers[0].Resources.Limits.Cpu().MilliValue()) / float64(pod.Spec.Containers[0].Resources.Requests.Cpu().MilliValue())).To(gomega.BeNumerically("~", 1.5))
 			gomega.Expect(float64(pod.Spec.Containers[0].Resources.Limits.Memory().Value()) / float64(pod.Spec.Containers[0].Resources.Requests.Memory().Value())).To(gomega.BeNumerically("~", 2.))
+		}
+	})
+
+	ginkgo.It("keeps limits unchanged when container controlled values is requests only", func() {
+		d := NewHamsterDeploymentWithResourcesAndLimits(f,
+			ParseQuantityOrDie("100m") /*cpu request*/, ParseQuantityOrDie("100Mi"), /*memory request*/
+			ParseQuantityOrDie("500m") /*cpu limit*/, ParseQuantityOrDie("500Mi") /*memory limit*/)
+
+		ginkgo.By("Setting up a VPA CRD")
+		vpaCRD := NewVPA(f, "hamster-vpa", hamsterTargetRef)
+		vpaCRD.Status.Recommendation = &vpa_types.RecommendedPodResources{
+			ContainerRecommendations: []vpa_types.RecommendedContainerResources{{
+				ContainerName: "hamster",
+				Target: apiv1.ResourceList{
+					apiv1.ResourceCPU:    ParseQuantityOrDie("250m"),
+					apiv1.ResourceMemory: ParseQuantityOrDie("200Mi"),
+				},
+			}},
+		}
+		containerControlledValuesRequestsOnly := vpa_types.ContainerControlledValuesRequestsOnly
+		vpaCRD.Spec.ResourcePolicy = &vpa_types.PodResourcePolicy{
+			ContainerPolicies: []vpa_types.ContainerResourcePolicy{{
+				ContainerName:    "hamster",
+				ControlledValues: &containerControlledValuesRequestsOnly,
+			}},
+		}
+		InstallVPA(f, vpaCRD)
+
+		ginkgo.By("Setting up a hamster deployment")
+		podList := startDeploymentPods(f, d)
+
+		// Originally Pods had 100m CPU, 100Mi of memory, but admission controller
+		// should change it to 250m CPU and 200Mi of memory. Limits should stay unchanged.
+		for _, pod := range podList.Items {
+			gomega.Expect(*pod.Spec.Containers[0].Resources.Requests.Cpu()).To(gomega.Equal(ParseQuantityOrDie("250m")))
+			gomega.Expect(*pod.Spec.Containers[0].Resources.Requests.Memory()).To(gomega.Equal(ParseQuantityOrDie("200Mi")))
+			gomega.Expect(*pod.Spec.Containers[0].Resources.Limits.Cpu()).To(gomega.Equal(ParseQuantityOrDie("500m")))
+			gomega.Expect(*pod.Spec.Containers[0].Resources.Limits.Memory()).To(gomega.Equal(ParseQuantityOrDie("500Mi")))
 		}
 	})
 
@@ -531,7 +570,7 @@ func startDeploymentPods(f *framework.Framework, deployment *appsv1.Deployment) 
 	zero := int32(0)
 	deployment.Spec.Replicas = &zero
 	c, ns := f.ClientSet, f.Namespace.Name
-	deployment, err := c.AppsV1().Deployments(ns).Create(deployment)
+	deployment, err := c.AppsV1().Deployments(ns).Create(context.TODO(), deployment, metav1.CreateOptions{})
 	gomega.Expect(err).NotTo(gomega.HaveOccurred(), "when creating deployment with size 0")
 
 	err = framework_deployment.WaitForDeploymentComplete(c, deployment)
@@ -555,12 +594,12 @@ func startDeploymentPods(f *framework.Framework, deployment *appsv1.Deployment) 
 			Replicas: desiredPodCount,
 		},
 	}
-	afterScale, err := c.AppsV1().Deployments(ns).UpdateScale(deployment.Name, &scale)
+	afterScale, err := c.AppsV1().Deployments(ns).UpdateScale(context.TODO(), deployment.Name, &scale, metav1.UpdateOptions{})
 	gomega.Expect(err).NotTo(gomega.HaveOccurred())
 	gomega.Expect(afterScale.Spec.Replicas).To(gomega.Equal(desiredPodCount), fmt.Sprintf("expected %d replicas after scaling", desiredPodCount))
 
 	// After scaling deployment we need to retrieve current version with updated replicas count.
-	deployment, err = c.AppsV1().Deployments(ns).Get(deployment.Name, metav1.GetOptions{})
+	deployment, err = c.AppsV1().Deployments(ns).Get(context.TODO(), deployment.Name, metav1.GetOptions{})
 	gomega.Expect(err).NotTo(gomega.HaveOccurred(), "when getting scaled deployment")
 	err = framework_deployment.WaitForDeploymentComplete(c, deployment)
 	gomega.Expect(err).NotTo(gomega.HaveOccurred(), "when waiting for deployment to resize")

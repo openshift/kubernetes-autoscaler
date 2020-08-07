@@ -26,7 +26,7 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	gpuapis "k8s.io/autoscaler/cluster-autoscaler/utils/gpu"
 	kubeletapis "k8s.io/kubernetes/pkg/kubelet/apis"
-	schedulernodeinfo "k8s.io/kubernetes/pkg/scheduler/nodeinfo"
+	schedulerframework "k8s.io/kubernetes/pkg/scheduler/framework/v1alpha1"
 )
 
 const (
@@ -251,7 +251,8 @@ func (ng *nodegroup) Nodes() ([]cloudprovider.Instance, error) {
 // fully populated Node object, with all of the labels, capacity and
 // allocatable information as well as all pods that are started on the
 // node by default, using manifest (most likely only kube-proxy).
-func (ng *nodegroup) TemplateNodeInfo() (*schedulernodeinfo.NodeInfo, error) {
+// Implementation optional.
+func (ng *nodegroup) TemplateNodeInfo() (*schedulerframework.NodeInfo, error) {
 	if !ng.scalableResource.CanScaleFromZero() {
 		return nil, cloudprovider.ErrNotImplemented
 	}
@@ -309,7 +310,7 @@ func (ng *nodegroup) TemplateNodeInfo() (*schedulernodeinfo.NodeInfo, error) {
 	node.Spec.Taints = ng.scalableResource.Taints()
 	node.Labels = cloudprovider.JoinStringMaps(ng.scalableResource.Labels(), buildGenericLabels(nodeName))
 
-	nodeInfo := schedulernodeinfo.NewNodeInfo(cloudprovider.BuildKubeProxy(ng.Name()))
+	nodeInfo := schedulerframework.NewNodeInfo(cloudprovider.BuildKubeProxy(ng.Name()))
 	nodeInfo.SetNode(&node)
 
 	return nodeInfo, nil

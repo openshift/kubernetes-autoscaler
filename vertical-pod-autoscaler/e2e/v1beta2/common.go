@@ -17,6 +17,7 @@ limitations under the License.
 package autoscaling
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -121,7 +122,7 @@ func SetupHamsterDeployment(f *framework.Framework, cpu, memory string, replicas
 
 	d := NewHamsterDeploymentWithResources(f, cpuQuantity, memoryQuantity)
 	d.Spec.Replicas = &replicas
-	d, err := f.ClientSet.AppsV1().Deployments(f.Namespace.Name).Create(d)
+	d, err := f.ClientSet.AppsV1().Deployments(f.Namespace.Name).Create(context.TODO(), d, metav1.CreateOptions{})
 	gomega.Expect(err).NotTo(gomega.HaveOccurred(), "unexpected error when starting deployment creation")
 	err = framework_deployment.WaitForDeploymentComplete(f.ClientSet, d)
 	gomega.Expect(err).NotTo(gomega.HaveOccurred(), "unexpected error waiting for deployment creation to finish")
@@ -192,13 +193,18 @@ func NewHamsterDeploymentWithResourcesAndLimits(f *framework.Framework, cpuQuant
 	return d
 }
 
+func getPodSelectorExcludingDonePodsOrDie() string {
+	stringSelector := "status.phase!=" + string(apiv1.PodSucceeded) +
+		",status.phase!=" + string(apiv1.PodFailed)
+	selector := fields.ParseSelectorOrDie(stringSelector)
+	return selector.String()
+}
+
 // GetHamsterPods returns running hamster pods (matched by hamsterLabels)
 func GetHamsterPods(f *framework.Framework) (*apiv1.PodList, error) {
 	label := labels.SelectorFromSet(labels.Set(hamsterLabels))
-	selector := fields.ParseSelectorOrDie("status.phase!=" + string(apiv1.PodSucceeded) +
-		",status.phase!=" + string(apiv1.PodFailed))
-	options := metav1.ListOptions{LabelSelector: label.String(), FieldSelector: selector.String()}
-	return f.ClientSet.CoreV1().Pods(f.Namespace.Name).List(options)
+	options := metav1.ListOptions{LabelSelector: label.String(), FieldSelector: getPodSelectorExcludingDonePodsOrDie()}
+	return f.ClientSet.CoreV1().Pods(f.Namespace.Name).List(context.TODO(), options)
 }
 
 // NewTestCronJob returns a CronJob for test purposes.
@@ -247,11 +253,11 @@ func waitForActiveJobs(c clientset.Interface, ns, cronJobName string, active int
 }
 
 func createCronJob(c clientset.Interface, ns string, cronJob *batchv1beta1.CronJob) (*batchv1beta1.CronJob, error) {
-	return c.BatchV1beta1().CronJobs(ns).Create(cronJob)
+	return c.BatchV1beta1().CronJobs(ns).Create(context.TODO(), cronJob, metav1.CreateOptions{})
 }
 
 func getCronJob(c clientset.Interface, ns, name string) (*batchv1beta1.CronJob, error) {
-	return c.BatchV1beta1().CronJobs(ns).Get(name, metav1.GetOptions{})
+	return c.BatchV1beta1().CronJobs(ns).Get(context.TODO(), name, metav1.GetOptions{})
 }
 
 // SetupHamsterCronJob creates and sets up a new CronJob
@@ -353,18 +359,18 @@ func getVpaClientSet(f *framework.Framework) vpa_clientset.Interface {
 // InstallVPA installs a VPA object in the test cluster.
 func InstallVPA(f *framework.Framework, vpa *vpa_types.VerticalPodAutoscaler) {
 	vpaClientSet := getVpaClientSet(f)
-	_, err := vpaClientSet.AutoscalingV1beta2().VerticalPodAutoscalers(f.Namespace.Name).Create(vpa)
+	_, err := vpaClientSet.AutoscalingV1beta2().VerticalPodAutoscalers(f.Namespace.Name).Create(context.TODO(), vpa, metav1.CreateOptions{})
 	gomega.Expect(err).NotTo(gomega.HaveOccurred(), "unexpected error creating VPA")
 }
 
 // InstallRawVPA installs a VPA object passed in as raw json in the test cluster.
 func InstallRawVPA(f *framework.Framework, obj interface{}) error {
 	vpaClientSet := getVpaClientSet(f)
-	err := vpaClientSet.AutoscalingV1beta2().RESTClient().Post().
+	err := vpaClientSet.AutoscalingV1().RESTClient().Post().
 		Namespace(f.Namespace.Name).
 		Resource("verticalpodautoscalers").
 		Body(obj).
-		Do()
+		Do(context.TODO())
 	return err.Error()
 }
 
@@ -379,7 +385,7 @@ func PatchVpaRecommendation(f *framework.Framework, vpa *vpa_types.VerticalPodAu
 		Value: *newStatus,
 	}})
 	gomega.Expect(err).NotTo(gomega.HaveOccurred())
-	_, err = getVpaClientSet(f).AutoscalingV1beta2().VerticalPodAutoscalers(f.Namespace.Name).Patch(vpa.Name, types.JSONPatchType, bytes)
+	_, err = getVpaClientSet(f).AutoscalingV1().VerticalPodAutoscalers(f.Namespace.Name).Patch(context.TODO(), vpa.Name, types.JSONPatchType, bytes, metav1.PatchOptions{})
 	gomega.Expect(err).NotTo(gomega.HaveOccurred(), "Failed to patch VPA.")
 }
 
@@ -390,7 +396,7 @@ func AnnotatePod(f *framework.Framework, podName, annotationName, annotationValu
 		Path:  fmt.Sprintf("/metadata/annotations/%v", annotationName),
 		Value: annotationValue,
 	}})
-	pod, err := f.ClientSet.CoreV1().Pods(f.Namespace.Name).Patch(podName, types.JSONPatchType, bytes)
+	pod, err := f.ClientSet.CoreV1().Pods(f.Namespace.Name).Patch(context.TODO(), podName, types.JSONPatchType, bytes, metav1.PatchOptions{})
 	gomega.Expect(err).NotTo(gomega.HaveOccurred(), "Failed to patch pod.")
 	gomega.Expect(pod.Annotations[annotationName]).To(gomega.Equal(annotationValue))
 }
@@ -502,7 +508,7 @@ func WaitForVPAMatch(c vpa_clientset.Interface, vpa *vpa_types.VerticalPodAutosc
 	var polledVpa *vpa_types.VerticalPodAutoscaler
 	err := wait.PollImmediate(pollInterval, pollTimeout, func() (bool, error) {
 		var err error
-		polledVpa, err = c.AutoscalingV1beta2().VerticalPodAutoscalers(vpa.Namespace).Get(vpa.Name, metav1.GetOptions{})
+		polledVpa, err = c.AutoscalingV1beta2().VerticalPodAutoscalers(vpa.Namespace).Get(context.TODO(), vpa.Name, metav1.GetOptions{})
 		if err != nil {
 			return false, err
 		}
@@ -525,6 +531,18 @@ func WaitForVPAMatch(c vpa_clientset.Interface, vpa *vpa_types.VerticalPodAutosc
 func WaitForRecommendationPresent(c vpa_clientset.Interface, vpa *vpa_types.VerticalPodAutoscaler) (*vpa_types.VerticalPodAutoscaler, error) {
 	return WaitForVPAMatch(c, vpa, func(vpa *vpa_types.VerticalPodAutoscaler) bool {
 		return vpa.Status.Recommendation != nil && len(vpa.Status.Recommendation.ContainerRecommendations) != 0
+	})
+}
+
+// WaitForUncappedCPURecommendationAbove pools VPA object until uncapped recommendation is above specified value.
+// Returns polled VPA object. On timeout returns error.
+func WaitForUncappedCPURecommendationAbove(c vpa_clientset.Interface, vpa *vpa_types.VerticalPodAutoscaler, minMilliCPU int64) (*vpa_types.VerticalPodAutoscaler, error) {
+	return WaitForVPAMatch(c, vpa, func(vpa *vpa_types.VerticalPodAutoscaler) bool {
+		if vpa.Status.Recommendation == nil || len(vpa.Status.Recommendation.ContainerRecommendations) == 0 {
+			return false
+		}
+		uncappedCpu := vpa.Status.Recommendation.ContainerRecommendations[0].UncappedTarget[apiv1.ResourceCPU]
+		return uncappedCpu.MilliValue() > minMilliCPU
 	})
 }
 
@@ -566,7 +584,7 @@ func installLimitRange(f *framework.Framework, minCpuLimit, minMemoryLimit, maxC
 		}
 		lr.Spec.Limits = append(lr.Spec.Limits, lrItem)
 	}
-	_, err := f.ClientSet.CoreV1().LimitRanges(f.Namespace.Name).Create(lr)
+	_, err := f.ClientSet.CoreV1().LimitRanges(f.Namespace.Name).Create(context.TODO(), lr, metav1.CreateOptions{})
 	gomega.Expect(err).NotTo(gomega.HaveOccurred(), "unexpected error when creating limit range")
 }
 
