@@ -31,6 +31,8 @@ import (
 const (
 	nodeGroupMinSizeAnnotationKey = "machine.openshift.io/cluster-api-autoscaler-node-group-min-size"
 	nodeGroupMaxSizeAnnotationKey = "machine.openshift.io/cluster-api-autoscaler-node-group-max-size"
+	clusterNameLabel              = "cluster.x-k8s.io/cluster-name"
+	deprecatedClusterNameLabel    = "cluster.k8s.io/cluster-name"
 
 	cpuKey     = "machine.openshift.io/vCPU"
 	memoryKey  = "machine.openshift.io/memoryMb"
@@ -191,4 +193,36 @@ func parseGPUCapacity(annotations map[string]string) (resource.Quantity, error) 
 
 func parseMaxPodsCapacity(annotations map[string]string) (resource.Quantity, error) {
 	return parseKey(annotations, maxPodsKey)
+}
+
+func clusterNameFromResource(r *unstructured.Unstructured) string {
+	// Use Spec.ClusterName if defined (only available on v1alpha3+ types)
+	clusterName, found, err := unstructured.NestedString(r.Object, "spec", "clusterName")
+	if err != nil {
+		return ""
+	}
+
+	if found {
+		return clusterName
+	}
+
+	// Fallback to value of clusterNameLabel
+	if clusterName, ok := r.GetLabels()[clusterNameLabel]; ok {
+		return clusterName
+	}
+
+	// fallback for backward compatibility for deprecatedClusterNameLabel
+	if clusterName, ok := r.GetLabels()[deprecatedClusterNameLabel]; ok {
+		return clusterName
+	}
+
+	// fallback for cluster-api v1alpha1 cluster linking
+	templateLabels, found, err := unstructured.NestedStringMap(r.UnstructuredContent(), "spec", "template", "metadata", "labels")
+	if found {
+		if clusterName, ok := templateLabels[deprecatedClusterNameLabel]; ok {
+			return clusterName
+		}
+	}
+
+	return ""
 }
