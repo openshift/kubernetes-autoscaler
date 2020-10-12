@@ -24,6 +24,8 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	gpuapis "k8s.io/autoscaler/cluster-autoscaler/utils/gpu"
+	kubeletapis "k8s.io/kubernetes/pkg/kubelet/apis"
 	schedulerframework "k8s.io/kubernetes/pkg/scheduler/framework/v1alpha1"
 
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
@@ -285,7 +287,7 @@ func (ng *nodegroup) TemplateNodeInfo() (*schedulerframework.NodeInfo, error) {
 		gpuapis.ResourceNvidiaGPU: gpu,
 	}
 
-	nodeName := fmt.Sprintf("%s-asg-%d", ng.Name(), rand.Int63())
+	nodeName := fmt.Sprintf("%s-asg-%d", ng.scalableResource.Name(), rand.Int63())
 	node := corev1.Node{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:   nodeName,
@@ -303,7 +305,7 @@ func (ng *nodegroup) TemplateNodeInfo() (*schedulerframework.NodeInfo, error) {
 		return nil, err
 	}
 
-	nodeInfo := schedulerframework.NewNodeInfo(cloudprovider.BuildKubeProxy(ng.Name()))
+	nodeInfo := schedulerframework.NewNodeInfo(cloudprovider.BuildKubeProxy(ng.scalableResource.Name()))
 	nodeInfo.SetNode(&node)
 
 	return nodeInfo, nil

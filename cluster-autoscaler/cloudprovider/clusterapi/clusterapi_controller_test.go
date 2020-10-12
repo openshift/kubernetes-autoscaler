@@ -107,7 +107,7 @@ func mustCreateTestController(t *testing.T, testConfigs ...*testConfig) (*machin
 					},
 				},
 				{
-					GroupVersion: fmt.Sprintf("%s/v1alpha3", defaultCAPIGroup),
+					GroupVersion: fmt.Sprintf("%s/v1beta1", defaultCAPIGroup),
 					APIResources: []metav1.APIResource{
 						{
 							Name: resourceNameMachineDeployment,
@@ -146,7 +146,7 @@ func mustCreateTestController(t *testing.T, testConfigs ...*testConfig) (*machin
 
 		gvr := schema.GroupVersionResource{
 			Group:    action.GetResource().Group,
-			Version:  "v1alpha3",
+			Version:  "v1beta1",
 			Resource: resource,
 		}
 
@@ -279,7 +279,7 @@ func createTestConfigs(specs ...testSpec) []*testConfig {
 		config.machineSet = &unstructured.Unstructured{
 			Object: map[string]interface{}{
 				"kind":       machineSetKind,
-				"apiVersion": "cluster.x-k8s.io/v1alpha3",
+				"apiVersion": "machine.openshift.io/v1beta1",
 				"metadata": map[string]interface{}{
 					"name":      spec.machineSetName,
 					"namespace": spec.namespace,
@@ -306,7 +306,7 @@ func createTestConfigs(specs ...testSpec) []*testConfig {
 			config.machineDeployment = &unstructured.Unstructured{
 				Object: map[string]interface{}{
 					"kind":       machineDeploymentKind,
-					"apiVersion": "cluster.x-k8s.io/v1alpha3",
+					"apiVersion": "machine.openshift.io/v1beta1",
 					"metadata": map[string]interface{}{
 						"name":      spec.machineDeploymentName,
 						"namespace": spec.namespace,
@@ -372,7 +372,7 @@ func makeLinkedNodeAndMachine(i int, namespace string, owner metav1.OwnerReferen
 	machine := &unstructured.Unstructured{
 		Object: map[string]interface{}{
 			"kind":       machineKind,
-			"apiVersion": "cluster.x-k8s.io/v1alpha3",
+			"apiVersion": "machine.openshift.io/v1beta1",
 			"metadata": map[string]interface{}{
 				"name":      fmt.Sprintf("%s-%s-machine-%d", namespace, owner.Name, i),
 				"namespace": namespace,
@@ -564,6 +564,7 @@ func TestControllerFindMachine(t *testing.T) {
 				nodeGroupMinSizeAnnotationKey: "1",
 				nodeGroupMaxSizeAnnotationKey: "10",
 			})
+
 			if tc.name == "" {
 				tc.name = testConfig.machines[0].GetName()
 			}
@@ -1055,24 +1056,6 @@ func TestControllerNodeGroups(t *testing.T) {
 	if _, err := controller.nodeGroups(); err == nil {
 		t.Fatalf("expected an error")
 	}
-	if err := deleteTestConfigs(t, controller, machineDeploymentConfigs...); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	assertNodegroupLen(t, controller, 0)
-
-	annotations = map[string]string{
-		nodeGroupMinSizeAnnotationKey: "1",
-		nodeGroupMaxSizeAnnotationKey: "5",
-	}
-
-	// Test #9: machineset with nil replicas results in falling back to status count
-	machineSetConfigs = createMachineSetTestConfigs("MachineSet", 1, 1, annotations)
-	machineSetConfigs[0].machineSet.Status.Replicas = *machineSetConfigs[0].machineSet.Spec.Replicas
-	machineSetConfigs[0].machineSet.Spec.Replicas = nil
-	if err := addTestConfigs(t, controller, machineSetConfigs...); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	assertNodegroupLen(t, controller, 1)
 }
 
 func TestControllerNodeGroupsNodeCount(t *testing.T) {
@@ -1418,7 +1401,7 @@ func TestGetAPIGroupPreferredVersion(t *testing.T) {
 		{
 			description:      "find version for default API group",
 			APIGroup:         defaultCAPIGroup,
-			preferredVersion: "v1alpha3",
+			preferredVersion: "v1beta1",
 			error:            false,
 		},
 		{
@@ -1442,7 +1425,7 @@ func TestGetAPIGroupPreferredVersion(t *testing.T) {
 					GroupVersion: fmt.Sprintf("%s/v1beta1", customCAPIGroup),
 				},
 				{
-					GroupVersion: fmt.Sprintf("%s/v1alpha3", defaultCAPIGroup),
+					GroupVersion: fmt.Sprintf("%s/v1beta1", defaultCAPIGroup),
 				},
 			},
 		},
@@ -1471,14 +1454,14 @@ func TestGroupVersionHasResource(t *testing.T) {
 		{
 			description:  "true when it finds resource",
 			resourceName: resourceNameMachineDeployment,
-			APIGroup:     fmt.Sprintf("%s/v1alpha3", defaultCAPIGroup),
+			APIGroup:     fmt.Sprintf("%s/v1beta1", defaultCAPIGroup),
 			expected:     true,
 			error:        false,
 		},
 		{
 			description:  "false when it does not find resource",
 			resourceName: "resourceDoesNotExist",
-			APIGroup:     fmt.Sprintf("%s/v1alpha3", defaultCAPIGroup),
+			APIGroup:     fmt.Sprintf("%s/v1beta1", defaultCAPIGroup),
 			expected:     false,
 			error:        false,
 		},
@@ -1495,7 +1478,7 @@ func TestGroupVersionHasResource(t *testing.T) {
 		Fake: &clientgotesting.Fake{
 			Resources: []*metav1.APIResourceList{
 				{
-					GroupVersion: fmt.Sprintf("%s/v1alpha3", defaultCAPIGroup),
+					GroupVersion: fmt.Sprintf("%s/v1beta1", defaultCAPIGroup),
 					APIResources: []metav1.APIResource{
 						{
 							Name: resourceNameMachineDeployment,

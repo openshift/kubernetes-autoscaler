@@ -430,13 +430,13 @@ func (c *machineController) scalableResourceProviderIDs(scalableResource *unstru
 
 		klog.Warningf("Machine %q has no providerID", machine.GetName())
 
-		failureMessage, found, err := unstructured.NestedString(machine.Object, "status", "failureMessage")
+		errorMessage, found, err := unstructured.NestedString(machine.Object, "status", "errorMessage")
 		if err != nil {
 			return nil, err
 		}
 
 		if found {
-			klog.V(4).Infof("Status.FailureMessage of machine %q is %q", machine.GetName(), failureMessage)
+			klog.V(4).Infof("Status.ErrorMessage of machine %q is %q", machine.GetName(), errorMessage)
 			// Provide a fake ID to allow the autoscaler to track machines that will never
 			// become nodes and mark the nodegroup unhealthy after maxNodeProvisionTime.
 			// Fake ID needs to be recognised later and converted into a machine key.
@@ -504,6 +504,13 @@ func (c *machineController) nodeGroups() ([]*nodegroup, error) {
 
 		// add nodegroup iff it has the capacity to scale
 		if ng.MaxSize()-ng.MinSize() > 0 {
+			// if the node group can scale from zero there is no need to check the replicas against 0, it should be added
+			if ng.scalableResource.CanScaleFromZero() {
+				nodegroups = append(nodegroups, ng)
+				continue
+			}
+
+			// since this is relying on a scale resource we should never get a nil here
 			replicas, found, err := unstructured.NestedInt64(r.Object, "spec", "replicas")
 			if err != nil {
 				return nil, err

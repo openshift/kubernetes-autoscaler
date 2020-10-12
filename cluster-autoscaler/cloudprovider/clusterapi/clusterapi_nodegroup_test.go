@@ -30,7 +30,6 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/util/wait"
 	gpuapis "k8s.io/autoscaler/cluster-autoscaler/utils/gpu"
-	"k8s.io/utils/pointer"
 
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 )
@@ -309,7 +308,7 @@ func TestNodeGroupIncreaseSize(t *testing.T) {
 	type testCase struct {
 		description   string
 		delta         int
-		initialSpec   *int32
+		initial       int32
 		initialStatus int32
 		expected      int32
 	}
@@ -333,16 +332,8 @@ func TestNodeGroupIncreaseSize(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		// If initialSpec is nil, fallback to replica count from status
-		// TODO: Remove this fallback once defaulting is implemented for MachineSet Replicas
-		if tc.initialSpec != nil {
-			if currReplicas != int(pointer.Int32PtrDerefOr(tc.initialSpec, -1)) {
-				t.Errorf("initially expected %v, got %v", tc.initialSpec, currReplicas)
-			}
-		} else {
-			if currReplicas != int(tc.initialStatus) {
-				t.Errorf("initially expected %v, got %v", tc.initialStatus, currReplicas)
-			}
+		if currReplicas != int(tc.initial) {
+			t.Errorf("initially expected %v, got %v", tc.initial, currReplicas)
 		}
 
 		if err := ng.IncreaseSize(tc.delta); err != nil {
@@ -370,7 +361,7 @@ func TestNodeGroupIncreaseSize(t *testing.T) {
 	t.Run("MachineSet", func(t *testing.T) {
 		tc := testCase{
 			description: "increase by 1",
-			initialSpec: pointer.Int32Ptr(3),
+			initial:     3,
 			expected:    4,
 			delta:       1,
 		}
@@ -380,7 +371,7 @@ func TestNodeGroupIncreaseSize(t *testing.T) {
 	t.Run("MachineDeployment", func(t *testing.T) {
 		tc := testCase{
 			description: "increase by 1",
-			initialSpec: pointer.Int32Ptr(3),
+			initial:     3,
 			expected:    4,
 			delta:       1,
 		}
@@ -392,7 +383,7 @@ func TestNodeGroupDecreaseTargetSize(t *testing.T) {
 	type testCase struct {
 		description         string
 		delta               int
-		initialSpec         *int32
+		initial             int32
 		initialStatus       int32
 		targetSizeIncrement int32
 		expected            int32
@@ -447,16 +438,8 @@ func TestNodeGroupDecreaseTargetSize(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		// If initialSpec is nil, fallback to replica count from status
-		// TODO: Remove this fallback once defaulting is implemented for MachineSet Replicas
-		if tc.initialSpec != nil {
-			if currReplicas != int(*tc.initialSpec)+int(tc.targetSizeIncrement) {
-				t.Errorf("initially expected %v, got %v", *tc.initialSpec, currReplicas)
-			}
-		} else {
-			if currReplicas != int(tc.initialStatus)+int(tc.targetSizeIncrement) {
-				t.Errorf("initially expected %v, got %v", tc.initialStatus, currReplicas)
-			}
+		if currReplicas != int(tc.initial)+int(tc.targetSizeIncrement) {
+			t.Errorf("initially expected %v, got %v", tc.initial, currReplicas)
 		}
 
 		if err := ng.DecreaseTargetSize(tc.delta); (err != nil) != tc.expectedError {
@@ -482,7 +465,7 @@ func TestNodeGroupDecreaseTargetSize(t *testing.T) {
 	t.Run("MachineSet", func(t *testing.T) {
 		tc := testCase{
 			description:         "Same number of existing instances and node group target size should error",
-			initialSpec:         pointer.Int32Ptr(3),
+			initial:             3,
 			targetSizeIncrement: 0,
 			expected:            3,
 			delta:               -1,
@@ -505,7 +488,7 @@ func TestNodeGroupDecreaseTargetSize(t *testing.T) {
 	t.Run("MachineDeployment", func(t *testing.T) {
 		tc := testCase{
 			description:         "Same number of existing instances and node group target size should error",
-			initialSpec:         pointer.Int32Ptr(3),
+			initial:             3,
 			targetSizeIncrement: 0,
 			expected:            3,
 			delta:               -1,
@@ -964,7 +947,7 @@ func TestNodeGroupWithFailedMachine(t *testing.T) {
 		machine := testConfig.machines[3].DeepCopy()
 
 		unstructured.RemoveNestedField(machine.Object, "spec", "providerID")
-		unstructured.SetNestedField(machine.Object, "FailureMessage", "status", "failureMessage")
+		unstructured.SetNestedField(machine.Object, "ErrorMessage", "status", "errorMessage")
 
 		if err := updateResource(controller.managementClient, controller.machineInformer, controller.machineResource, machine); err != nil {
 			t.Fatalf("unexpected error updating machine, got %v", err)
@@ -1152,9 +1135,9 @@ func TestNodeGroupTemplateNodeInfo(t *testing.T) {
 
 	test := func(t *testing.T, testConfig *testConfig, config testCaseConfig) {
 		if testConfig.machineDeployment != nil {
-			testConfig.machineDeployment.Spec.Template.Spec.SetLabels(config.nodegroupLabels)
+			unstructured.SetNestedStringMap(testConfig.machineDeployment.Object, config.nodegroupLabels, "spec", "template", "spec", "metadata", "labels")
 		} else {
-			testConfig.machineSet.Spec.Template.Spec.SetLabels(config.nodegroupLabels)
+			unstructured.SetNestedStringMap(testConfig.machineSet.Object, config.nodegroupLabels, "spec", "template", "spec", "metadata", "labels")
 		}
 
 		if config.includeNodes {
@@ -1219,7 +1202,7 @@ func TestNodeGroupTemplateNodeInfo(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Run("MachineSet", func(t *testing.T) {
-				test(t, createMachineSetTestConfig(testNamespace, 10, cloudprovider.JoinStringMaps(enableScaleAnnotations, tc.nodeGroupAnnotations)),
+				test(t, createMachineSetTestConfig(testNamespace, RandomString(6), 10, cloudprovider.JoinStringMaps(enableScaleAnnotations, tc.nodeGroupAnnotations)),
 					tc.config,
 				)
 			})
@@ -1227,7 +1210,7 @@ func TestNodeGroupTemplateNodeInfo(t *testing.T) {
 			t.Run("MachineDeployment", func(t *testing.T) {
 				test(
 					t,
-					createMachineDeploymentTestConfig(testNamespace, 10, cloudprovider.JoinStringMaps(enableScaleAnnotations, tc.nodeGroupAnnotations)),
+					createMachineDeploymentTestConfig(testNamespace, RandomString(6), 10, cloudprovider.JoinStringMaps(enableScaleAnnotations, tc.nodeGroupAnnotations)),
 					tc.config,
 				)
 			})
