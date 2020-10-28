@@ -308,12 +308,37 @@ func (ng *nodegroup) TemplateNodeInfo() (*schedulerframework.NodeInfo, error) {
 	node.Status.Allocatable = capacity
 	node.Status.Conditions = cloudprovider.BuildReadyConditions()
 	node.Spec.Taints = ng.scalableResource.Taints()
-	node.Labels = cloudprovider.JoinStringMaps(ng.scalableResource.Labels(), buildGenericLabels(nodeName))
+
+	node.Labels, err = ng.buildTemplateLabels(nodeName)
+	if err != nil {
+		return nil, err
+	}
 
 	nodeInfo := schedulerframework.NewNodeInfo(cloudprovider.BuildKubeProxy(ng.Name()))
 	nodeInfo.SetNode(&node)
 
 	return nodeInfo, nil
+}
+
+func (ng *nodegroup) buildTemplateLabels(nodeName string) (map[string]string, error) {
+	labels := cloudprovider.JoinStringMaps(ng.scalableResource.Labels(), buildGenericLabels(nodeName))
+
+	nodes, err := ng.Nodes()
+	if err != nil {
+		return nil, err
+	}
+
+	if len(nodes) > 0 {
+		node, err := ng.machineController.findNodeByProviderID(normalizedProviderString(nodes[0].Id))
+		if err != nil {
+			return nil, err
+		}
+
+		if node != nil {
+			labels = cloudprovider.JoinStringMaps(labels, extractNodeLabels(node))
+		}
+	}
+	return labels, nil
 }
 
 // Exist checks if the node group really exists on the cloud nodegroup
@@ -377,4 +402,34 @@ func buildGenericLabels(nodeName string) map[string]string {
 
 	m[corev1.LabelHostname] = nodeName
 	return m
+}
+
+// extract a predefined list of labels from the existing node
+func extractNodeLabels(node *corev1.Node) map[string]string {
+	m := make(map[string]string)
+	if node.Labels == nil {
+		return m
+	}
+
+	setLabelIfNotEmpty(m, node.Labels, kubeletapis.LabelArch)
+	setLabelIfNotEmpty(m, node.Labels, corev1.LabelArchStable)
+
+	setLabelIfNotEmpty(m, node.Labels, kubeletapis.LabelOS)
+	setLabelIfNotEmpty(m, node.Labels, corev1.LabelOSStable)
+
+	setLabelIfNotEmpty(m, node.Labels, corev1.LabelInstanceType)
+	setLabelIfNotEmpty(m, node.Labels, corev1.LabelInstanceTypeStable)
+
+	setLabelIfNotEmpty(m, node.Labels, corev1.LabelZoneRegion)
+	setLabelIfNotEmpty(m, node.Labels, corev1.LabelZoneRegionStable)
+
+	setLabelIfNotEmpty(m, node.Labels, corev1.LabelZoneFailureDomain)
+
+	return m
+}
+
+func setLabelIfNotEmpty(to, from map[string]string, key string) {
+	if value := from[key]; value != "" {
+		to[key] = value
+	}
 }
