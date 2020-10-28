@@ -370,7 +370,11 @@ func buildGenericLabels(nodeName string) map[string]string {
 	// labels are used for, or remove them if not necessary
 	m := make(map[string]string)
 	m[kubeletapis.LabelArch] = cloudprovider.DefaultArch
+	m[corev1.LabelArchStable] = cloudprovider.DefaultArch
+
 	m[kubeletapis.LabelOS] = cloudprovider.DefaultOS
+	m[corev1.LabelOSStable] = cloudprovider.DefaultOS
+
 	m[corev1.LabelHostname] = nodeName
 	return m
 }
