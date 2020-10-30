@@ -70,12 +70,12 @@ func mustCreateTestController(t *testing.T, testConfigs ...*testConfig) (*machin
 		}
 
 		for i := range config.machines {
-			machineObjects = append(machineObjects, newUnstructuredFromMachine(config.machines[i]))
+			machineObjects = append(machineObjects, newUnstructuredFrom(config.machines[i]))
 		}
 
-		machineObjects = append(machineObjects, newUnstructuredFromMachineSet(config.machineSet))
+		machineObjects = append(machineObjects, newUnstructuredFrom(config.machineSet))
 		if config.machineDeployment != nil {
-			machineObjects = append(machineObjects, newUnstructuredFromMachineDeployment(config.machineDeployment))
+			machineObjects = append(machineObjects, newUnstructuredFrom(config.machineDeployment))
 		}
 	}
 
@@ -286,15 +286,15 @@ func addTestConfigs(t *testing.T, controller *machineController, testConfigs ...
 	for _, config := range testConfigs {
 		if config.machineDeployment != nil {
 
-			if err := controller.machineDeploymentInformer.Informer().GetStore().Add(newUnstructuredFromMachineDeployment(config.machineDeployment)); err != nil {
+			if err := controller.machineDeploymentInformer.Informer().GetStore().Add(newUnstructuredFrom(config.machineDeployment)); err != nil {
 				return err
 			}
 		}
-		if err := controller.machineSetInformer.Informer().GetStore().Add(newUnstructuredFromMachineSet(config.machineSet)); err != nil {
+		if err := controller.machineSetInformer.Informer().GetStore().Add(newUnstructuredFrom(config.machineSet)); err != nil {
 			return err
 		}
 		for i := range config.machines {
-			if err := controller.machineInformer.Informer().GetStore().Add(newUnstructuredFromMachine(config.machines[i])); err != nil {
+			if err := controller.machineInformer.Informer().GetStore().Add(newUnstructuredFrom(config.machines[i])); err != nil {
 				return err
 			}
 		}
@@ -631,7 +631,7 @@ func TestControllerNodeGroupForNodeWithMissingMachineOwner(t *testing.T) {
 
 		machine := testConfig.machines[0].DeepCopy()
 		machine.OwnerReferences = []v1.OwnerReference{}
-		if err := controller.machineInformer.Informer().GetStore().Update(newUnstructuredFromMachine(machine)); err != nil {
+		if err := controller.machineInformer.Informer().GetStore().Update(newUnstructuredFrom(machine)); err != nil {
 			t.Fatalf("unexpected error updating machine, got %v", err)
 		}
 
@@ -889,7 +889,7 @@ func TestControllerFindMachineFromNodeAnnotation(t *testing.T) {
 	// searching using the annotation on the node object.
 	for _, machine := range testConfig.machines {
 		machine.Spec.ProviderID = nil
-		if err := controller.machineInformer.Informer().GetStore().Update(newUnstructuredFromMachine(machine)); err != nil {
+		if err := controller.machineInformer.Informer().GetStore().Update(newUnstructuredFrom(machine)); err != nil {
 			t.Fatalf("unexpected error updating machine, got %v", err)
 		}
 	}
@@ -934,13 +934,13 @@ func TestControllerMachineSetNodeNamesWithoutLinkage(t *testing.T) {
 	// Remove all linkage between node and machine.
 	for _, machine := range testConfig.machines {
 		machine.Spec.ProviderID = nil
-		if err := controller.machineInformer.Informer().GetStore().Update(newUnstructuredFromMachine(machine)); err != nil {
+		if err := controller.machineInformer.Informer().GetStore().Update(newUnstructuredFrom(machine)); err != nil {
 			t.Fatalf("unexpected error updating machine, got %v", err)
 		}
 	}
 	for _, machine := range testConfig.machines {
 		machine.Status.NodeRef = nil
-		if err := controller.machineInformer.Informer().GetStore().Update(newUnstructuredFromMachine(machine)); err != nil {
+		if err := controller.machineInformer.Informer().GetStore().Update(newUnstructuredFrom(machine)); err != nil {
 			t.Fatalf("unexpected error updating machine, got %v", err)
 		}
 	}
@@ -980,7 +980,7 @@ func TestControllerMachineSetNodeNamesUsingProviderID(t *testing.T) {
 	// ID for lookups.
 	for _, machine := range testConfig.machines {
 		machine.Status.NodeRef = nil
-		if err := controller.machineInformer.Informer().GetStore().Update(newUnstructuredFromMachine(machine)); err != nil {
+		if err := controller.machineInformer.Informer().GetStore().Update(newUnstructuredFrom(machine)); err != nil {
 			t.Fatalf("unexpected error updating machine, got %v", err)
 		}
 	}
@@ -1029,7 +1029,7 @@ func TestControllerMachineSetNodeNamesUsingStatusNodeRefName(t *testing.T) {
 	// searching using Status.NodeRef.Name.
 	for _, machine := range testConfig.machines {
 		machine.Spec.ProviderID = nil
-		if err := controller.machineInformer.Informer().GetStore().Update(newUnstructuredFromMachine(machine)); err != nil {
+		if err := controller.machineInformer.Informer().GetStore().Update(newUnstructuredFrom(machine)); err != nil {
 			t.Fatalf("unexpected error updating machine, got %v", err)
 		}
 	}
