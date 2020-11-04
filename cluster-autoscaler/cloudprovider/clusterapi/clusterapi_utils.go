@@ -31,7 +31,7 @@ import (
 const (
 	nodeGroupMinSizeAnnotationKey = "machine.openshift.io/cluster-api-autoscaler-node-group-min-size"
 	nodeGroupMaxSizeAnnotationKey = "machine.openshift.io/cluster-api-autoscaler-node-group-max-size"
-	clusterNameLabel              = "cluster.x-k8s.io/cluster-name"
+	clusterNameLabel              = "machine.openshift.io/cluster-name"
 	deprecatedClusterNameLabel    = "cluster.k8s.io/cluster-name"
 
 	cpuKey     = "machine.openshift.io/vCPU"

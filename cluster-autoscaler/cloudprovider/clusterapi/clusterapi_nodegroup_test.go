@@ -1210,7 +1210,7 @@ func TestNodeGroupTemplateNodeInfo(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Run("MachineSet", func(t *testing.T) {
-				test(t, createMachineSetTestConfig(testNamespace, RandomString(6), 10, cloudprovider.JoinStringMaps(enableScaleAnnotations, tc.nodeGroupAnnotations)),
+				test(t, createMachineSetTestConfig(testNamespace, RandomString(6), RandomString(6), 10, cloudprovider.JoinStringMaps(enableScaleAnnotations, tc.nodeGroupAnnotations)),
 					tc.config,
 				)
 			})
@@ -1218,7 +1218,7 @@ func TestNodeGroupTemplateNodeInfo(t *testing.T) {
 			t.Run("MachineDeployment", func(t *testing.T) {
 				test(
 					t,
-					createMachineDeploymentTestConfig(testNamespace, RandomString(6), 10, cloudprovider.JoinStringMaps(enableScaleAnnotations, tc.nodeGroupAnnotations)),
+					createMachineDeploymentTestConfig(testNamespace, RandomString(6), RandomString(6), 10, cloudprovider.JoinStringMaps(enableScaleAnnotations, tc.nodeGroupAnnotations)),
 					tc.config,
 				)
 			})

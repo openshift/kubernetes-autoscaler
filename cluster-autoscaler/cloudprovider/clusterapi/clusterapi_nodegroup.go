@@ -370,9 +370,9 @@ func newNodeGroupFromScalableResource(controller *machineController, unstructure
 		return nil, err
 	}
 
-	// We don't scale from 0 so nodes must belong to a nodegroup
-	// that has a scale size of at least 1.
-	if found && replicas == 0 {
+	// Ensure that if the nodegroup has 0 replicas it is capable
+	// of scaling before adding it.
+	if found && replicas == 0 && !scalableResource.CanScaleFromZero() {
 		return nil, nil
 	}
 
