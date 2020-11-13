@@ -140,7 +140,7 @@ func newMachineSetScalableResource(controller *machineController, machineSet *Ma
 }
 
 func (r machineSetScalableResource) Labels() map[string]string {
-	return r.machineSet.Spec.Template.Spec.Labels
+	return r.machineSet.Spec.Template.Spec.ObjectMeta.Labels
 }
 
 func (r machineSetScalableResource) Taints() []apiv1.Taint {

@@ -30,6 +30,7 @@ import (
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
+	gpuapis "k8s.io/autoscaler/cluster-autoscaler/utils/gpu"
 	"k8s.io/utils/pointer"
 )
 
@@ -461,7 +462,7 @@ func TestNodeGroupDecreaseTargetSize(t *testing.T) {
 		switch v := (ng.scalableResource).(type) {
 		case *machineSetScalableResource:
 			testConfig.machineSet.Spec.Replicas = int32ptr(*testConfig.machineSet.Spec.Replicas + tc.targetSizeIncrement)
-			u := newUnstructuredFromMachineSet(testConfig.machineSet)
+			u := newUnstructuredFrom(testConfig.machineSet)
 			if err := controller.machineSetInformer.Informer().GetStore().Add(u); err != nil {
 				t.Fatalf("failed to add new machine: %v", err)
 			}
@@ -471,7 +472,7 @@ func TestNodeGroupDecreaseTargetSize(t *testing.T) {
 			}
 		case *machineDeploymentScalableResource:
 			testConfig.machineDeployment.Spec.Replicas = int32ptr(*testConfig.machineDeployment.Spec.Replicas + tc.targetSizeIncrement)
-			u := newUnstructuredFromMachineDeployment(testConfig.machineDeployment)
+			u := newUnstructuredFrom(testConfig.machineDeployment)
 			if err := controller.machineDeploymentInformer.Informer().GetStore().Add(u); err != nil {
 			}
 			_, err := controller.dynamicclient.Resource(*controller.machineDeploymentResource).Namespace(u.GetNamespace()).Update(context.TODO(), u, metav1.UpdateOptions{})
@@ -881,7 +882,7 @@ func TestNodeGroupDeleteNodesTwice(t *testing.T) {
 		// finalizers.
 		now := v1.Now()
 		m.DeletionTimestamp = &now
-		if _, err := controller.dynamicclient.Resource(*controller.machineResource).Namespace(m.GetNamespace()).Update(context.Background(), newUnstructuredFromMachine(m), v1.UpdateOptions{}); err != nil {
+		if _, err := controller.dynamicclient.Resource(*controller.machineResource).Namespace(m.GetNamespace()).Update(context.Background(), newUnstructuredFrom(m), v1.UpdateOptions{}); err != nil {
 			return err
 		}
 
@@ -1063,7 +1064,7 @@ func TestNodeGroupWithFailedMachine(t *testing.T) {
 		machine.Spec.ProviderID = nil
 		errorMessage := "ErrorMessage"
 		machine.Status.ErrorMessage = &errorMessage
-		if err := controller.machineInformer.Informer().GetStore().Update(newUnstructuredFromMachine(machine)); err != nil {
+		if err := controller.machineInformer.Informer().GetStore().Update(newUnstructuredFrom(machine)); err != nil {
 			t.Fatalf("unexpected error updating machine, got %v", err)
 		}
 
@@ -1131,4 +1132,204 @@ func TestNodeGroupWithFailedMachine(t *testing.T) {
 			nodeGroupMaxSizeAnnotationKey: "10",
 		}))
 	})
+}
+
+func TestNodeGroupTemplateNodeInfo(t *testing.T) {
+	enableScaleAnnotations := map[string]string{
+		nodeGroupMinSizeAnnotationKey: "1",
+		nodeGroupMaxSizeAnnotationKey: "10",
+	}
+
+	type testCaseConfig struct {
+		nodeLabels         map[string]string
+		nodegroupLabels    map[string]string
+		includeNodes       bool
+		expectedErr        error
+		expectedCapacity   map[corev1.ResourceName]int64
+		expectedNodeLabels map[string]string
+	}
+
+	testCases := []struct {
+		name                 string
+		nodeGroupAnnotations map[string]string
+		config               testCaseConfig
+	}{
+		{
+			name: "When the NodeGroup cannot scale from zero",
+			config: testCaseConfig{
+				expectedErr: cloudprovider.ErrNotImplemented,
+			},
+		},
+		{
+			name: "When the NodeGroup can scale from zero",
+			nodeGroupAnnotations: map[string]string{
+				memoryKey: "2048",
+				cpuKey:    "2",
+			},
+			config: testCaseConfig{
+				expectedErr: nil,
+				expectedCapacity: map[corev1.ResourceName]int64{
+					corev1.ResourceCPU:        2,
+					corev1.ResourceMemory:     2048 * 1024 * 1024,
+					corev1.ResourcePods:       250,
+					gpuapis.ResourceNvidiaGPU: 0,
+				},
+				expectedNodeLabels: map[string]string{
+					"kubernetes.io/os":        "linux",
+					"beta.kubernetes.io/os":   "linux",
+					"kubernetes.io/arch":      "amd64",
+					"beta.kubernetes.io/arch": "amd64",
+				},
+			},
+		},
+		{
+			name: "When the NodeGroup can scale from zero and the nodegroup adds labels to the Node",
+			nodeGroupAnnotations: map[string]string{
+				memoryKey: "2048",
+				cpuKey:    "2",
+			},
+			config: testCaseConfig{
+				expectedErr: nil,
+				nodegroupLabels: map[string]string{
+					"nodeGroupLabel": "value",
+					"anotherLabel":   "anotherValue",
+				},
+				expectedCapacity: map[corev1.ResourceName]int64{
+					corev1.ResourceCPU:        2,
+					corev1.ResourceMemory:     2048 * 1024 * 1024,
+					corev1.ResourcePods:       250,
+					gpuapis.ResourceNvidiaGPU: 0,
+				},
+				expectedNodeLabels: map[string]string{
+					"kubernetes.io/os":        "linux",
+					"beta.kubernetes.io/os":   "linux",
+					"kubernetes.io/arch":      "amd64",
+					"beta.kubernetes.io/arch": "amd64",
+					"nodeGroupLabel":          "value",
+					"anotherLabel":            "anotherValue",
+				},
+			},
+		},
+		{
+			name: "When the NodeGroup can scale from zero and the Node still exists, it includes the known node labels",
+			nodeGroupAnnotations: map[string]string{
+				memoryKey: "2048",
+				cpuKey:    "2",
+			},
+			config: testCaseConfig{
+				includeNodes: true,
+				expectedErr:  nil,
+				nodeLabels: map[string]string{
+					"kubernetes.io/os":                 "windows",
+					"kubernetes.io/arch":               "arm64",
+					"node.kubernetes.io/instance-type": "instance1",
+					"anotherLabel":                     "nodeValue", // This should not be copied as it is not a well known label
+				},
+				nodegroupLabels: map[string]string{
+					"nodeGroupLabel": "value",
+					"anotherLabel":   "anotherValue",
+				},
+				expectedCapacity: map[corev1.ResourceName]int64{
+					corev1.ResourceCPU:        2,
+					corev1.ResourceMemory:     2048 * 1024 * 1024,
+					corev1.ResourcePods:       250,
+					gpuapis.ResourceNvidiaGPU: 0,
+				},
+				expectedNodeLabels: map[string]string{
+					"kubernetes.io/os":                 "windows",
+					"beta.kubernetes.io/os":            "linux",
+					"kubernetes.io/arch":               "arm64",
+					"beta.kubernetes.io/arch":          "amd64",
+					"nodeGroupLabel":                   "value",
+					"anotherLabel":                     "anotherValue",
+					"node.kubernetes.io/instance-type": "instance1",
+				},
+			},
+		},
+	}
+
+	test := func(t *testing.T, testConfig *testConfig, config testCaseConfig) {
+		if testConfig.machineDeployment != nil {
+			testConfig.machineDeployment.Spec.Template.Spec.SetLabels(config.nodegroupLabels)
+		} else {
+			testConfig.machineSet.Spec.Template.Spec.SetLabels(config.nodegroupLabels)
+		}
+
+		if config.includeNodes {
+			for i := range testConfig.nodes {
+				testConfig.nodes[i].SetLabels(config.nodeLabels)
+			}
+		} else {
+			testConfig.nodes = []*corev1.Node{}
+		}
+
+		controller, stop := mustCreateTestController(t, testConfig)
+		defer stop()
+
+		nodegroups, err := controller.nodeGroups()
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if l := len(nodegroups); l != 1 {
+			t.Fatalf("expected 1 nodegroup, got %d", l)
+		}
+
+		ng := nodegroups[0]
+		nodeInfo, err := ng.TemplateNodeInfo()
+		if config.expectedErr != nil {
+			if err != config.expectedErr {
+				t.Fatalf("expected error: %v, but got: %v", config.expectedErr, err)
+			}
+			return
+		}
+
+		nodeAllocatable := nodeInfo.Node().Status.Allocatable
+		nodeCapacity := nodeInfo.Node().Status.Capacity
+		for resource, expectedCapacity := range config.expectedCapacity {
+			if gotAllocatable, ok := nodeAllocatable[resource]; !ok {
+				t.Errorf("Expected allocatable to have resource %q, resource not found", resource)
+			} else if gotAllocatable.Value() != expectedCapacity {
+				t.Errorf("Expected allocatable %q: %+v, Got: %+v", resource, expectedCapacity, gotAllocatable.Value())
+			}
+
+			if gotCapactiy, ok := nodeCapacity[resource]; !ok {
+				t.Errorf("Expected capacity to have resource %q, resource not found", resource)
+			} else if gotCapactiy.Value() != expectedCapacity {
+				t.Errorf("Expected capacity %q: %+v, Got: %+v", resource, expectedCapacity, gotCapactiy.Value())
+			}
+		}
+
+		// expectedNodeLabels won't have the hostname label as it is randomized, so +1 to its length
+		if len(nodeInfo.Node().GetLabels()) != len(config.expectedNodeLabels)+1 {
+			t.Errorf("Expected node labels to have len: %d, but got: %d", len(config.expectedNodeLabels)+1, len(nodeInfo.Node().GetLabels()))
+		}
+		for key, value := range nodeInfo.Node().GetLabels() {
+			// Exclude the hostname label as it is randomized
+			if key != corev1.LabelHostname {
+				if value != config.expectedNodeLabels[key] {
+					t.Errorf("Expected node label %q: %q, Got: %q", key, config.expectedNodeLabels[key], value)
+				}
+			}
+		}
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Run("MachineSet", func(t *testing.T) {
+				test(t, createMachineSetTestConfig(testNamespace, 10, cloudprovider.JoinStringMaps(enableScaleAnnotations, tc.nodeGroupAnnotations)),
+					tc.config,
+				)
+			})
+
+			t.Run("MachineDeployment", func(t *testing.T) {
+				test(
+					t,
+					createMachineDeploymentTestConfig(testNamespace, 10, cloudprovider.JoinStringMaps(enableScaleAnnotations, tc.nodeGroupAnnotations)),
+					tc.config,
+				)
+			})
+		})
+	}
+
 }

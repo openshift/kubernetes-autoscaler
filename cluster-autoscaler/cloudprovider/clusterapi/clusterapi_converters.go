@@ -22,6 +22,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/utils/pointer"
 )
 
@@ -182,77 +183,10 @@ func newMachineFromUnstructured(u *unstructured.Unstructured) *Machine {
 	return &machine
 }
 
-func newUnstructuredFromMachineSet(m *MachineSet) *unstructured.Unstructured {
-	u := unstructured.Unstructured{}
-
-	u.SetAPIVersion(m.APIVersion)
-	u.SetAnnotations(m.Annotations)
-	u.SetKind(m.Kind)
-	u.SetLabels(m.Labels)
-	u.SetName(m.Name)
-	u.SetNamespace(m.Namespace)
-	u.SetOwnerReferences(m.OwnerReferences)
-	u.SetUID(m.UID)
-	u.SetDeletionTimestamp(m.DeletionTimestamp)
-
-	if m.Spec.Replicas != nil {
-		unstructured.SetNestedField(u.Object, int64(*m.Spec.Replicas), "spec", "replicas")
+func newUnstructuredFrom(obj runtime.Object) *unstructured.Unstructured {
+	u, err := runtime.DefaultUnstructuredConverter.ToUnstructured(obj)
+	if err != nil {
+		panic(err)
 	}
-	unstructured.SetNestedField(u.Object, int64(m.Status.Replicas), "status", "replicas")
-
-	return &u
-}
-
-func newUnstructuredFromMachineDeployment(m *MachineDeployment) *unstructured.Unstructured {
-	u := unstructured.Unstructured{}
-
-	u.SetAPIVersion(m.APIVersion)
-	u.SetAnnotations(m.Annotations)
-	u.SetKind(m.Kind)
-	u.SetLabels(m.Labels)
-	u.SetName(m.Name)
-	u.SetNamespace(m.Namespace)
-	u.SetOwnerReferences(m.OwnerReferences)
-	u.SetUID(m.UID)
-	u.SetDeletionTimestamp(m.DeletionTimestamp)
-
-	if m.Spec.Replicas != nil {
-		unstructured.SetNestedField(u.Object, int64(*m.Spec.Replicas), "spec", "replicas")
-	}
-	unstructured.SetNestedField(u.Object, int64(m.Status.Replicas), "status", "replicas")
-
-	return &u
-}
-
-func newUnstructuredFromMachine(m *Machine) *unstructured.Unstructured {
-	u := unstructured.Unstructured{}
-
-	u.SetAPIVersion(m.APIVersion)
-	u.SetAnnotations(m.Annotations)
-	u.SetKind(m.Kind)
-	u.SetLabels(m.Labels)
-	u.SetName(m.Name)
-	u.SetNamespace(m.Namespace)
-	u.SetOwnerReferences(m.OwnerReferences)
-	u.SetUID(m.UID)
-	u.SetDeletionTimestamp(m.DeletionTimestamp)
-
-	if m.Spec.ProviderID != nil && *m.Spec.ProviderID != "" {
-		unstructured.SetNestedField(u.Object, *m.Spec.ProviderID, "spec", "providerID")
-	}
-
-	if m.Status.NodeRef != nil {
-		if m.Status.NodeRef.Kind != "" {
-			unstructured.SetNestedField(u.Object, m.Status.NodeRef.Kind, "status", "nodeRef", "kind")
-		}
-		if m.Status.NodeRef.Name != "" {
-			unstructured.SetNestedField(u.Object, m.Status.NodeRef.Name, "status", "nodeRef", "name")
-		}
-	}
-
-	if m.Status.ErrorMessage != nil {
-		unstructured.SetNestedField(u.Object, *m.Status.ErrorMessage, "status", "errorMessage")
-	}
-
-	return &u
+	return &unstructured.Unstructured{Object: u}
 }
