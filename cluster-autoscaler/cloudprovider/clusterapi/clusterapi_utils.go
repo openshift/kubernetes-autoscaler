@@ -29,10 +29,12 @@ import (
 )
 
 const (
-	nodeGroupMinSizeAnnotationKey = "machine.openshift.io/cluster-api-autoscaler-node-group-min-size"
-	nodeGroupMaxSizeAnnotationKey = "machine.openshift.io/cluster-api-autoscaler-node-group-max-size"
-	clusterNameLabel              = "machine.openshift.io/cluster-name"
-	deprecatedClusterNameLabel    = "cluster.k8s.io/cluster-name"
+	deprecatedNodeGroupMinSizeAnnotationKey = "cluster.k8s.io/cluster-api-autoscaler-node-group-min-size"
+	deprecatedNodeGroupMaxSizeAnnotationKey = "cluster.k8s.io/cluster-api-autoscaler-node-group-max-size"
+	nodeGroupMinSizeAnnotationKey           = "machine.openshift.io/cluster-api-autoscaler-node-group-min-size"
+	nodeGroupMaxSizeAnnotationKey           = "machine.openshift.io/cluster-api-autoscaler-node-group-max-size"
+	clusterNameLabel                        = "machine.openshift.io/cluster-name"
+	deprecatedClusterNameLabel              = "cluster.k8s.io/cluster-name"
 
 	cpuKey     = "machine.openshift.io/vCPU"
 	memoryKey  = "machine.openshift.io/memoryMb"
@@ -71,6 +73,9 @@ type normalizedProviderID string
 func minSize(annotations map[string]string) (int, error) {
 	val, found := annotations[nodeGroupMinSizeAnnotationKey]
 	if !found {
+		val, found = annotations[deprecatedNodeGroupMinSizeAnnotationKey]
+	}
+	if !found {
 		return 0, errMissingMinAnnotation
 	}
 	i, err := strconv.Atoi(val)
@@ -86,6 +91,9 @@ func minSize(annotations map[string]string) (int, error) {
 // value is not of type int.
 func maxSize(annotations map[string]string) (int, error) {
 	val, found := annotations[nodeGroupMaxSizeAnnotationKey]
+	if !found {
+		val, found = annotations[deprecatedNodeGroupMaxSizeAnnotationKey]
+	}
 	if !found {
 		return 0, errMissingMaxAnnotation
 	}
