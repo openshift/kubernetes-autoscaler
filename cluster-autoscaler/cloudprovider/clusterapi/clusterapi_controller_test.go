@@ -70,6 +70,7 @@ type testSpec struct {
 }
 
 const customCAPIGroup = "custom.x-k8s.io"
+const fifteenSecondDuration = time.Second * 15
 
 func mustCreateTestController(t *testing.T, testConfigs ...*testConfig) (*machineController, testControllerShutdownFunc) {
 	t.Helper()
@@ -93,7 +94,21 @@ func mustCreateTestController(t *testing.T, testConfigs ...*testConfig) (*machin
 	}
 
 	kubeclientSet := fakekube.NewSimpleClientset(nodeObjects...)
-	dynamicClientset := fakedynamic.NewSimpleDynamicClient(runtime.NewScheme(), machineObjects...)
+	dynamicClientset := fakedynamic.NewSimpleDynamicClientWithCustomListKinds(
+		runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{
+			{Group: "cluster.x-k8s.io", Version: "v1alpha3", Resource: "machinedeployments"}: "kindList",
+			{Group: "cluster.x-k8s.io", Version: "v1alpha3", Resource: "machines"}:           "kindList",
+			{Group: "cluster.x-k8s.io", Version: "v1alpha3", Resource: "machinesets"}:        "kindList",
+			{Group: "cluster.x-k8s.io", Version: "v1beta1", Resource: "machinedeployments"}:  "kindList",
+			{Group: "cluster.x-k8s.io", Version: "v1beta1", Resource: "machines"}:            "kindList",
+			{Group: "cluster.x-k8s.io", Version: "v1beta1", Resource: "machinesets"}:         "kindList",
+			{Group: "custom.x-k8s.io", Version: "v1beta1", Resource: "machinedeployments"}:   "kindList",
+			{Group: "custom.x-k8s.io", Version: "v1beta1", Resource: "machines"}:             "kindList",
+			{Group: "custom.x-k8s.io", Version: "v1beta1", Resource: "machinesets"}:          "kindList",
+		},
+		machineObjects...,
+	)
 	discoveryClient := &fakediscovery.FakeDiscovery{
 		Fake: &clientgotesting.Fake{
 			Resources: []*metav1.APIResourceList{
@@ -112,7 +127,7 @@ func mustCreateTestController(t *testing.T, testConfigs ...*testConfig) (*machin
 					},
 				},
 				{
-					GroupVersion: fmt.Sprintf("%s/v1beta1", defaultCAPIGroup),
+					GroupVersion: fmt.Sprintf("%s/v1alpha3", defaultCAPIGroup),
 					APIResources: []metav1.APIResource{
 						{
 							Name: resourceNameMachineDeployment,
@@ -151,7 +166,7 @@ func mustCreateTestController(t *testing.T, testConfigs ...*testConfig) (*machin
 
 		gvr := schema.GroupVersionResource{
 			Group:    action.GetResource().Group,
-			Version:  "v1beta1",
+			Version:  "v1alpha3",
 			Resource: resource,
 		}
 
@@ -292,7 +307,7 @@ func createTestConfigs(specs ...testSpec) []*testConfig {
 		config.machineSet = &unstructured.Unstructured{
 			Object: map[string]interface{}{
 				"kind":       machineSetKind,
-				"apiVersion": "machine.openshift.io/v1beta1",
+				"apiVersion": "cluster.x-k8s.io/v1alpha3",
 				"metadata": map[string]interface{}{
 					"name":      spec.machineSetName,
 					"namespace": spec.namespace,
@@ -321,7 +336,7 @@ func createTestConfigs(specs ...testSpec) []*testConfig {
 			config.machineDeployment = &unstructured.Unstructured{
 				Object: map[string]interface{}{
 					"kind":       machineDeploymentKind,
-					"apiVersion": "machine.openshift.io/v1beta1",
+					"apiVersion": "cluster.x-k8s.io/v1alpha3",
 					"metadata": map[string]interface{}{
 						"name":      spec.machineDeploymentName,
 						"namespace": spec.namespace,
@@ -388,7 +403,7 @@ func makeLinkedNodeAndMachine(i int, namespace, clusterName string, owner metav1
 	machine := &unstructured.Unstructured{
 		Object: map[string]interface{}{
 			"kind":       machineKind,
-			"apiVersion": "machine.openshift.io/v1beta1",
+			"apiVersion": "cluster.x-k8s.io/v1alpha3",
 			"metadata": map[string]interface{}{
 				"name":      fmt.Sprintf("%s-%s-machine-%d", namespace, owner.Name, i),
 				"namespace": namespace,
@@ -444,7 +459,7 @@ func createResource(client dynamic.Interface, informer informers.GenericInformer
 		return err
 	}
 
-	return wait.PollImmediateInfinite(time.Microsecond, func() (bool, error) {
+	return wait.PollImmediate(time.Microsecond, fifteenSecondDuration, func() (bool, error) {
 		_, err := informer.Lister().ByNamespace(resource.GetNamespace()).Get(resource.GetName())
 		if err != nil {
 			if apierrors.IsNotFound(err) {
@@ -463,7 +478,7 @@ func updateResource(client dynamic.Interface, informer informers.GenericInformer
 		return err
 	}
 
-	return wait.PollImmediateInfinite(time.Microsecond, func() (bool, error) {
+	return wait.PollImmediate(time.Microsecond, fifteenSecondDuration, func() (bool, error) {
 		result, err := informer.Lister().ByNamespace(resource.GetNamespace()).Get(resource.GetName())
 		if err != nil {
 			return false, err
@@ -477,7 +492,7 @@ func deleteResource(client dynamic.Interface, informer informers.GenericInformer
 		return err
 	}
 
-	return wait.PollImmediateInfinite(time.Microsecond, func() (bool, error) {
+	return wait.PollImmediate(time.Microsecond, fifteenSecondDuration, func() (bool, error) {
 		_, err := informer.Lister().ByNamespace(resource.GetNamespace()).Get(resource.GetName())
 		if err != nil && apierrors.IsNotFound(err) {
 			return true, nil
@@ -571,7 +586,6 @@ func TestControllerFindMachine(t *testing.T) {
 				nodeGroupMinSizeAnnotationKey: "1",
 				nodeGroupMaxSizeAnnotationKey: "10",
 			})
-
 			if tc.name == "" {
 				tc.name = testConfig.machines[0].GetName()
 			}
@@ -1066,10 +1080,6 @@ func TestControllerNodeGroups(t *testing.T) {
 	if _, err := controller.nodeGroups(); err == nil {
 		t.Fatalf("expected an error")
 	}
-	if err := deleteTestConfigs(t, controller, machineSetConfigs...); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	assertNodegroupLen(t, controller, 0)
 
 	// Test #8: machinedeployment with bad scaling bounds results in an error and no nodegroups
 	machineDeploymentConfigs = createMachineDeploymentTestConfigs(namespace, clusterName, RandomString(6), 2, 1, annotations)
@@ -1424,7 +1434,7 @@ func TestGetAPIGroupPreferredVersion(t *testing.T) {
 		{
 			description:      "find version for default API group",
 			APIGroup:         defaultCAPIGroup,
-			preferredVersion: "v1beta1",
+			preferredVersion: "v1alpha3",
 			error:            false,
 		},
 		{
@@ -1448,7 +1458,7 @@ func TestGetAPIGroupPreferredVersion(t *testing.T) {
 					GroupVersion: fmt.Sprintf("%s/v1beta1", customCAPIGroup),
 				},
 				{
-					GroupVersion: fmt.Sprintf("%s/v1beta1", defaultCAPIGroup),
+					GroupVersion: fmt.Sprintf("%s/v1alpha3", defaultCAPIGroup),
 				},
 			},
 		},
@@ -1477,14 +1487,14 @@ func TestGroupVersionHasResource(t *testing.T) {
 		{
 			description:  "true when it finds resource",
 			resourceName: resourceNameMachineDeployment,
-			APIGroup:     fmt.Sprintf("%s/v1beta1", defaultCAPIGroup),
+			APIGroup:     fmt.Sprintf("%s/v1alpha3", defaultCAPIGroup),
 			expected:     true,
 			error:        false,
 		},
 		{
 			description:  "false when it does not find resource",
 			resourceName: "resourceDoesNotExist",
-			APIGroup:     fmt.Sprintf("%s/v1beta1", defaultCAPIGroup),
+			APIGroup:     fmt.Sprintf("%s/v1alpha3", defaultCAPIGroup),
 			expected:     false,
 			error:        false,
 		},
@@ -1501,7 +1511,7 @@ func TestGroupVersionHasResource(t *testing.T) {
 		Fake: &clientgotesting.Fake{
 			Resources: []*metav1.APIResourceList{
 				{
-					GroupVersion: fmt.Sprintf("%s/v1beta1", defaultCAPIGroup),
+					GroupVersion: fmt.Sprintf("%s/v1alpha3", defaultCAPIGroup),
 					APIResources: []metav1.APIResource{
 						{
 							Name: resourceNameMachineDeployment,

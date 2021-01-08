@@ -31,6 +31,7 @@ import (
 
 	"github.com/Azure/azure-sdk-for-go/services/resources/mgmt/2017-05-10/resources"
 	"github.com/Azure/go-autorest/autorest/azure"
+	"github.com/Azure/go-autorest/autorest/to"
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
 )
@@ -40,14 +41,29 @@ func newTestAzureManager(t *testing.T) *AzureManager {
 		env:                  azure.PublicCloud,
 		explicitlyConfigured: make(map[string]bool),
 		config: &Config{
-			ResourceGroup:       "test",
+			ResourceGroup:       "rg",
 			VMType:              vmTypeVMSS,
 			MaxDeploymentsCount: 2,
+			Deployment:          "deployment",
 		},
 
 		azClient: &azClient{
 			deploymentsClient: &DeploymentsClientMock{
-				FakeStore: make(map[string]resources.DeploymentExtended),
+				FakeStore: map[string]resources.DeploymentExtended{
+					"deployment": {
+						Name: to.StringPtr("deployment"),
+						Properties: &resources.DeploymentPropertiesExtended{Template: map[string]interface{}{
+							resourcesFieldName: []interface{}{
+								map[string]interface{}{
+									typeFieldName: nsgResourceType,
+								},
+								map[string]interface{}{
+									typeFieldName: rtResourceType,
+								},
+							},
+						}},
+					},
+				},
 			},
 		},
 	}
@@ -206,6 +222,13 @@ func TestBuildAzure(t *testing.T) {
 				CloudProviderRateLimitQPSWrite:    1,
 			},
 			VirtualMachineScaleSetRateLimit: &azclients.RateLimitConfig{
+				CloudProviderRateLimit:            false,
+				CloudProviderRateLimitBucket:      5,
+				CloudProviderRateLimitBucketWrite: 5,
+				CloudProviderRateLimitQPS:         1,
+				CloudProviderRateLimitQPSWrite:    1,
+			},
+			KubernetesServiceRateLimit: &azclients.RateLimitConfig{
 				CloudProviderRateLimit:            false,
 				CloudProviderRateLimitBucket:      5,
 				CloudProviderRateLimitBucketWrite: 5,

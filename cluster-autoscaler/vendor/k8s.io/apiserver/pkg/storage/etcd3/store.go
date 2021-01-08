@@ -38,7 +38,6 @@ import (
 	"k8s.io/apimachinery/pkg/conversion"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/watch"
-	genericapirequest "k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/features"
 	"k8s.io/apiserver/pkg/storage"
 	"k8s.io/apiserver/pkg/storage/etcd3/metrics"
@@ -84,11 +83,11 @@ type objState struct {
 }
 
 // New returns an etcd3 implementation of storage.Interface.
-func New(c *clientv3.Client, codec runtime.Codec, prefix string, transformer value.Transformer, pagingEnabled bool) storage.Interface {
-	return newStore(c, pagingEnabled, codec, prefix, transformer)
+func New(c *clientv3.Client, codec runtime.Codec, newFunc func() runtime.Object, prefix string, transformer value.Transformer, pagingEnabled bool) storage.Interface {
+	return newStore(c, newFunc, pagingEnabled, codec, prefix, transformer)
 }
 
-func newStore(c *clientv3.Client, pagingEnabled bool, codec runtime.Codec, prefix string, transformer value.Transformer) *store {
+func newStore(c *clientv3.Client, newFunc func() runtime.Object, pagingEnabled bool, codec runtime.Codec, prefix string, transformer value.Transformer) *store {
 	versioner := APIObjectVersioner{}
 	result := &store{
 		client:        c,
@@ -100,7 +99,7 @@ func newStore(c *clientv3.Client, pagingEnabled bool, codec runtime.Codec, prefi
 		// no-op for default prefix of '/registry'.
 		// keeps compatibility with etcd2 impl for custom prefixes that don't start with '/'
 		pathPrefix:   path.Join("/", prefix),
-		watcher:      newWatcher(c, codec, versioner, transformer),
+		watcher:      newWatcher(c, codec, newFunc, versioner, transformer),
 		leaseManager: newDefaultLeaseManager(c),
 	}
 	return result
@@ -239,8 +238,8 @@ func (s *store) conditionalDelete(ctx context.Context, key string, out runtime.O
 // GuaranteedUpdate implements storage.Interface.GuaranteedUpdate.
 func (s *store) GuaranteedUpdate(
 	ctx context.Context, key string, out runtime.Object, ignoreNotFound bool,
-	preconditions *storage.Preconditions, tryUpdate storage.UpdateFunc, suggestion ...runtime.Object) error {
-	ctx, trace := genericapirequest.WithTrace(ctx, "GuaranteedUpdate etcd3", utiltrace.Field{"type", getTypeName(out)})
+	preconditions *storage.Preconditions, tryUpdate storage.UpdateFunc, suggestion runtime.Object) error {
+	trace := utiltrace.New("GuaranteedUpdate etcd3", utiltrace.Field{"type", getTypeName(out)})
 	defer trace.LogIfLong(500 * time.Millisecond)
 
 	v, err := conversion.EnforcePtr(out)
@@ -261,8 +260,8 @@ func (s *store) GuaranteedUpdate(
 
 	var origState *objState
 	var mustCheckData bool
-	if len(suggestion) == 1 && suggestion[0] != nil {
-		origState, err = s.getStateFromObject(suggestion[0])
+	if suggestion != nil {
+		origState, err = s.getStateFromObject(suggestion)
 		if err != nil {
 			return err
 		}
@@ -383,7 +382,7 @@ func (s *store) GetToList(ctx context.Context, key string, listOpts storage.List
 	resourceVersion := listOpts.ResourceVersion
 	match := listOpts.ResourceVersionMatch
 	pred := listOpts.Predicate
-	ctx, trace := genericapirequest.WithTrace(ctx, "GetToList etcd3",
+	trace := utiltrace.New("GetToList etcd3",
 		utiltrace.Field{"key", key},
 		utiltrace.Field{"resourceVersion", resourceVersion},
 		utiltrace.Field{"resourceVersionMatch", match},
@@ -453,6 +452,14 @@ func getNewItemFunc(listObj runtime.Object, v reflect.Value) func() runtime.Obje
 
 func (s *store) Count(key string) (int64, error) {
 	key = path.Join(s.pathPrefix, key)
+
+	// We need to make sure the key ended with "/" so that we only get children "directories".
+	// e.g. if we have key "/a", "/a/b", "/ab", getting keys with prefix "/a" will return all three,
+	// while with prefix "/a/" will return only "/a/b" which is the correct answer.
+	if !strings.HasSuffix(key, "/") {
+		key += "/"
+	}
+
 	startTime := time.Now()
 	getResp, err := s.client.KV.Get(context.Background(), key, clientv3.WithRange(clientv3.GetPrefixRangeEnd(key)), clientv3.WithCountOnly())
 	metrics.RecordEtcdRequestLatency("listWithCount", key, startTime)
@@ -527,7 +534,7 @@ func (s *store) List(ctx context.Context, key string, opts storage.ListOptions, 
 	resourceVersion := opts.ResourceVersion
 	match := opts.ResourceVersionMatch
 	pred := opts.Predicate
-	ctx, trace := genericapirequest.WithTrace(ctx, "List etcd3",
+	trace := utiltrace.New("List etcd3",
 		utiltrace.Field{"key", key},
 		utiltrace.Field{"resourceVersion", resourceVersion},
 		utiltrace.Field{"resourceVersionMatch", match},
@@ -573,7 +580,7 @@ func (s *store) List(ctx context.Context, key string, opts storage.ListOptions, 
 		fromRV = &parsedRV
 	}
 
-	var returnedRV, continueRV int64
+	var returnedRV, continueRV, withRev int64
 	var continueKey string
 	switch {
 	case s.pagingEnabled && len(pred.Continue) > 0:
@@ -594,7 +601,7 @@ func (s *store) List(ctx context.Context, key string, opts storage.ListOptions, 
 		// continueRV==0 is invalid.
 		// If continueRV < 0, the request is for the latest resource version.
 		if continueRV > 0 {
-			options = append(options, clientv3.WithRev(continueRV))
+			withRev = continueRV
 			returnedRV = continueRV
 		}
 	case s.pagingEnabled && pred.Limit > 0:
@@ -605,11 +612,11 @@ func (s *store) List(ctx context.Context, key string, opts storage.ListOptions, 
 				// and returnedRV is then set to the revision we get from the etcd response.
 			case metav1.ResourceVersionMatchExact:
 				returnedRV = int64(*fromRV)
-				options = append(options, clientv3.WithRev(returnedRV))
+				withRev = returnedRV
 			case "": // legacy case
 				if *fromRV > 0 {
 					returnedRV = int64(*fromRV)
-					options = append(options, clientv3.WithRev(returnedRV))
+					withRev = returnedRV
 				}
 			default:
 				return fmt.Errorf("unknown ResourceVersionMatch value: %v", match)
@@ -626,7 +633,7 @@ func (s *store) List(ctx context.Context, key string, opts storage.ListOptions, 
 				// and returnedRV is then set to the revision we get from the etcd response.
 			case metav1.ResourceVersionMatchExact:
 				returnedRV = int64(*fromRV)
-				options = append(options, clientv3.WithRev(returnedRV))
+				withRev = returnedRV
 			case "": // legacy case
 			default:
 				return fmt.Errorf("unknown ResourceVersionMatch value: %v", match)
@@ -634,6 +641,9 @@ func (s *store) List(ctx context.Context, key string, opts storage.ListOptions, 
 		}
 
 		options = append(options, clientv3.WithPrefix())
+	}
+	if withRev != 0 {
+		options = append(options, clientv3.WithRev(withRev))
 	}
 
 	// loop until we have filled the requested limit from etcd or there are no more results
@@ -696,6 +706,10 @@ func (s *store) List(ctx context.Context, key string, opts storage.ListOptions, 
 			break
 		}
 		key = string(lastKey) + "\x00"
+		if withRev == 0 {
+			withRev = returnedRV
+			options = append(options, clientv3.WithRev(withRev))
+		}
 	}
 
 	// instruct the client to begin querying from immediately after the last key we returned
@@ -770,7 +784,7 @@ func (s *store) watch(ctx context.Context, key string, opts storage.ListOptions,
 		return nil, err
 	}
 	key = path.Join(s.pathPrefix, key)
-	return s.watcher.Watch(ctx, key, int64(rev), recursive, opts.Predicate)
+	return s.watcher.Watch(ctx, key, int64(rev), recursive, opts.ProgressNotify, opts.Predicate)
 }
 
 func (s *store) getState(getResp *clientv3.GetResponse, key string, v reflect.Value, ignoreNotFound bool) (*objState, error) {

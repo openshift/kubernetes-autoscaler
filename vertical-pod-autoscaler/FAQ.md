@@ -77,8 +77,8 @@ From the above config following part defines the webhook service:
 
 ```yaml
 Service:
-      Name:        vpa-webhook
-      Namespace:   kube-system
+  Name:        vpa-webhook
+  Namespace:   kube-system
 ```
 
 Check that the service actually exists:
@@ -139,7 +139,7 @@ By default, the [`--min-replicas`](pkg/updater/main.go#L44) flag on the updater 
 spec:
   containers:
   - name: updater
-  - args:
+    args:
     - "--min-replicas=1"
 ```
 

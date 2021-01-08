@@ -86,35 +86,12 @@ func ValidateDurabilityType(value interface{}) error {
 	return nil
 }
 
-type HealInfoCheck string
-
-const (
-	HealCheckUnknown HealInfoCheck = ""
-	HealCheckEnable  HealInfoCheck = "enable"
-	HealCheckDisable HealInfoCheck = "disable"
-)
-
-func ValidateHealCheck(value interface{}) error {
-	h, _ := value.(HealInfoCheck)
-	err := validation.Validate(h, validation.In(HealCheckUnknown, HealCheckEnable, HealCheckDisable))
-	if err != nil {
-		return fmt.Errorf("%v is not valid heal info check", h)
-	}
-	return nil
-}
-
 // Common
 type StateRequest struct {
-	State     EntryState    `json:"state"`
-	HealCheck HealInfoCheck `json:"healcheck"`
+	State EntryState `json:"state"`
 }
 
 func (statereq StateRequest) Validate() error {
-	if err := validation.ValidateStruct(&statereq,
-		validation.Field(&statereq.HealCheck, validation.By(ValidateHealCheck))); err != nil {
-		return err
-	}
-
 	return validation.ValidateStruct(&statereq,
 		validation.Field(&statereq.State, validation.Required, validation.By(ValidateEntryState)),
 	)
@@ -445,7 +422,6 @@ type BlockVolumeInfo struct {
 	} `json:"blockvolume"`
 	Cluster            string `json:"cluster,omitempty"`
 	BlockHostingVolume string `json:"blockhostingvolume,omitempty"`
-	UsableSize         int    `json:"usablesize,omitempty"`
 }
 
 type BlockVolumeInfoResponse struct {
@@ -454,16 +430,6 @@ type BlockVolumeInfoResponse struct {
 
 type BlockVolumeListResponse struct {
 	BlockVolumes []string `json:"blockvolumes"`
-}
-
-type BlockVolumeExpandRequest struct {
-	Size int `json:"new_size"`
-}
-
-func (blockVolExpandReq BlockVolumeExpandRequest) Validate() error {
-	return validation.ValidateStruct(&blockVolExpandReq,
-		validation.Field(&blockVolExpandReq.Size, validation.Required, validation.Min(1)),
-	)
 }
 
 type LogLevelInfo struct {
@@ -588,7 +554,6 @@ func NewBlockVolumeInfoResponse() *BlockVolumeInfoResponse {
 func (v *BlockVolumeInfoResponse) String() string {
 	s := fmt.Sprintf("Name: %v\n"+
 		"Size: %v\n"+
-		"UsableSize: %v\n"+
 		"Volume Id: %v\n"+
 		"Cluster Id: %v\n"+
 		"Hosts: %v\n"+
@@ -600,7 +565,6 @@ func (v *BlockVolumeInfoResponse) String() string {
 		"Block Hosting Volume: %v\n",
 		v.Name,
 		v.Size,
-		v.UsableSize,
 		v.Id,
 		v.Cluster,
 		v.BlockVolume.Hosts,
@@ -715,14 +679,4 @@ func ValidateIds(v interface{}) error {
 		}
 	}
 	return nil
-}
-
-// reserving a type for future options for brick evict
-type BrickEvictOptions struct {
-	HealCheck HealInfoCheck `json:"healcheck"`
-}
-
-func (brickops BrickEvictOptions) Validate() error {
-	return validation.ValidateStruct(&brickops,
-		validation.Field(&brickops.HealCheck, validation.By(ValidateHealCheck)))
 }

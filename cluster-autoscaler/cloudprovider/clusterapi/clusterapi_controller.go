@@ -44,7 +44,7 @@ import (
 const (
 	machineProviderIDIndex = "machineProviderIDIndex"
 	nodeProviderIDIndex    = "nodeProviderIDIndex"
-	defaultCAPIGroup       = "machine.openshift.io"
+	defaultCAPIGroup       = "cluster.x-k8s.io"
 	// CAPIGroupEnvVar contains the environment variable name which allows overriding defaultCAPIGroup.
 	CAPIGroupEnvVar               = "CAPI_GROUP"
 	resourceNameMachine           = "machines"
@@ -453,13 +453,13 @@ func (c *machineController) scalableResourceProviderIDs(scalableResource *unstru
 
 		klog.Warningf("Machine %q has no providerID", machine.GetName())
 
-		errorMessage, found, err := unstructured.NestedString(machine.Object, "status", "errorMessage")
+		failureMessage, found, err := unstructured.NestedString(machine.UnstructuredContent(), "status", "failureMessage")
 		if err != nil {
 			return nil, err
 		}
 
 		if found {
-			klog.V(4).Infof("Status.ErrorMessage of machine %q is %q", machine.GetName(), errorMessage)
+			klog.V(4).Infof("Status.FailureMessage of machine %q is %q", machine.GetName(), failureMessage)
 			// Provide a fake ID to allow the autoscaler to track machines that will never
 			// become nodes and mark the nodegroup unhealthy after maxNodeProvisionTime.
 			// Fake ID needs to be recognised later and converted into a machine key.

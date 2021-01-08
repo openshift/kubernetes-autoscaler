@@ -7,5 +7,4 @@ require (
 )
 
 replace (
-  github.com/heketi/heketi => github.com/heketi/heketi v10.1.0+incompatible
 )

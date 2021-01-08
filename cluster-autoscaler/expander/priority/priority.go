@@ -31,7 +31,7 @@ import (
 	v1lister "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/tools/record"
 	klog "k8s.io/klog/v2"
-	schedulerframework "k8s.io/kubernetes/pkg/scheduler/framework/v1alpha1"
+	schedulerframework "k8s.io/kubernetes/pkg/scheduler/framework"
 )
 
 const (
@@ -148,7 +148,6 @@ func (p *priority) BestOption(expansionOptions []expander.Option, nodeInfo map[s
 			}
 			best = append(best, option)
 			found = true
-			break
 		}
 		if !found {
 			msg := fmt.Sprintf("Priority expander: node group %s not found in priority expander configuration. "+
