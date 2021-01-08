@@ -48,6 +48,9 @@ by specifying Auto Scaling Group ARNs in the `Resource` list of the policy. More
 information can be found
 [here](https://docs.aws.amazon.com/autoscaling/latest/userguide/control-access-using-iam.html#policy-auto-scaling-resources).
 
+### Using OIDC Federated Authentication
+OIDC federated authentication allows your service to assume an IAM role and interact with AWS services without having to store credentials as environment variables. For an example of how to use AWS IAM OIDC with the Cluster Autoscaler please see [here](CA_with_AWS_IAM_OIDC.md).
+
 ### Using AWS Credentials
 
 **NOTE** The following is not recommended for Kubernetes clusters running on
@@ -327,7 +330,7 @@ To refresh static list, please run `go run ec2_instance_types/gen.go` under
   between AZs, and possibly terminate instances. If your applications could be
   impacted from sudden termination, you can either suspend the AZRebalance
   feature, or use a tool for automatic draining upon ASG scale-in such as the
-  [k8s-node-drainer]https://github.com/aws-samples/amazon-k8s-node-drainer. The
+  [k8s-node-drainer](https://github.com/aws-samples/amazon-k8s-node-drainer). The
   [AWS Node Termination
   Handler](https://github.com/aws/aws-node-termination-handler/issues/95) will
   also support this use-case in the future.

@@ -78,8 +78,9 @@ const (
 	k8sWindowsVMAgentOrchestratorNameIndex = 2
 	k8sWindowsVMAgentPoolInfoIndex         = 3
 
-	nodeLabelTagName = "k8s.io_cluster-autoscaler_node-template_label_"
-	nodeTaintTagName = "k8s.io_cluster-autoscaler_node-template_taint_"
+	nodeLabelTagName     = "k8s.io_cluster-autoscaler_node-template_label_"
+	nodeTaintTagName     = "k8s.io_cluster-autoscaler_node-template_taint_"
+	nodeResourcesTagName = "k8s.io_cluster-autoscaler_node-template_resources_"
 )
 
 var (
@@ -144,11 +145,12 @@ func (util *AzUtil) DeleteVirtualMachine(rg string, name string) error {
 
 	osDiskName := vm.VirtualMachineProperties.StorageProfile.OsDisk.Name
 	var nicName string
+	var err error
 	nicID := (*vm.VirtualMachineProperties.NetworkProfile.NetworkInterfaces)[0].ID
 	if nicID == nil {
 		klog.Warningf("NIC ID is not set for VM (%s/%s)", rg, name)
 	} else {
-		nicName, err := resourceName(*nicID)
+		nicName, err = resourceName(*nicID)
 		if err != nil {
 			return err
 		}
@@ -494,74 +496,6 @@ func GetVMNameIndex(osType compute.OperatingSystemTypes, vmName string) (int, er
 	return agentIndex, nil
 }
 
-func matchDiscoveryConfig(labels map[string]*string, configs []labelAutoDiscoveryConfig) bool {
-	if len(configs) == 0 {
-		return false
-	}
-
-	for _, c := range configs {
-		if len(c.Selector) == 0 {
-			return false
-		}
-
-		for k, v := range c.Selector {
-			value, ok := labels[k]
-			if !ok {
-				return false
-			}
-
-			if len(v) > 0 {
-				if value == nil || *value != v {
-					return false
-				}
-			}
-		}
-	}
-
-	return true
-}
-
-func validateConfig(cfg *Config) error {
-	if cfg.ResourceGroup == "" {
-		return fmt.Errorf("resource group not set")
-	}
-
-	if cfg.VMType == vmTypeStandard {
-		if cfg.Deployment == "" {
-			return fmt.Errorf("deployment not set")
-		}
-
-		if len(cfg.DeploymentParameters) == 0 {
-			return fmt.Errorf("deploymentParameters not set")
-		}
-	}
-
-	if cfg.VMType == vmTypeAKS {
-		// Cluster name is a mandatory param to proceed.
-		if cfg.ClusterName == "" {
-			return fmt.Errorf("cluster name not set for type %+v", cfg.VMType)
-		}
-	}
-
-	if cfg.SubscriptionID == "" {
-		return fmt.Errorf("subscription ID not set")
-	}
-
-	if cfg.UseManagedIdentityExtension {
-		return nil
-	}
-
-	if cfg.TenantID == "" {
-		return fmt.Errorf("tenant ID not set")
-	}
-
-	if cfg.AADClientID == "" {
-		return fmt.Errorf("ARM Client ID not set")
-	}
-
-	return nil
-}
-
 // getLastSegment gets the last segment (splitting by '/'.)
 func getLastSegment(ID string) (string, error) {
 	parts := strings.Split(strings.TrimSpace(ID), "/")
@@ -659,11 +593,16 @@ func convertResourceGroupNameToLower(resourceID string) (string, error) {
 	return strings.Replace(resourceID, resourceGroup, strings.ToLower(resourceGroup), 1), nil
 }
 
-// isAzureRequestsThrottled returns true when the err is http.StatusTooManyRequests (429).
+// isAzureRequestsThrottled returns true when the err is http.StatusTooManyRequests (429),
+// and when err shows the requests was not executed due to an ongoing throttling period.
 func isAzureRequestsThrottled(rerr *retry.Error) bool {
 	klog.V(6).Infof("isAzureRequestsThrottled: starts for error %v", rerr)
 	if rerr == nil {
 		return false
+	}
+
+	if rerr.HTTPStatusCode == 0 && rerr.RetryAfter.After(time.Now()) {
+		return true
 	}
 
 	return rerr.HTTPStatusCode == http.StatusTooManyRequests

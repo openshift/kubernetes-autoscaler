@@ -26,24 +26,23 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	gpuapis "k8s.io/autoscaler/cluster-autoscaler/utils/gpu"
 	kubeletapis "k8s.io/kubernetes/pkg/kubelet/apis"
-	schedulerframework "k8s.io/kubernetes/pkg/scheduler/framework/v1alpha1"
+	schedulerframework "k8s.io/kubernetes/pkg/scheduler/framework"
 
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 )
 
 const (
-	machineDeleteAnnotationKey = "machine.openshift.io/cluster-api-delete-machine"
-	machineAnnotationKey       = "machine.openshift.io/machine"
-	debugFormat                = "%s (min: %d, max: %d, replicas: %d)"
-
-	// This default for the maximum number of pods comes from the machine-config-operator
-	// see https://github.com/openshift/machine-config-operator/blob/2f1bd6d99131fa4471ed95543a51dec3d5922b2b/templates/worker/01-worker-kubelet/_base/files/kubelet.yaml#L19
-	defaultMaxPods = 250
-
 	// deprecatedMachineDeleteAnnotationKey should not be removed until minimum cluster-api support is v1alpha3
 	deprecatedMachineDeleteAnnotationKey = "cluster.k8s.io/delete-machine"
 	// TODO: determine what currently relies on deprecatedMachineAnnotationKey to determine when it can be removed
 	deprecatedMachineAnnotationKey = "cluster.k8s.io/machine"
+	machineDeleteAnnotationKey     = "machine.openshift.io/cluster-api-delete-machine"
+	machineAnnotationKey           = "machine.openshift.io/machine"
+	debugFormat                    = "%s (min: %d, max: %d, replicas: %d)"
+
+	// This default for the maximum number of pods comes from the machine-config-operator
+	// see https://github.com/openshift/machine-config-operator/blob/2f1bd6d99131fa4471ed95543a51dec3d5922b2b/templates/worker/01-worker-kubelet/_base/files/kubelet.yaml#L19
+	defaultMaxPods = 250
 )
 
 type nodegroup struct {

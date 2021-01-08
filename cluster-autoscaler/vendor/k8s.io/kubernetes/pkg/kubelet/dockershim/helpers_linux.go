@@ -34,6 +34,7 @@ import (
 	runtimeapi "k8s.io/cri-api/pkg/apis/runtime/v1alpha2"
 )
 
+// DefaultMemorySwap always returns 0 for no memory swap in a sandbox
 func DefaultMemorySwap() int64 {
 	return 0
 }
@@ -46,6 +47,12 @@ func (ds *dockerService) getSecurityOpts(seccompProfile string, separator rune) 
 	}
 
 	return seccompSecurityOpts, nil
+}
+
+func (ds *dockerService) getSandBoxSecurityOpts(separator rune) []string {
+	// run sandbox with no-new-privileges and using runtime/default
+	// sending no "seccomp=" means docker will use default profile
+	return []string{"no-new-privileges"}
 }
 
 func getSeccompDockerOpts(seccompProfile string) ([]dockerOpt, error) {

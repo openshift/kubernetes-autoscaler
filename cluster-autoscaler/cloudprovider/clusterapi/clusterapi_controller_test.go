@@ -70,8 +70,17 @@ type testSpec struct {
 }
 
 const customCAPIGroup = "custom.x-k8s.io"
+const fifteenSecondDuration = time.Second * 15
 
 func mustCreateTestController(t *testing.T, testConfigs ...*testConfig) (*machineController, testControllerShutdownFunc) {
+	// we need to set the environment variable for the CAPI Group to represent the OpenShift specific value
+	// UNLESS, the specific test has already set it, in which case we should ignore.
+	if _, found := os.LookupEnv(CAPIGroupEnvVar); !found {
+		if err := os.Setenv(CAPIGroupEnvVar, "machine.openshift.io"); err != nil {
+			t.Fatalf("failed to set CAPI_GROUP environment variable: %v", err)
+		}
+	}
+
 	t.Helper()
 
 	nodeObjects := make([]runtime.Object, 0)
@@ -93,10 +102,41 @@ func mustCreateTestController(t *testing.T, testConfigs ...*testConfig) (*machin
 	}
 
 	kubeclientSet := fakekube.NewSimpleClientset(nodeObjects...)
-	dynamicClientset := fakedynamic.NewSimpleDynamicClient(runtime.NewScheme(), machineObjects...)
+	dynamicClientset := fakedynamic.NewSimpleDynamicClientWithCustomListKinds(
+		runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{
+			{Group: "machine.openshift.io", Version: "v1beta1", Resource: "machinedeployments"}: "kindList",
+			{Group: "machine.openshift.io", Version: "v1beta1", Resource: "machines"}:           "kindList",
+			{Group: "machine.openshift.io", Version: "v1beta1", Resource: "machinesets"}:        "kindList",
+			{Group: "cluster.x-k8s.io", Version: "v1alpha3", Resource: "machinedeployments"}:    "kindList",
+			{Group: "cluster.x-k8s.io", Version: "v1alpha3", Resource: "machines"}:              "kindList",
+			{Group: "cluster.x-k8s.io", Version: "v1alpha3", Resource: "machinesets"}:           "kindList",
+			{Group: "cluster.x-k8s.io", Version: "v1beta1", Resource: "machinedeployments"}:     "kindList",
+			{Group: "cluster.x-k8s.io", Version: "v1beta1", Resource: "machines"}:               "kindList",
+			{Group: "cluster.x-k8s.io", Version: "v1beta1", Resource: "machinesets"}:            "kindList",
+			{Group: "custom.x-k8s.io", Version: "v1beta1", Resource: "machinedeployments"}:      "kindList",
+			{Group: "custom.x-k8s.io", Version: "v1beta1", Resource: "machines"}:                "kindList",
+			{Group: "custom.x-k8s.io", Version: "v1beta1", Resource: "machinesets"}:             "kindList",
+		},
+		machineObjects...,
+	)
 	discoveryClient := &fakediscovery.FakeDiscovery{
 		Fake: &clientgotesting.Fake{
 			Resources: []*metav1.APIResourceList{
+				{
+					GroupVersion: fmt.Sprintf("%s/v1beta1", "machine.openshift.io"),
+					APIResources: []metav1.APIResource{
+						{
+							Name: resourceNameMachineDeployment,
+						},
+						{
+							Name: resourceNameMachineSet,
+						},
+						{
+							Name: resourceNameMachine,
+						},
+					},
+				},
 				{
 					GroupVersion: fmt.Sprintf("%s/v1beta1", customCAPIGroup),
 					APIResources: []metav1.APIResource{
@@ -444,7 +484,7 @@ func createResource(client dynamic.Interface, informer informers.GenericInformer
 		return err
 	}
 
-	return wait.PollImmediateInfinite(time.Microsecond, func() (bool, error) {
+	return wait.PollImmediate(time.Microsecond, fifteenSecondDuration, func() (bool, error) {
 		_, err := informer.Lister().ByNamespace(resource.GetNamespace()).Get(resource.GetName())
 		if err != nil {
 			if apierrors.IsNotFound(err) {
@@ -463,7 +503,7 @@ func updateResource(client dynamic.Interface, informer informers.GenericInformer
 		return err
 	}
 
-	return wait.PollImmediateInfinite(time.Microsecond, func() (bool, error) {
+	return wait.PollImmediate(time.Microsecond, fifteenSecondDuration, func() (bool, error) {
 		result, err := informer.Lister().ByNamespace(resource.GetNamespace()).Get(resource.GetName())
 		if err != nil {
 			return false, err
@@ -477,7 +517,7 @@ func deleteResource(client dynamic.Interface, informer informers.GenericInformer
 		return err
 	}
 
-	return wait.PollImmediateInfinite(time.Microsecond, func() (bool, error) {
+	return wait.PollImmediate(time.Microsecond, fifteenSecondDuration, func() (bool, error) {
 		_, err := informer.Lister().ByNamespace(resource.GetNamespace()).Get(resource.GetName())
 		if err != nil && apierrors.IsNotFound(err) {
 			return true, nil
@@ -1066,10 +1106,6 @@ func TestControllerNodeGroups(t *testing.T) {
 	if _, err := controller.nodeGroups(); err == nil {
 		t.Fatalf("expected an error")
 	}
-	if err := deleteTestConfigs(t, controller, machineSetConfigs...); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	assertNodegroupLen(t, controller, 0)
 
 	// Test #8: machinedeployment with bad scaling bounds results in an error and no nodegroups
 	machineDeploymentConfigs = createMachineDeploymentTestConfigs(namespace, clusterName, RandomString(6), 2, 1, annotations)

@@ -44,7 +44,7 @@ import (
 const (
 	machineProviderIDIndex = "machineProviderIDIndex"
 	nodeProviderIDIndex    = "nodeProviderIDIndex"
-	defaultCAPIGroup       = "machine.openshift.io"
+	defaultCAPIGroup       = "cluster.x-k8s.io"
 	// CAPIGroupEnvVar contains the environment variable name which allows overriding defaultCAPIGroup.
 	CAPIGroupEnvVar               = "CAPI_GROUP"
 	resourceNameMachine           = "machines"

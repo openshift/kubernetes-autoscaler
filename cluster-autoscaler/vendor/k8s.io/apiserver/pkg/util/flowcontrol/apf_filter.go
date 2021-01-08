@@ -30,23 +30,30 @@ import (
 	kubeinformers "k8s.io/client-go/informers"
 	"k8s.io/klog/v2"
 
-	fctypesv1a1 "k8s.io/api/flowcontrol/v1alpha1"
-	fcclientv1a1 "k8s.io/client-go/kubernetes/typed/flowcontrol/v1alpha1"
+	flowcontrol "k8s.io/api/flowcontrol/v1beta1"
+	flowcontrolclient "k8s.io/client-go/kubernetes/typed/flowcontrol/v1beta1"
 )
 
 // Interface defines how the API Priority and Fairness filter interacts with the underlying system.
 type Interface interface {
 	// Handle takes care of queuing and dispatching a request
 	// characterized by the given digest.  The given `noteFn` will be
-	// invoked with the results of request classification.  If Handle
-	// decides that the request should be executed then `execute()`
-	// will be invoked once to execute the request; otherwise
-	// `execute()` will not be invoked.
+	// invoked with the results of request classification.  If the
+	// request is queued then `queueNoteFn` will be called twice,
+	// first with `true` and then with `false`; otherwise
+	// `queueNoteFn` will not be called at all.  If Handle decides
+	// that the request should be executed then `execute()` will be
+	// invoked once to execute the request; otherwise `execute()` will
+	// not be invoked.
 	Handle(ctx context.Context,
 		requestDigest RequestDigest,
-		noteFn func(fs *fctypesv1a1.FlowSchema, pl *fctypesv1a1.PriorityLevelConfiguration),
+		noteFn func(fs *flowcontrol.FlowSchema, pl *flowcontrol.PriorityLevelConfiguration),
+		queueNoteFn fq.QueueNoteFn,
 		execFn func(),
 	)
+
+	// MaintainObservations is a helper for maintaining statistics.
+	MaintainObservations(stopCh <-chan struct{})
 
 	// Run monitors config objects from the main apiservers and causes
 	// any needed changes to local behavior.  This method ceases
@@ -62,7 +69,7 @@ type Interface interface {
 // New creates a new instance to implement API priority and fairness
 func New(
 	informerFactory kubeinformers.SharedInformerFactory,
-	flowcontrolClient fcclientv1a1.FlowcontrolV1alpha1Interface,
+	flowcontrolClient flowcontrolclient.FlowcontrolV1beta1Interface,
 	serverConcurrencyLimit int,
 	requestWaitLimit time.Duration,
 ) Interface {
@@ -72,6 +79,7 @@ func New(
 		flowcontrolClient,
 		serverConcurrencyLimit,
 		requestWaitLimit,
+		metrics.PriorityLevelConcurrencyObserverPairGenerator,
 		fqs.NewQueueSetFactory(&clock.RealClock{}, grc),
 	)
 }
@@ -79,18 +87,20 @@ func New(
 // NewTestable is extra flexible to facilitate testing
 func NewTestable(
 	informerFactory kubeinformers.SharedInformerFactory,
-	flowcontrolClient fcclientv1a1.FlowcontrolV1alpha1Interface,
+	flowcontrolClient flowcontrolclient.FlowcontrolV1beta1Interface,
 	serverConcurrencyLimit int,
 	requestWaitLimit time.Duration,
+	obsPairGenerator metrics.TimedObserverPairGenerator,
 	queueSetFactory fq.QueueSetFactory,
 ) Interface {
-	return newTestableController(informerFactory, flowcontrolClient, serverConcurrencyLimit, requestWaitLimit, queueSetFactory)
+	return newTestableController(informerFactory, flowcontrolClient, serverConcurrencyLimit, requestWaitLimit, obsPairGenerator, queueSetFactory)
 }
 
-func (cfgCtl *configController) Handle(ctx context.Context, requestDigest RequestDigest,
-	noteFn func(fs *fctypesv1a1.FlowSchema, pl *fctypesv1a1.PriorityLevelConfiguration),
+func (cfgCtlr *configController) Handle(ctx context.Context, requestDigest RequestDigest,
+	noteFn func(fs *flowcontrol.FlowSchema, pl *flowcontrol.PriorityLevelConfiguration),
+	queueNoteFn fq.QueueNoteFn,
 	execFn func()) {
-	fs, pl, isExempt, req, startWaitingTime := cfgCtl.startRequest(ctx, requestDigest)
+	fs, pl, isExempt, req, startWaitingTime := cfgCtlr.startRequest(ctx, requestDigest, queueNoteFn)
 	queued := startWaitingTime != time.Time{}
 	noteFn(fs, pl)
 	if req == nil {
@@ -117,6 +127,6 @@ func (cfgCtl *configController) Handle(ctx context.Context, requestDigest Reques
 	}
 	klog.V(7).Infof("Handle(%#+v) => fsName=%q, distMethod=%#+v, plName=%q, isExempt=%v, queued=%v, Finish() => idle=%v", requestDigest, fs.Name, fs.Spec.DistinguisherMethod, pl.Name, isExempt, queued, idle)
 	if idle {
-		cfgCtl.maybeReap(pl.Name)
+		cfgCtlr.maybeReap(pl.Name)
 	}
 }

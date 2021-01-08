@@ -4,7 +4,7 @@
 
 Cluster Autoscaler is a tool that automatically adjusts the size of the Kubernetes cluster when one of the following conditions is true:
 * there are pods that failed to run in the cluster due to insufficient
-  resources,
+  resources.
 * there are nodes in the cluster that have been underutilized for an extended period of time and their pods can be placed on other existing nodes.
 
 # FAQ/Documentation
@@ -16,6 +16,10 @@ You should also take a look at the notes and "gotchas" for your specific cloud p
 * [Azure](./cloudprovider/azure/README.md)
 * [AWS](./cloudprovider/aws/README.md)
 * [BaiduCloud](./cloudprovider/baiducloud/README.md)
+* [CloudStack](./cloudprovider/cloudstack/README.md)
+* [HuaweiCloud](./cloudprovider/huaweicloud/README.md)
+* [Packet](./cloudprovider/packet/README.md#notes) 
+* [IonosCloud](./cloudprovider/ionoscloud/README.md)
 
 # Releases
 
@@ -142,3 +146,6 @@ Supported cloud providers:
 * Alibaba Cloud https://github.com/kubernetes/autoscaler/blob/master/cluster-autoscaler/cloudprovider/alicloud/README.md
 * OpenStack Magnum https://github.com/kubernetes/autoscaler/blob/master/cluster-autoscaler/cloudprovider/magnum/README.md
 * DigitalOcean https://github.com/kubernetes/autoscaler/blob/master/cluster-autoscaler/cloudprovider/digitalocean/README.md
+* CloudStack https://github.com/kubernetes/autoscaler/blob/master/cluster-autoscaler/cloudprovider/cloudstack/README.md
+* Exoscale https://github.com/kubernetes/autoscaler/blob/master/cluster-autoscaler/cloudprovider/exoscale/README.md
+* Packet https://github.com/kubernetes/autoscaler/blob/master/cluster-autoscaler/cloudprovider/packet/README.md

@@ -29,9 +29,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/util/wait"
-	gpuapis "k8s.io/autoscaler/cluster-autoscaler/utils/gpu"
 
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
+	gpuapis "k8s.io/autoscaler/cluster-autoscaler/utils/gpu"
 )
 
 const (

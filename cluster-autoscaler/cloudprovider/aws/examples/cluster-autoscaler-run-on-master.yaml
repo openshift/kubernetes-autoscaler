@@ -145,7 +145,7 @@ spec:
       nodeSelector:
         kubernetes.io/role: master
       containers:
-        - image: k8s.gcr.io/cluster-autoscaler:v1.14.7
+        - image: k8s.gcr.io/autoscaling/cluster-autoscaler:v1.17.3
           name: cluster-autoscaler
           resources:
             limits:
@@ -163,7 +163,7 @@ spec:
             - --nodes={{ node_asg_min }}:{{ node_asg_max }}:{{ name }}
           volumeMounts:
             - name: ssl-certs
-              mountPath: /etc/ssl/certs/ca-certificates.crt
+              mountPath: /etc/ssl/certs/ca-certificates.crt #/etc/ssl/certs/ca-bundle.crt for Amazon Linux Worker Nodes
               readOnly: true
           imagePullPolicy: "Always"
       volumes:
