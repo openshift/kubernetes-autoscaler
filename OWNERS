@@ -11,3 +11,5 @@ reviewers:
 - alexander-demichev
 - JoelSpeed
 
+component: "Cloud Compute"
+subcomponent: "Cluster Autoscaler"
