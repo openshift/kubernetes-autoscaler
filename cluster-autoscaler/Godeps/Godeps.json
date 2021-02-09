@@ -5474,7 +5474,8 @@
 		},
 		{
 			"ImportPath": "vbom.ml/util/sortorder",
-			"Rev": "db5cfe13f5cc80a4990d98e2e1b0707a4d1a5394"
+			"Comment": "v1.0.0",
+			"Rev": "6b6b45a52fcc54f788363c1880630248b63402a1"
 		}
 	]
 }
