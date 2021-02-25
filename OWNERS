@@ -1,0 +1,10 @@
+approvers:
+- JoelSpeed
+- elmiko
+- alexander-demichev
+- Danil-Grigorev
+- lobziik
+- michaelgugino
+
+component: "Cloud Compute"
+subcomponent: "Cluster Autoscaler"
