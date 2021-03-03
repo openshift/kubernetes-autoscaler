@@ -235,6 +235,14 @@ var (
 		},
 	)
 
+	oldUnregisteredNodesRemovedCount = k8smetrics.NewCounter(
+		&k8smetrics.CounterOpts{
+			Namespace: caNamespace,
+			Name:      "old_unregistered_nodes_removed_count",
+			Help:      "Number of unregistered nodes removed by CA.",
+		},
+	)
+
 	/**** Metrics related to NodeAutoprovisioning ****/
 	napEnabled = k8smetrics.NewGauge(
 		&k8smetrics.GaugeOpts{
@@ -280,6 +288,7 @@ func RegisterAll() {
 	legacyregistry.MustRegister(evictionsCount)
 	legacyregistry.MustRegister(unneededNodesCount)
 	legacyregistry.MustRegister(scaleDownInCooldown)
+	legacyregistry.MustRegister(oldUnregisteredNodesRemovedCount)
 	legacyregistry.MustRegister(napEnabled)
 	legacyregistry.MustRegister(nodeGroupCreationCount)
 	legacyregistry.MustRegister(nodeGroupDeletionCount)
@@ -406,4 +415,10 @@ func UpdateScaleDownInCooldown(inCooldown bool) {
 	} else {
 		scaleDownInCooldown.Set(0.0)
 	}
+}
+
+// RegisterOldUnregisteredNodesRemoved records number of old unregistered
+// nodes that have been removed by the cluster autoscaler
+func RegisterOldUnregisteredNodesRemoved(nodesCount int) {
+	oldUnregisteredNodesRemovedCount.Add(float64(nodesCount))
 }
