@@ -11,6 +11,6 @@ else
     --workdir "/go/src/github.com/openshift/${REPO_NAME}" \
     --env GO111MODULE="$GO111MODULE" \
     --env GOFLAGS="$GOFLAGS" \
-    openshift/origin-release:golang-1.13 \
+    openshift/origin-release:golang-1.16 \
     ./hack/go-lint.sh "${@}"
 fi
