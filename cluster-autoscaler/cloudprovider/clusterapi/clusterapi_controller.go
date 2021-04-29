@@ -319,12 +319,13 @@ func newMachineController(
 	discoveryOpts cloudprovider.NodeGroupDiscoveryOptions,
 ) (*machineController, error) {
 	workloadInformerFactory := kubeinformers.NewSharedInformerFactory(workloadClient, 0)
-	managementInformerFactory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(managementClient, 0, metav1.NamespaceAll, nil)
 
 	autoDiscoverySpecs, err := parseAutoDiscovery(discoveryOpts.NodeGroupAutoDiscoverySpecs)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse auto discovery configuration: %v", err)
 	}
+
+	managementInformerFactory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(managementClient, 0, namespaceToWatch(autoDiscoverySpecs), nil)
 
 	CAPIGroup := getCAPIGroup()
 	CAPIVersion, err := getAPIGroupPreferredVersion(managementDiscoveryClient, CAPIGroup)
@@ -453,13 +454,13 @@ func (c *machineController) scalableResourceProviderIDs(scalableResource *unstru
 
 		klog.Warningf("Machine %q has no providerID", machine.GetName())
 
-		errorMessage, found, err := unstructured.NestedString(machine.Object, "status", "errorMessage")
+		failureMessage, found, err := unstructured.NestedString(machine.UnstructuredContent(), "status", "failureMessage")
 		if err != nil {
 			return nil, err
 		}
 
 		if found {
-			klog.V(4).Infof("Status.ErrorMessage of machine %q is %q", machine.GetName(), errorMessage)
+			klog.V(4).Infof("Status.FailureMessage of machine %q is %q", machine.GetName(), failureMessage)
 			// Provide a fake ID to allow the autoscaler to track machines that will never
 			// become nodes and mark the nodegroup unhealthy after maxNodeProvisionTime.
 			// Fake ID needs to be recognised later and converted into a machine key.

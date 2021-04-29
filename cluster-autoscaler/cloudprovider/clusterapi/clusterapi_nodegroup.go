@@ -18,17 +18,13 @@ package clusterapi
 
 import (
 	"fmt"
-	"math/rand"
 
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/resource"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	gpuapis "k8s.io/autoscaler/cluster-autoscaler/utils/gpu"
-	kubeletapis "k8s.io/kubernetes/pkg/kubelet/apis"
 	schedulerframework "k8s.io/kubernetes/pkg/scheduler/framework"
 
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
+	"k8s.io/autoscaler/cluster-autoscaler/config"
 )
 
 const (
@@ -36,13 +32,9 @@ const (
 	deprecatedMachineDeleteAnnotationKey = "cluster.k8s.io/delete-machine"
 	// TODO: determine what currently relies on deprecatedMachineAnnotationKey to determine when it can be removed
 	deprecatedMachineAnnotationKey = "cluster.k8s.io/machine"
-	machineDeleteAnnotationKey     = "machine.openshift.io/cluster-api-delete-machine"
-	machineAnnotationKey           = "machine.openshift.io/machine"
+	machineDeleteAnnotationKey     = "cluster.x-k8s.io/delete-machine"
+	machineAnnotationKey           = "cluster.x-k8s.io/machine"
 	debugFormat                    = "%s (min: %d, max: %d, replicas: %d)"
-
-	// This default for the maximum number of pods comes from the machine-config-operator
-	// see https://github.com/openshift/machine-config-operator/blob/2f1bd6d99131fa4471ed95543a51dec3d5922b2b/templates/worker/01-worker-kubelet/_base/files/kubelet.yaml#L19
-	defaultMaxPods = 250
 )
 
 type nodegroup struct {
@@ -240,92 +232,7 @@ func (ng *nodegroup) Nodes() ([]cloudprovider.Instance, error) {
 // node by default, using manifest (most likely only kube-proxy).
 // Implementation optional.
 func (ng *nodegroup) TemplateNodeInfo() (*schedulerframework.NodeInfo, error) {
-	if !ng.scalableResource.CanScaleFromZero() {
-		return nil, cloudprovider.ErrNotImplemented
-	}
-
-	cpu, err := ng.scalableResource.InstanceCPUCapacity()
-	if err != nil {
-		return nil, err
-	}
-
-	mem, err := ng.scalableResource.InstanceMemoryCapacity()
-	if err != nil {
-		return nil, err
-	}
-
-	gpu, err := ng.scalableResource.InstanceGPUCapacity()
-	if err != nil {
-		return nil, err
-	}
-
-	pod, err := ng.scalableResource.InstanceMaxPodsCapacity()
-	if err != nil {
-		return nil, err
-	}
-
-	if cpu.IsZero() || mem.IsZero() {
-		return nil, cloudprovider.ErrNotImplemented
-	}
-
-	if gpu.IsZero() {
-		gpu = zeroQuantity.DeepCopy()
-	}
-
-	if pod.IsZero() {
-		pod = *resource.NewQuantity(defaultMaxPods, resource.DecimalSI)
-	}
-
-	capacity := map[corev1.ResourceName]resource.Quantity{
-		corev1.ResourceCPU:        cpu,
-		corev1.ResourceMemory:     mem,
-		corev1.ResourcePods:       pod,
-		gpuapis.ResourceNvidiaGPU: gpu,
-	}
-
-	nodeName := fmt.Sprintf("%s-asg-%d", ng.scalableResource.Name(), rand.Int63())
-	node := corev1.Node{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:   nodeName,
-			Labels: map[string]string{},
-		},
-	}
-
-	node.Status.Capacity = capacity
-	node.Status.Allocatable = capacity
-	node.Status.Conditions = cloudprovider.BuildReadyConditions()
-	node.Spec.Taints = ng.scalableResource.Taints()
-
-	node.Labels, err = ng.buildTemplateLabels(nodeName)
-	if err != nil {
-		return nil, err
-	}
-
-	nodeInfo := schedulerframework.NewNodeInfo(cloudprovider.BuildKubeProxy(ng.scalableResource.Name()))
-	nodeInfo.SetNode(&node)
-
-	return nodeInfo, nil
-}
-
-func (ng *nodegroup) buildTemplateLabels(nodeName string) (map[string]string, error) {
-	labels := cloudprovider.JoinStringMaps(ng.scalableResource.Labels(), buildGenericLabels(nodeName))
-
-	nodes, err := ng.Nodes()
-	if err != nil {
-		return nil, err
-	}
-
-	if len(nodes) > 0 {
-		node, err := ng.machineController.findNodeByProviderID(normalizedProviderString(nodes[0].Id))
-		if err != nil {
-			return nil, err
-		}
-
-		if node != nil {
-			labels = cloudprovider.JoinStringMaps(labels, extractNodeLabels(node))
-		}
-	}
-	return labels, nil
+	return nil, cloudprovider.ErrNotImplemented
 }
 
 // Exist checks if the node group really exists on the cloud nodegroup
@@ -358,6 +265,12 @@ func (ng *nodegroup) Autoprovisioned() bool {
 	return false
 }
 
+// GetOptions returns NodeGroupAutoscalingOptions that should be used for this particular
+// NodeGroup. Returning a nil will result in using default options.
+func (ng *nodegroup) GetOptions(defaults config.NodeGroupAutoscalingOptions) (*config.NodeGroupAutoscalingOptions, error) {
+	return nil, cloudprovider.ErrNotImplemented
+}
+
 func newNodeGroupFromScalableResource(controller *machineController, unstructuredScalableResource *unstructured.Unstructured) (*nodegroup, error) {
 	// Ensure that the resulting node group would be allowed based on the autodiscovery specs if defined
 	if !controller.allowedByAutoDiscoverySpecs(unstructuredScalableResource) {
@@ -374,9 +287,9 @@ func newNodeGroupFromScalableResource(controller *machineController, unstructure
 		return nil, err
 	}
 
-	// Ensure that if the nodegroup has 0 replicas it is capable
-	// of scaling before adding it.
-	if found && replicas == 0 && !scalableResource.CanScaleFromZero() {
+	// We don't scale from 0 so nodes must belong to a nodegroup
+	// that has a scale size of at least 1.
+	if found && replicas == 0 {
 		return nil, nil
 	}
 
@@ -389,48 +302,4 @@ func newNodeGroupFromScalableResource(controller *machineController, unstructure
 		machineController: controller,
 		scalableResource:  scalableResource,
 	}, nil
-}
-
-func buildGenericLabels(nodeName string) map[string]string {
-	// TODO revisit this function and add an explanation about what these
-	// labels are used for, or remove them if not necessary
-	m := make(map[string]string)
-	m[kubeletapis.LabelArch] = cloudprovider.DefaultArch
-	m[corev1.LabelArchStable] = cloudprovider.DefaultArch
-
-	m[kubeletapis.LabelOS] = cloudprovider.DefaultOS
-	m[corev1.LabelOSStable] = cloudprovider.DefaultOS
-
-	m[corev1.LabelHostname] = nodeName
-	return m
-}
-
-// extract a predefined list of labels from the existing node
-func extractNodeLabels(node *corev1.Node) map[string]string {
-	m := make(map[string]string)
-	if node.Labels == nil {
-		return m
-	}
-
-	setLabelIfNotEmpty(m, node.Labels, kubeletapis.LabelArch)
-	setLabelIfNotEmpty(m, node.Labels, corev1.LabelArchStable)
-
-	setLabelIfNotEmpty(m, node.Labels, kubeletapis.LabelOS)
-	setLabelIfNotEmpty(m, node.Labels, corev1.LabelOSStable)
-
-	setLabelIfNotEmpty(m, node.Labels, corev1.LabelInstanceType)
-	setLabelIfNotEmpty(m, node.Labels, corev1.LabelInstanceTypeStable)
-
-	setLabelIfNotEmpty(m, node.Labels, corev1.LabelZoneRegion)
-	setLabelIfNotEmpty(m, node.Labels, corev1.LabelZoneRegionStable)
-
-	setLabelIfNotEmpty(m, node.Labels, corev1.LabelZoneFailureDomain)
-
-	return m
-}
-
-func setLabelIfNotEmpty(to, from map[string]string, key string) {
-	if value := from[key]; value != "" {
-		to[key] = value
-	}
 }
