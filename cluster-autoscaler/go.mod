@@ -30,13 +30,13 @@ require (
 	google.golang.org/api v0.20.0
 	gopkg.in/gcfg.v1 v1.2.0
 	gopkg.in/yaml.v2 v2.2.8
-	k8s.io/api v0.0.0
-	k8s.io/apimachinery v0.0.0
-	k8s.io/apiserver v0.0.0
-	k8s.io/client-go v0.0.0
-	k8s.io/cloud-provider v0.0.0
-	k8s.io/component-base v0.0.0
-	k8s.io/component-helpers v0.0.0
+	k8s.io/api v0.20.6
+	k8s.io/apimachinery v0.20.6
+	k8s.io/apiserver v0.20.6
+	k8s.io/client-go v0.20.6
+	k8s.io/cloud-provider v0.20.6
+	k8s.io/component-base v0.20.6
+	k8s.io/component-helpers v0.20.6
 	k8s.io/klog/v2 v2.4.0
 	k8s.io/kubernetes v0.0.0
 	k8s.io/legacy-cloud-providers v0.0.0
@@ -170,7 +170,7 @@ replace (
 	github.com/go-ozzo/ozzo-validation => github.com/go-ozzo/ozzo-validation v3.5.0+incompatible
 	github.com/go-stack/stack => github.com/go-stack/stack v1.8.0
 	github.com/godbus/dbus/v5 => github.com/godbus/dbus/v5 v5.0.3
-	github.com/gogo/protobuf => github.com/gogo/protobuf v1.3.1
+	github.com/gogo/protobuf => github.com/gogo/protobuf v1.3.2
 	github.com/golang/freetype => github.com/golang/freetype v0.0.0-20170609003504-e2365dfdc4a0
 	github.com/golang/glog => github.com/golang/glog v0.0.0-20160126235308-23def4e6c14b
 	github.com/golang/groupcache => github.com/golang/groupcache v0.0.0-20200121045136-8c9f03a8e57e
@@ -390,36 +390,36 @@ replace (
 	gotest.tools => gotest.tools v2.2.0+incompatible
 	gotest.tools/v3 => gotest.tools/v3 v3.0.2
 	honnef.co/go/tools => honnef.co/go/tools v0.0.1-2020.1.3
-	k8s.io/api => /tmp/ca-update-vendor.NGE2/kubernetes/staging/src/k8s.io/api
-	k8s.io/apiextensions-apiserver => /tmp/ca-update-vendor.NGE2/kubernetes/staging/src/k8s.io/apiextensions-apiserver
-	k8s.io/apimachinery => /tmp/ca-update-vendor.NGE2/kubernetes/staging/src/k8s.io/apimachinery
-	k8s.io/apiserver => /tmp/ca-update-vendor.NGE2/kubernetes/staging/src/k8s.io/apiserver
-	k8s.io/cli-runtime => /tmp/ca-update-vendor.NGE2/kubernetes/staging/src/k8s.io/cli-runtime
-	k8s.io/client-go => /tmp/ca-update-vendor.NGE2/kubernetes/staging/src/k8s.io/client-go
-	k8s.io/cloud-provider => /tmp/ca-update-vendor.NGE2/kubernetes/staging/src/k8s.io/cloud-provider
-	k8s.io/cluster-bootstrap => /tmp/ca-update-vendor.NGE2/kubernetes/staging/src/k8s.io/cluster-bootstrap
-	k8s.io/code-generator => /tmp/ca-update-vendor.NGE2/kubernetes/staging/src/k8s.io/code-generator
-	k8s.io/component-base => /tmp/ca-update-vendor.NGE2/kubernetes/staging/src/k8s.io/component-base
-	k8s.io/component-helpers => /tmp/ca-update-vendor.NGE2/kubernetes/staging/src/k8s.io/component-helpers
-	k8s.io/controller-manager => /tmp/ca-update-vendor.NGE2/kubernetes/staging/src/k8s.io/controller-manager
-	k8s.io/cri-api => /tmp/ca-update-vendor.NGE2/kubernetes/staging/src/k8s.io/cri-api
-	k8s.io/csi-translation-lib => /tmp/ca-update-vendor.NGE2/kubernetes/staging/src/k8s.io/csi-translation-lib
+	k8s.io/api => k8s.io/api v0.20.6
+	k8s.io/apiextensions-apiserver => k8s.io/apiextensions-apiserver v0.20.6
+	k8s.io/apimachinery => k8s.io/apimachinery v0.20.6
+	k8s.io/apiserver => k8s.io/apiserver v0.20.6
+	k8s.io/cli-runtime => k8s.io/cli-runtime v0.20.6
+	k8s.io/client-go => k8s.io/client-go v0.20.6
+	k8s.io/cloud-provider => k8s.io/cloud-provider v0.20.6
+	k8s.io/cluster-bootstrap => k8s.io/cluster-bootstrap v0.20.6
+	k8s.io/code-generator => k8s.io/code-generator v0.20.6
+	k8s.io/component-base => k8s.io/component-base v0.20.6
+	k8s.io/component-helpers => k8s.io/component-helpers v0.20.6
+	k8s.io/controller-manager => k8s.io/controller-manager v0.20.6
+	k8s.io/cri-api => k8s.io/cri-api v0.20.6
+	k8s.io/csi-translation-lib => k8s.io/csi-translation-lib v0.20.6
 	k8s.io/gengo => k8s.io/gengo v0.0.0-20201113003025-83324d819ded
 	k8s.io/heapster => k8s.io/heapster v1.2.0-beta.1
 	k8s.io/klog/v2 => k8s.io/klog/v2 v2.4.0
-	k8s.io/kube-aggregator => /tmp/ca-update-vendor.NGE2/kubernetes/staging/src/k8s.io/kube-aggregator
-	k8s.io/kube-controller-manager => /tmp/ca-update-vendor.NGE2/kubernetes/staging/src/k8s.io/kube-controller-manager
+	k8s.io/kube-aggregator => k8s.io/kube-aggregator v0.20.6
+	k8s.io/kube-controller-manager => k8s.io/kube-controller-manager v0.20.6
 	k8s.io/kube-openapi => k8s.io/kube-openapi v0.0.0-20201113171705-d219536bb9fd
-	k8s.io/kube-proxy => /tmp/ca-update-vendor.NGE2/kubernetes/staging/src/k8s.io/kube-proxy
-	k8s.io/kube-scheduler => /tmp/ca-update-vendor.NGE2/kubernetes/staging/src/k8s.io/kube-scheduler
-	k8s.io/kubectl => /tmp/ca-update-vendor.NGE2/kubernetes/staging/src/k8s.io/kubectl
-	k8s.io/kubelet => /tmp/ca-update-vendor.NGE2/kubernetes/staging/src/k8s.io/kubelet
-	k8s.io/legacy-cloud-providers => /tmp/ca-update-vendor.NGE2/kubernetes/staging/src/k8s.io/legacy-cloud-providers
-	k8s.io/metrics => /tmp/ca-update-vendor.NGE2/kubernetes/staging/src/k8s.io/metrics
-	k8s.io/mount-utils => /tmp/ca-update-vendor.NGE2/kubernetes/staging/src/k8s.io/mount-utils
-	k8s.io/sample-apiserver => /tmp/ca-update-vendor.NGE2/kubernetes/staging/src/k8s.io/sample-apiserver
-	k8s.io/sample-cli-plugin => /tmp/ca-update-vendor.NGE2/kubernetes/staging/src/k8s.io/sample-cli-plugin
-	k8s.io/sample-controller => /tmp/ca-update-vendor.NGE2/kubernetes/staging/src/k8s.io/sample-controller
+	k8s.io/kube-proxy => k8s.io/kube-proxy v0.20.6
+	k8s.io/kube-scheduler => k8s.io/kube-scheduler v0.20.6
+	k8s.io/kubectl => k8s.io/kubectl v0.20.6
+	k8s.io/kubelet => k8s.io/kubelet v0.20.6
+	k8s.io/legacy-cloud-providers => k8s.io/legacy-cloud-providers v0.20.6
+	k8s.io/metrics => k8s.io/metrics v0.20.6
+	k8s.io/mount-utils => k8s.io/mount-utils v0.20.6
+	k8s.io/sample-apiserver => k8s.io/sample-apiserver v0.20.6
+	k8s.io/sample-cli-plugin => k8s.io/sample-cli-plugin v0.20.6
+	k8s.io/sample-controller => k8s.io/sample-controller v0.20.6
 	k8s.io/system-validators => k8s.io/system-validators v1.2.0
 	k8s.io/utils => k8s.io/utils v0.0.0-20201110183641-67b214c5f920
 	modernc.org/cc => modernc.org/cc v1.0.0
@@ -440,4 +440,4 @@ replace github.com/digitalocean/godo => github.com/digitalocean/godo v1.27.0
 
 replace github.com/rancher/go-rancher => github.com/rancher/go-rancher v0.1.0
 
-replace k8s.io/kubernetes => /tmp/ca-update-vendor.NGE2/kubernetes
+replace k8s.io/kubernetes => k8s.io/kubernetes v1.20.6
