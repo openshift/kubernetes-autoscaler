@@ -206,7 +206,7 @@ func TestLoadPods(t *testing.T) {
 
 			targetSelectorFetcher := target_mock.NewMockVpaTargetSelectorFetcher(ctrl)
 
-			clusterState := model.NewClusterState()
+			clusterState := model.NewClusterState(testGcPeriod)
 
 			clusterStateFeeder := clusterStateFeeder{
 				vpaLister:       vpaLister,
@@ -350,3 +350,79 @@ func TestClusterStateFeeder_LoadPods(t *testing.T) {
 		})
 	}
 }
+<<<<<<< HEAD
+=======
+
+type fakeHistoryProvider struct {
+	history map[model.PodID]*history.PodHistory
+	err     error
+}
+
+func (fhp *fakeHistoryProvider) GetClusterHistory() (map[model.PodID]*history.PodHistory, error) {
+	return fhp.history, fhp.err
+}
+
+func TestClusterStateFeeder_InitFromHistoryProvider(t *testing.T) {
+	pod1 := model.PodID{
+		Namespace: "ns",
+		PodName:   "a-pod",
+	}
+	memAmount := model.ResourceAmount(128 * 1024 * 1024)
+	t0 := time.Date(2021, time.August, 30, 10, 21, 0, 0, time.UTC)
+	containerCpu := "containerCpu"
+	containerMem := "containerMem"
+	pod1History := history.PodHistory{
+		LastLabels: map[string]string{},
+		LastSeen:   t0,
+		Samples: map[string][]model.ContainerUsageSample{
+			containerCpu: {
+				{
+					MeasureStart: t0,
+					Usage:        10,
+					Request:      101,
+					Resource:     model.ResourceCPU,
+				},
+			},
+			containerMem: {
+				{
+					MeasureStart: t0,
+					Usage:        memAmount,
+					Request:      1024 * 1024 * 1024,
+					Resource:     model.ResourceMemory,
+				},
+			},
+		},
+	}
+	provider := fakeHistoryProvider{
+		history: map[model.PodID]*history.PodHistory{
+			pod1: &pod1History,
+		},
+	}
+
+	clusterState := model.NewClusterState(testGcPeriod)
+	feeder := clusterStateFeeder{
+		clusterState: clusterState,
+	}
+	feeder.InitFromHistoryProvider(&provider)
+	if !assert.Contains(t, feeder.clusterState.Pods, pod1) {
+		return
+	}
+	pod1State := feeder.clusterState.Pods[pod1]
+	if !assert.Contains(t, pod1State.Containers, containerCpu) {
+		return
+	}
+	containerState := pod1State.Containers[containerCpu]
+	if !assert.NotNil(t, containerState) {
+		return
+	}
+	assert.Equal(t, t0, containerState.LastCPUSampleStart)
+	if !assert.Contains(t, pod1State.Containers, containerMem) {
+		return
+	}
+	containerState = pod1State.Containers[containerMem]
+	if !assert.NotNil(t, containerState) {
+		return
+	}
+	assert.Equal(t, memAmount, containerState.GetMaxMemoryPeak())
+}
+>>>>>>> c4bd38b17 (Added changes to support alternative recommender)
