@@ -1,17 +1,10 @@
 approvers:
 - enxebre
+- frobware
 - elmiko
-- hardikdr
-- detiber
+- JoelSpeed
 reviewers:
 - enxebre
+- frobware
 - elmiko
-- hardikdr
-- detiber
-- jackfrancis
-- mrajashree
-- arunmk
-- shysank
-
-labels:
-- area/provider/cluster-api
+- JoelSpeed
