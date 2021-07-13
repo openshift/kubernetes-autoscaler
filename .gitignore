@@ -28,5 +28,4 @@
 Session.vim
 .netrwhist
 
-# Binary files
-bin/
+_output
