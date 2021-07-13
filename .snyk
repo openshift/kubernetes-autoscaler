@@ -1,0 +1,41 @@
+# References:
+#
+# https://docs.snyk.io/scan-applications/snyk-code/using-snyk-code-from-the-cli/excluding-directories-and-files-from-the-snyk-code-cli-test
+# https://docs.snyk.io/snyk-cli/commands/ignore
+exclude:
+  global:
+    - "vendor/**"
+    - "**/vendor/**"
+    # openshift does not build any provider aside from clusterapi into its binary
+    - "cluster-autoscaler/cloudprovider/alicloud/**"
+    - "cluster-autoscaler/cloudprovider/aws/**"
+    - "cluster-autoscaler/cloudprovider/azure/**"
+    - "cluster-autoscaler/cloudprovider/baiducloud/**"
+    - "cluster-autoscaler/cloudprovider/bizflycloud/**"
+    - "cluster-autoscaler/cloudprovider/brightbox/**"
+    - "cluster-autoscaler/cloudprovider/cherryservers/**"
+    - "cluster-autoscaler/cloudprovider/civo/**"
+    - "cluster-autoscaler/cloudprovider/cloudstack/**"
+    - "cluster-autoscaler/cloudprovider/clusterapi/**"
+    - "cluster-autoscaler/cloudprovider/digitalocean/**"
+    - "cluster-autoscaler/cloudprovider/equinixmetal/**"
+    - "cluster-autoscaler/cloudprovider/exoscale/**"
+    - "cluster-autoscaler/cloudprovider/externalgrpc/**"
+    - "cluster-autoscaler/cloudprovider/gce/**"
+    - "cluster-autoscaler/cloudprovider/hetzner/**"
+    - "cluster-autoscaler/cloudprovider/huaweicloud/**"
+    - "cluster-autoscaler/cloudprovider/ionoscloud/**"
+    - "cluster-autoscaler/cloudprovider/kamatera/**"
+    - "cluster-autoscaler/cloudprovider/kubemark/**"
+    - "cluster-autoscaler/cloudprovider/kwok/**"
+    - "cluster-autoscaler/cloudprovider/linode/**"
+    - "cluster-autoscaler/cloudprovider/magnum/**"
+    - "cluster-autoscaler/cloudprovider/oci/**"
+    - "cluster-autoscaler/cloudprovider/ovhcloud/**"
+    - "cluster-autoscaler/cloudprovider/rancher/**"
+    - "cluster-autoscaler/cloudprovider/scaleway/**"
+    - "cluster-autoscaler/cloudprovider/tencentcloud/**"
+    - "cluster-autoscaler/cloudprovider/volcengine/**"
+    - "cluster-autoscaler/cloudprovider/vultr/**"
+    # ensure we don't get aws artifacts in the unpacked sources
+    - "**/cluster-autoscaler/cloudprovider/aws/**"
