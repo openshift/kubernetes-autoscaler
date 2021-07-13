@@ -1,9 +1,0 @@
-approvers:
-- gjtempleton
-reviewers:
-- gjtempleton
-- Shubham82
-- jackfrancis
-
-labels:
-- area/helm-charts
