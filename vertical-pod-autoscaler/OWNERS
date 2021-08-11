@@ -1,12 +1,10 @@
 approvers:
-- joelsmith
-- wangchen615
-- sjenning
-- rphillips
 - schylek
 - kgolab
 - jbartosik
+- krzysied
 reviewers:
 - schylek
 - kgolab
 - jbartosik
+- krzysied
