@@ -28,7 +28,16 @@ import (
 )
 
 const (
-	debugFormat = "%s (min: %d, max: %d, replicas: %d)"
+	capiMachineDeleteAnnotationKey = "cluster.x-k8s.io/delete-machine"
+	// TODO: determine what currently relies on deprecatedMachineAnnotationKey to determine when it can be removed
+	deprecatedMachineAnnotationKey = "cluster.k8s.io/machine"
+	machineDeleteAnnotationKey     = "machine.openshift.io/cluster-api-delete-machine"
+	machineAnnotationKey           = "machine.openshift.io/machine"
+	debugFormat                    = "%s (min: %d, max: %d, replicas: %d)"
+
+	// This default for the maximum number of pods comes from the machine-config-operator
+	// see https://github.com/openshift/machine-config-operator/blob/2f1bd6d99131fa4471ed95543a51dec3d5922b2b/templates/worker/01-worker-kubelet/_base/files/kubelet.yaml#L19
+	defaultMaxPods = 250
 )
 
 type nodegroup struct {

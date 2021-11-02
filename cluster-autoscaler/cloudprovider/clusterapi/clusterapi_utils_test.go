@@ -115,20 +115,20 @@ func TestUtilParseScalingBounds(t *testing.T) {
 		min: 0,
 		max: 1,
 	}, {
-		description: "deprecated min/max annotations still work, result is min 0, max 1",
+		description: "CAPI min/max annotations still work, result is min 0, max 1",
 		annotations: map[string]string{
-			deprecatedNodeGroupMinSizeAnnotationKey: "0",
-			deprecatedNodeGroupMaxSizeAnnotationKey: "1",
+			capiNodeGroupMinSizeAnnotationKey: "0",
+			capiNodeGroupMaxSizeAnnotationKey: "1",
 		},
 		min: 0,
 		max: 1,
 	}, {
-		description: "deprecated min/max annotations do not take precedence over non-deprecated annotations, result is min 1, max 2",
+		description: "CAPI min/max annotations do not take precedence over MAPI annotations, result is min 1, max 2",
 		annotations: map[string]string{
-			deprecatedNodeGroupMinSizeAnnotationKey: "0",
-			deprecatedNodeGroupMaxSizeAnnotationKey: "1",
-			nodeGroupMinSizeAnnotationKey:           "1",
-			nodeGroupMaxSizeAnnotationKey:           "2",
+			capiNodeGroupMinSizeAnnotationKey: "0",
+			capiNodeGroupMaxSizeAnnotationKey: "1",
+			nodeGroupMinSizeAnnotationKey:     "1",
+			nodeGroupMaxSizeAnnotationKey:     "2",
 		},
 		min: 1,
 		max: 2,
@@ -496,7 +496,7 @@ func Test_clusterNameFromResource(t *testing.T) {
 					"name":      "foo",
 					"namespace": "default",
 					"labels": map[string]interface{}{
-						deprecatedClusterNameLabel: "bar",
+						capiClusterNameLabel: "bar",
 					},
 				},
 				"spec": map[string]interface{}{
@@ -516,7 +516,7 @@ func Test_clusterNameFromResource(t *testing.T) {
 					"name":      "foo",
 					"namespace": "default",
 					"labels": map[string]interface{}{
-						deprecatedClusterNameLabel: "bar",
+						capiClusterNameLabel: "bar",
 					},
 				},
 				"spec": map[string]interface{}{
@@ -541,7 +541,7 @@ func Test_clusterNameFromResource(t *testing.T) {
 					"template": map[string]interface{}{
 						"metadata": map[string]interface{}{
 							"labels": map[string]interface{}{
-								deprecatedClusterNameLabel: "bar",
+								capiClusterNameLabel: "bar",
 							},
 						},
 					},
@@ -565,7 +565,7 @@ func Test_clusterNameFromResource(t *testing.T) {
 					"template": map[string]interface{}{
 						"metadata": map[string]interface{}{
 							"labels": map[string]interface{}{
-								deprecatedClusterNameLabel: "bar",
+								capiClusterNameLabel: "bar",
 							},
 						},
 					},

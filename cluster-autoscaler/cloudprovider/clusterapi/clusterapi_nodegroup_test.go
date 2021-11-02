@@ -687,6 +687,9 @@ func TestNodeGroupDeleteNodes(t *testing.T) {
 			if _, found := machine.GetAnnotations()[machineDeleteAnnotationKey]; !found {
 				t.Errorf("expected annotation %q on machine %s", machineDeleteAnnotationKey, machine.GetName())
 			}
+			if _, found := machine.GetAnnotations()[capiMachineDeleteAnnotationKey]; !found {
+				t.Errorf("expected annotation %q on machine %s", capiMachineDeleteAnnotationKey, machine.GetName())
+			}
 		}
 
 		gvr, err := ng.scalableResource.GroupVersionResource()
