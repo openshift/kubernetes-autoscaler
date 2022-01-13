@@ -33,7 +33,6 @@ const (
 	capiNodeGroupMaxSizeAnnotationKey = "cluster.x-k8s.io/cluster-api-autoscaler-node-group-max-size"
 	nodeGroupMinSizeAnnotationKey     = "machine.openshift.io/cluster-api-autoscaler-node-group-min-size"
 	nodeGroupMaxSizeAnnotationKey     = "machine.openshift.io/cluster-api-autoscaler-node-group-max-size"
-	clusterNameLabel                  = "machine.openshift.io/cluster-name"
 	capiClusterNameLabel              = "cluster.x-k8s.io/cluster-name"
 
 	cpuKey     = "machine.openshift.io/vCPU"
