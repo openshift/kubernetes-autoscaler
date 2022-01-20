@@ -44,7 +44,7 @@ import (
 const (
 	machineProviderIDIndex = "machineProviderIDIndex"
 	nodeProviderIDIndex    = "nodeProviderIDIndex"
-	defaultCAPIGroup       = "cluster.x-k8s.io"
+	defaultCAPIGroup       = "machine.openshift.io"
 	// CAPIGroupEnvVar contains the environment variable name which allows overriding defaultCAPIGroup.
 	CAPIGroupEnvVar               = "CAPI_GROUP"
 	resourceNameMachine           = "machines"
@@ -259,10 +259,7 @@ func (c *machineController) findMachineByProviderID(providerID normalizedProvide
 		return nil, nil
 	}
 
-	machineID, ok := node.Annotations[machineAnnotationKey]
-	if !ok {
-		machineID = node.Annotations[deprecatedMachineAnnotationKey]
-	}
+	machineID, _ := node.Annotations[machineAnnotationKey]
 	return c.findMachine(machineID)
 }
 

@@ -33,7 +33,6 @@ const (
 	capiNodeGroupMaxSizeAnnotationKey = "cluster.x-k8s.io/cluster-api-autoscaler-node-group-max-size"
 	nodeGroupMinSizeAnnotationKey     = "machine.openshift.io/cluster-api-autoscaler-node-group-min-size"
 	nodeGroupMaxSizeAnnotationKey     = "machine.openshift.io/cluster-api-autoscaler-node-group-max-size"
-	clusterNameLabel                  = "machine.openshift.io/cluster-name"
 	capiClusterNameLabel              = "cluster.x-k8s.io/cluster-name"
 
 	cpuKey     = "machine.openshift.io/vCPU"
@@ -43,6 +42,11 @@ const (
 )
 
 var (
+	// clusterNameLabel is the label applied to objects(Machine, MachineSet, MachineDeployment)
+	// to identify which cluster they are owned by. Because the label can be
+	// affected by the CAPI_GROUP environment variable, it is initialized here.
+	clusterNameLabel = getClusterNameLabel()
+
 	// errMissingMinAnnotation is the error returned when a
 	// machine set does not have an annotation keyed by
 	// nodeGroupMinSizeAnnotationKey.
@@ -233,4 +237,44 @@ func clusterNameFromResource(r *unstructured.Unstructured) string {
 	}
 
 	return ""
+}
+
+// getNodeGroupMinSizeAnnotationKey returns the key that is used for the
+// node group minimum size annotation. This function is needed because the user can
+// change the default group name by using the CAPI_GROUP environment variable.
+func getNodeGroupMinSizeAnnotationKey() string {
+	key := fmt.Sprintf("%s/cluster-api-autoscaler-node-group-min-size", getCAPIGroup())
+	return key
+}
+
+// getNodeGroupMaxSizeAnnotationKey returns the key that is used for the
+// node group maximum size annotation. This function is needed because the user can
+// change the default group name by using the CAPI_GROUP environment variable.
+func getNodeGroupMaxSizeAnnotationKey() string {
+	key := fmt.Sprintf("%s/cluster-api-autoscaler-node-group-max-size", getCAPIGroup())
+	return key
+}
+
+// getMachineDeleteAnnotationKey returns the key that is used by cluster-api for marking
+// machines to be deleted. This function is needed because the user can change the default
+// group name by using the CAPI_GROUP environment variable.
+func getMachineDeleteAnnotationKey() string {
+	key := fmt.Sprintf("%s/delete-machine", getCAPIGroup())
+	return key
+}
+
+// getMachineAnnotationKey returns the key that is used by cluster-api for annotating
+// nodes with their related machine objects. This function is needed because the user can change
+// the default group name by using the CAPI_GROUP environment variable.
+func getMachineAnnotationKey() string {
+	key := fmt.Sprintf("%s/machine", getCAPIGroup())
+	return key
+}
+
+// getClusterNameLabel returns the key that is used by cluster-api for labeling
+// which cluster an object belongs to. This function is needed because the user can change
+// the default group name by using the CAPI_GROUP environment variable.
+func getClusterNameLabel() string {
+	key := fmt.Sprintf("%s/cluster-name", getCAPIGroup())
+	return key
 }
