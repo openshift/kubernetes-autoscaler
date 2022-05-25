@@ -19,12 +19,13 @@ package clusterapi
 import (
 	"context"
 	"fmt"
-	"k8s.io/client-go/tools/cache"
 	"path"
 	"sort"
 	"strings"
 	"testing"
 	"time"
+
+	"k8s.io/client-go/tools/cache"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"

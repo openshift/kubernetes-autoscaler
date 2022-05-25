@@ -911,6 +911,11 @@ func Test_clusterNameFromResource(t *testing.T) {
 }
 
 func Test_getKeyHelpers(t *testing.T) {
+	// unset the environment variable to ensure we get the default from the code
+	if err := os.Setenv(CAPIGroupEnvVar, ""); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
 	for _, tc := range []struct {
 		name     string
 		expected string
