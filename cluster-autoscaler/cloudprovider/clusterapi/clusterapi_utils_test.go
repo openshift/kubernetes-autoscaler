@@ -119,18 +119,18 @@ func TestUtilParseScalingBounds(t *testing.T) {
 	}, {
 		description: "CAPI min/max annotations still work, result is min 0, max 1",
 		annotations: map[string]string{
-			capiNodeGroupMinSizeAnnotationKey: "0",
-			capiNodeGroupMaxSizeAnnotationKey: "1",
+			deprecatedNodeGroupMinSizeAnnotationKey: "0",
+			deprecatedNodeGroupMaxSizeAnnotationKey: "1",
 		},
 		min: 0,
 		max: 1,
 	}, {
 		description: "CAPI min/max annotations do not take precedence over MAPI annotations, result is min 1, max 2",
 		annotations: map[string]string{
-			capiNodeGroupMinSizeAnnotationKey: "0",
-			capiNodeGroupMaxSizeAnnotationKey: "1",
-			nodeGroupMinSizeAnnotationKey:     "1",
-			nodeGroupMaxSizeAnnotationKey:     "2",
+			deprecatedNodeGroupMinSizeAnnotationKey: "0",
+			deprecatedNodeGroupMaxSizeAnnotationKey: "1",
+			nodeGroupMinSizeAnnotationKey:           "1",
+			nodeGroupMaxSizeAnnotationKey:           "2",
 		},
 		min: 1,
 		max: 2,
@@ -712,7 +712,7 @@ func Test_clusterNameFromResource(t *testing.T) {
 					"name":      "foo",
 					"namespace": "default",
 					"labels": map[string]interface{}{
-						capiClusterNameLabel: "bar",
+						deprecatedClusterNameLabel: "bar",
 					},
 				},
 				"spec": map[string]interface{}{
@@ -732,7 +732,7 @@ func Test_clusterNameFromResource(t *testing.T) {
 					"name":      "foo",
 					"namespace": "default",
 					"labels": map[string]interface{}{
-						capiClusterNameLabel: "bar",
+						deprecatedClusterNameLabel: "bar",
 					},
 				},
 				"spec": map[string]interface{}{
@@ -757,7 +757,7 @@ func Test_clusterNameFromResource(t *testing.T) {
 					"template": map[string]interface{}{
 						"metadata": map[string]interface{}{
 							"labels": map[string]interface{}{
-								capiClusterNameLabel: "bar",
+								deprecatedClusterNameLabel: "bar",
 							},
 						},
 					},
@@ -781,7 +781,7 @@ func Test_clusterNameFromResource(t *testing.T) {
 					"template": map[string]interface{}{
 						"metadata": map[string]interface{}{
 							"labels": map[string]interface{}{
-								capiClusterNameLabel: "bar",
+								deprecatedClusterNameLabel: "bar",
 							},
 						},
 					},

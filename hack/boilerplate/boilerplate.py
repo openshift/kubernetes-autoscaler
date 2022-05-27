@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 # Copyright 2015 The Kubernetes Authors.
 #
@@ -157,7 +157,8 @@ skipped_dirs = ['Godeps', 'third_party', '_gopath', '_output', '.git', 'cluster/
                 "cluster-autoscaler/cloudprovider/digitalocean/godo",
                 "cluster-autoscaler/cloudprovider/magnum/gophercloud",
                 "cluster-autoscaler/cloudprovider/ionoscloud/ionos-cloud-sdk-go",
-                "cluster-autoscaler/cloudprovider/hetzner/hcloud-go"]
+                "cluster-autoscaler/cloudprovider/hetzner/hcloud-go",
+                "cluster-autoscaler/cloudprovider/oci"]
 
 # list all the files contain 'DO NOT EDIT', but are not generated
 skipped_ungenerated_files = ['hack/build-ui.sh', 'hack/lib/swagger.sh',

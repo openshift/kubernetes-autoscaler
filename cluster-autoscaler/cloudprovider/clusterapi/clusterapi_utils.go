@@ -29,11 +29,11 @@ import (
 )
 
 const (
-	capiNodeGroupMinSizeAnnotationKey = "cluster.x-k8s.io/cluster-api-autoscaler-node-group-min-size"
-	capiNodeGroupMaxSizeAnnotationKey = "cluster.x-k8s.io/cluster-api-autoscaler-node-group-max-size"
-	nodeGroupMinSizeAnnotationKey     = "machine.openshift.io/cluster-api-autoscaler-node-group-min-size"
-	nodeGroupMaxSizeAnnotationKey     = "machine.openshift.io/cluster-api-autoscaler-node-group-max-size"
-	capiClusterNameLabel              = "cluster.x-k8s.io/cluster-name"
+	deprecatedNodeGroupMinSizeAnnotationKey = "cluster.k8s.io/cluster-api-autoscaler-node-group-min-size"
+	deprecatedNodeGroupMaxSizeAnnotationKey = "cluster.k8s.io/cluster-api-autoscaler-node-group-max-size"
+	nodeGroupMinSizeAnnotationKey           = "machine.openshift.io/cluster-api-autoscaler-node-group-min-size"
+	nodeGroupMaxSizeAnnotationKey           = "machine.openshift.io/cluster-api-autoscaler-node-group-max-size"
+	deprecatedClusterNameLabel              = "cluster.k8s.io/cluster-name"
 
 	cpuKey     = "machine.openshift.io/vCPU"
 	memoryKey  = "machine.openshift.io/memoryMb"
@@ -77,7 +77,7 @@ type normalizedProviderID string
 func minSize(annotations map[string]string) (int, error) {
 	val, found := annotations[nodeGroupMinSizeAnnotationKey]
 	if !found {
-		val, found = annotations[capiNodeGroupMinSizeAnnotationKey]
+		val, found = annotations[deprecatedNodeGroupMinSizeAnnotationKey]
 	}
 	if !found {
 		return 0, errMissingMinAnnotation
@@ -96,7 +96,7 @@ func minSize(annotations map[string]string) (int, error) {
 func maxSize(annotations map[string]string) (int, error) {
 	val, found := annotations[nodeGroupMaxSizeAnnotationKey]
 	if !found {
-		val, found = annotations[capiNodeGroupMaxSizeAnnotationKey]
+		val, found = annotations[deprecatedNodeGroupMaxSizeAnnotationKey]
 	}
 	if !found {
 		return 0, errMissingMaxAnnotation
@@ -224,14 +224,14 @@ func clusterNameFromResource(r *unstructured.Unstructured) string {
 	}
 
 	// fallback for backward compatibility for capiClusterNameLabel
-	if clusterName, ok := r.GetLabels()[capiClusterNameLabel]; ok {
+	if clusterName, ok := r.GetLabels()[deprecatedClusterNameLabel]; ok {
 		return clusterName
 	}
 
 	// fallback for cluster-api v1alpha1 cluster linking
 	templateLabels, found, err := unstructured.NestedStringMap(r.UnstructuredContent(), "spec", "template", "metadata", "labels")
 	if found {
-		if clusterName, ok := templateLabels[capiClusterNameLabel]; ok {
+		if clusterName, ok := templateLabels[deprecatedClusterNameLabel]; ok {
 			return clusterName
 		}
 	}

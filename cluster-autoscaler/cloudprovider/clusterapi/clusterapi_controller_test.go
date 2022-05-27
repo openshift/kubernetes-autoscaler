@@ -1482,7 +1482,6 @@ func TestGetAPIGroupPreferredVersion(t *testing.T) {
 			description:      "find version for default API group",
 			APIGroup:         defaultCAPIGroup,
 			preferredVersion: "v1beta1",
-			envVar:           "",
 			error:            false,
 		},
 		{
