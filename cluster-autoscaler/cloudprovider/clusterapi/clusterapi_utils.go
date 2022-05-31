@@ -57,6 +57,10 @@ const (
 	scaleUpFromZeroDefaultArchEnvVar = "CAPI_SCALE_ZERO_DEFAULT_ARCH"
 	// GpuDeviceType is used if DRA device is GPU
 	GpuDeviceType = "gpu"
+
+	// TODO: update machine API operator to match CAPI annotation so this can be inferred dynamically by getMachineDeleteAnnotationKey i.e ${apigroup}/delete-machine
+	// https://github.com/openshift/machine-api-operator/blob/128c5c90918c009172c6d24d5715888e0e1d59e4/pkg/controller/machineset/delete_policy.go#L34
+	oldMachineDeleteAnnotationKey = "machine.openshift.io/cluster-api-delete-machine"
 )
 
 var (
