@@ -28,15 +28,15 @@ import (
 )
 
 const (
-	deprecatedNodeGroupMinSizeAnnotationKey = "cluster.k8s.io/cluster-api-autoscaler-node-group-min-size"
-	deprecatedNodeGroupMaxSizeAnnotationKey = "cluster.k8s.io/cluster-api-autoscaler-node-group-max-size"
-	deprecatedClusterNameLabel              = "cluster.k8s.io/cluster-name"
-
 	cpuKey      = "capacity.cluster-autoscaler.kubernetes.io/cpu"
 	memoryKey   = "capacity.cluster-autoscaler.kubernetes.io/memory"
 	gpuTypeKey  = "capacity.cluster-autoscaler.kubernetes.io/gpu-type"
 	gpuCountKey = "capacity.cluster-autoscaler.kubernetes.io/gpu-count"
 	maxPodsKey  = "capacity.cluster-autoscaler.kubernetes.io/maxPods"
+
+	// TODO: update machine API operator to match CAPI annotation so this can be inferred dynamically by getMachineDeleteAnnotationKey i.e ${apigroup}/delete-machine
+	// https://github.com/openshift/machine-api-operator/blob/128c5c90918c009172c6d24d5715888e0e1d59e4/pkg/controller/machineset/delete_policy.go#L34
+	oldMachineDeleteAnnotationKey = "machine.openshift.io/cluster-api-delete-machine"
 )
 
 var (
