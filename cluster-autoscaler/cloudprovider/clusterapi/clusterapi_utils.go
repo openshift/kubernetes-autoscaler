@@ -31,9 +31,11 @@ import (
 const (
 	deprecatedNodeGroupMinSizeAnnotationKey = "cluster.k8s.io/cluster-api-autoscaler-node-group-min-size"
 	deprecatedNodeGroupMaxSizeAnnotationKey = "cluster.k8s.io/cluster-api-autoscaler-node-group-max-size"
-	nodeGroupMinSizeAnnotationKey           = "machine.openshift.io/cluster-api-autoscaler-node-group-min-size"
-	nodeGroupMaxSizeAnnotationKey           = "machine.openshift.io/cluster-api-autoscaler-node-group-max-size"
 	deprecatedClusterNameLabel              = "cluster.k8s.io/cluster-name"
+
+	// TODO: update machine API operator to match CAPI annotation so this can be inferred dynamically by getMachineDeleteAnnotationKey i.e ${apigroup}/delete-machine
+	// https://github.com/openshift/machine-api-operator/blob/128c5c90918c009172c6d24d5715888e0e1d59e4/pkg/controller/machineset/delete_policy.go#L34
+	oldMachineDeleteAnnotationKey = "machine.openshift.io/cluster-api-delete-machine"
 
 	cpuKey     = "machine.openshift.io/vCPU"
 	memoryKey  = "machine.openshift.io/memoryMb"
@@ -66,6 +68,23 @@ var (
 	errInvalidMaxAnnotation = errors.New("invalid max annotation")
 
 	zeroQuantity = resource.MustParse("0")
+
+	// machineDeleteAnnotationKey is the annotation used by cluster-api to indicate
+	// that a machine should be deleted. Because this key can be affected by the
+	// CAPI_GROUP env variable, it is initialized here.
+	machineDeleteAnnotationKey = getMachineDeleteAnnotationKey()
+
+	// machineAnnotationKey is the annotation used by the cluster-api on Node objects
+	// to specify the name of the related Machine object. Because this can be affected
+	// by the CAPI_GROUP env variable, it is initialized here.
+	machineAnnotationKey = getMachineAnnotationKey()
+
+	// nodeGroupMinSizeAnnotationKey and nodeGroupMaxSizeAnnotationKey are the keys
+	// used in MachineSet and MachineDeployment annotations to specify the limits
+	// for the node group. Because the keys can be affected by the CAPI_GROUP env
+	// variable, they are initialized here.
+	nodeGroupMinSizeAnnotationKey = getNodeGroupMinSizeAnnotationKey()
+	nodeGroupMaxSizeAnnotationKey = getNodeGroupMaxSizeAnnotationKey()
 )
 
 type normalizedProviderID string
