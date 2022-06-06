@@ -29,11 +29,9 @@ import (
 )
 
 const (
-	deprecatedNodeGroupMinSizeAnnotationKey = "cluster.k8s.io/cluster-api-autoscaler-node-group-min-size"
-	deprecatedNodeGroupMaxSizeAnnotationKey = "cluster.k8s.io/cluster-api-autoscaler-node-group-max-size"
-	nodeGroupMinSizeAnnotationKey           = "machine.openshift.io/cluster-api-autoscaler-node-group-min-size"
-	nodeGroupMaxSizeAnnotationKey           = "machine.openshift.io/cluster-api-autoscaler-node-group-max-size"
-	deprecatedClusterNameLabel              = "cluster.k8s.io/cluster-name"
+	// TODO: update machine API operator to match CAPI annotation so this can be inferred dynamically by getMachineDeleteAnnotationKey i.e ${apigroup}/delete-machine
+	// https://github.com/openshift/machine-api-operator/blob/128c5c90918c009172c6d24d5715888e0e1d59e4/pkg/controller/machineset/delete_policy.go#L34
+	oldMachineDeleteAnnotationKey = "machine.openshift.io/cluster-api-delete-machine"
 
 	cpuKey     = "machine.openshift.io/vCPU"
 	memoryKey  = "machine.openshift.io/memoryMb"
@@ -65,6 +63,23 @@ var (
 	// machine set has a non-integral max annotation value.
 	errInvalidMaxAnnotation = errors.New("invalid max annotation")
 
+	// machineDeleteAnnotationKey is the annotation used by cluster-api to indicate
+	// that a machine should be deleted. Because this key can be affected by the
+	// CAPI_GROUP env variable, it is initialized here.
+	machineDeleteAnnotationKey = getMachineDeleteAnnotationKey()
+
+	// machineAnnotationKey is the annotation used by the cluster-api on Node objects
+	// to specify the name of the related Machine object. Because this can be affected
+	// by the CAPI_GROUP env variable, it is initialized here.
+	machineAnnotationKey = getMachineAnnotationKey()
+
+	// nodeGroupMinSizeAnnotationKey and nodeGroupMaxSizeAnnotationKey are the keys
+	// used in MachineSet and MachineDeployment annotations to specify the limits
+	// for the node group. Because the keys can be affected by the CAPI_GROUP env
+	// variable, they are initialized here.
+	nodeGroupMinSizeAnnotationKey = getNodeGroupMinSizeAnnotationKey()
+	nodeGroupMaxSizeAnnotationKey = getNodeGroupMaxSizeAnnotationKey()
+
 	zeroQuantity = resource.MustParse("0")
 )
 
@@ -76,9 +91,6 @@ type normalizedProviderID string
 // value is not of type int.
 func minSize(annotations map[string]string) (int, error) {
 	val, found := annotations[nodeGroupMinSizeAnnotationKey]
-	if !found {
-		val, found = annotations[deprecatedNodeGroupMinSizeAnnotationKey]
-	}
 	if !found {
 		return 0, errMissingMinAnnotation
 	}
@@ -95,9 +107,6 @@ func minSize(annotations map[string]string) (int, error) {
 // value is not of type int.
 func maxSize(annotations map[string]string) (int, error) {
 	val, found := annotations[nodeGroupMaxSizeAnnotationKey]
-	if !found {
-		val, found = annotations[deprecatedNodeGroupMaxSizeAnnotationKey]
-	}
 	if !found {
 		return 0, errMissingMaxAnnotation
 	}
@@ -221,19 +230,6 @@ func clusterNameFromResource(r *unstructured.Unstructured) string {
 	// Fallback to value of clusterNameLabel
 	if clusterName, ok := r.GetLabels()[clusterNameLabel]; ok {
 		return clusterName
-	}
-
-	// fallback for backward compatibility for capiClusterNameLabel
-	if clusterName, ok := r.GetLabels()[deprecatedClusterNameLabel]; ok {
-		return clusterName
-	}
-
-	// fallback for cluster-api v1alpha1 cluster linking
-	templateLabels, found, err := unstructured.NestedStringMap(r.UnstructuredContent(), "spec", "template", "metadata", "labels")
-	if found {
-		if clusterName, ok := templateLabels[deprecatedClusterNameLabel]; ok {
-			return clusterName
-		}
 	}
 
 	return ""

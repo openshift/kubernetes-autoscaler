@@ -41,6 +41,7 @@ import (
 	cloudBuilder "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/builder"
 	"k8s.io/autoscaler/cluster-autoscaler/config"
 	"k8s.io/autoscaler/cluster-autoscaler/core"
+	"k8s.io/autoscaler/cluster-autoscaler/core/filteroutschedulable"
 	"k8s.io/autoscaler/cluster-autoscaler/estimator"
 	"k8s.io/autoscaler/cluster-autoscaler/expander"
 	"k8s.io/autoscaler/cluster-autoscaler/metrics"
@@ -61,7 +62,7 @@ import (
 	componentbaseconfig "k8s.io/component-base/config"
 	"k8s.io/component-base/config/options"
 	"k8s.io/component-base/metrics/legacyregistry"
-	klog "k8s.io/klog/v2"
+	"k8s.io/klog/v2"
 )
 
 // MultiStringFlag is a flag for passing multiple parameters using same flag
@@ -139,6 +140,7 @@ var (
 	okTotalUnreadyCount        = flag.Int("ok-total-unready-count", 3, "Number of allowed unready nodes, irrespective of max-total-unready-percentage")
 	scaleUpFromZero            = flag.Bool("scale-up-from-zero", true, "Should CA scale up when there 0 ready nodes.")
 	maxNodeProvisionTime       = flag.Duration("max-node-provision-time", 15*time.Minute, "Maximum time CA waits for node to be provisioned")
+	maxPodEvictionTime         = flag.Duration("max-pod-eviction-time", 2*time.Minute, "Maximum time CA tries to evict a pod before giving up")
 	nodeGroupsFlag             = multiStringFlag(
 		"nodes",
 		"sets min,max size and other configuration data for a node group in a format accepted by cloud provider. Can be used multiple times. Format: <min>:<max>:<other...>")
@@ -186,10 +188,19 @@ var (
 	daemonSetEvictionForEmptyNodes     = flag.Bool("daemonset-eviction-for-empty-nodes", false, "DaemonSet pods will be gracefully terminated from empty nodes")
 	daemonSetEvictionForOccupiedNodes  = flag.Bool("daemonset-eviction-for-occupied-nodes", true, "DaemonSet pods will be gracefully terminated from non-empty nodes")
 	userAgent                          = flag.String("user-agent", "cluster-autoscaler", "User agent used for HTTP calls.")
+	emitPerNodeGroupMetrics            = flag.Bool("emit-per-nodegroup-metrics", false, "If true, emit per node group metrics.")
+	debuggingSnapshotEnabled           = flag.Bool("debugging-snapshot-enabled", false, "Whether the debugging snapshot of cluster autoscaler feature is enabled")
+	nodeInfoCacheExpireTime            = flag.Duration("node-info-cache-expire-time", 87600*time.Hour, "Node Info cache expire time for each item. Default value is 10 years.")
 
-	emitPerNodeGroupMetrics  = flag.Bool("emit-per-nodegroup-metrics", false, "If true, emit per node group metrics.")
-	debuggingSnapshotEnabled = flag.Bool("debugging-snapshot-enabled", false, "Whether the debugging snapshot of cluster autoscaler feature is enabled")
-	nodeInfoCacheExpireTime  = flag.Duration("node-info-cache-expire-time", 87600*time.Hour, "Node Info cache expire time for each item. Default value is 10 years.")
+	initialNodeGroupBackoffDuration = flag.Duration("initial-node-group-backoff-duration", 5*time.Minute,
+		"initialNodeGroupBackoffDuration is the duration of first backoff after a new node failed to start.")
+	maxNodeGroupBackoffDuration = flag.Duration("max-node-group-backoff-duration", 30*time.Minute,
+		"maxNodeGroupBackoffDuration is the maximum backoff duration for a NodeGroup after new nodes failed to start.")
+	nodeGroupBackoffResetTimeout = flag.Duration("node-group-backoff-reset-timeout", 3*time.Hour,
+		"nodeGroupBackoffResetTimeout is the time after last failed scale-up when the backoff duration is reset.")
+
+	maxScaleDownParallelismFlag = flag.Int("max-scale-down-parallelism", 10, "Maximum number of nodes (both empty and needing drain) that can be deleted in parallel.")
+	maxDrainParallelismFlag     = flag.Int("max-drain-parallelism", 1, "Maximum number of nodes needing drain, that can be drained and deleted in parallel.")
 )
 
 func createAutoscalingOptions() config.AutoscalingOptions {
@@ -233,6 +244,7 @@ func createAutoscalingOptions() config.AutoscalingOptions {
 		MaxEmptyBulkDelete:                 *maxEmptyBulkDeleteFlag,
 		MaxGracefulTerminationSec:          *maxGracefulTerminationFlag,
 		MaxNodeProvisionTime:               *maxNodeProvisionTime,
+		MaxPodEvictionTime:                 *maxPodEvictionTime,
 		MaxNodesTotal:                      *maxNodesTotal,
 		MaxCoresTotal:                      maxCoresTotal,
 		MinCoresTotal:                      minCoresTotal,
@@ -269,6 +281,11 @@ func createAutoscalingOptions() config.AutoscalingOptions {
 		DaemonSetEvictionForEmptyNodes:     *daemonSetEvictionForEmptyNodes,
 		DaemonSetEvictionForOccupiedNodes:  *daemonSetEvictionForOccupiedNodes,
 		UserAgent:                          *userAgent,
+		InitialNodeGroupBackoffDuration:    *initialNodeGroupBackoffDuration,
+		MaxNodeGroupBackoffDuration:        *maxNodeGroupBackoffDuration,
+		NodeGroupBackoffResetTimeout:       *nodeGroupBackoffResetTimeout,
+		MaxScaleDownParallelism:            *maxScaleDownParallelismFlag,
+		MaxDrainParallelism:                *maxDrainParallelismFlag,
 	}
 }
 
@@ -330,7 +347,7 @@ func buildAutoscaler(debuggingSnapshotter debuggingsnapshot.DebuggingSnapshotter
 
 	opts.Processors = ca_processors.DefaultProcessors()
 	opts.Processors.TemplateNodeInfoProvider = nodeinfosprovider.NewDefaultTemplateNodeInfoProvider(nodeInfoCacheExpireTime)
-	opts.Processors.PodListProcessor = core.NewFilterOutSchedulablePodListProcessor()
+	opts.Processors.PodListProcessor = filteroutschedulable.NewFilterOutSchedulablePodListProcessor()
 
 	nodeInfoComparatorBuilder := nodegroupset.CreateGenericNodeInfoComparator
 	if autoscalingOptions.CloudProviderName == cloudprovider.AzureProviderName {

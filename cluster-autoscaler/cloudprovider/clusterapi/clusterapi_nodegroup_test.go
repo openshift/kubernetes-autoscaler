@@ -314,11 +314,10 @@ func TestNodeGroupIncreaseSizeErrors(t *testing.T) {
 
 func TestNodeGroupIncreaseSize(t *testing.T) {
 	type testCase struct {
-		description   string
-		delta         int
-		initial       int32
-		initialStatus int32
-		expected      int32
+		description string
+		delta       int
+		initial     int32
+		expected    int32
 	}
 
 	test := func(t *testing.T, tc *testCase, testConfig *testConfig) {
@@ -392,7 +391,6 @@ func TestNodeGroupDecreaseTargetSize(t *testing.T) {
 		description         string
 		delta               int
 		initial             int32
-		initialStatus       int32
 		targetSizeIncrement int32
 		expected            int32
 		expectedError       bool
@@ -686,9 +684,6 @@ func TestNodeGroupDeleteNodes(t *testing.T) {
 			}
 			if _, found := machine.GetAnnotations()[machineDeleteAnnotationKey]; !found {
 				t.Errorf("expected annotation %q on machine %s", machineDeleteAnnotationKey, machine.GetName())
-			}
-			if _, found := machine.GetAnnotations()[deprecatedMachineDeleteAnnotationKey]; !found {
-				t.Errorf("expected annotation %q on machine %s", deprecatedMachineDeleteAnnotationKey, machine.GetName())
 			}
 		}
 

@@ -147,6 +147,8 @@ type AutoscalingOptions struct {
 	MaxBulkSoftTaintCount int
 	// MaxBulkSoftTaintTime sets the maximum duration of single run of PreferNoSchedule tainting.
 	MaxBulkSoftTaintTime time.Duration
+	// MaxPodEvictionTime sets the maximum time CA tries to evict a pod before giving up.
+	MaxPodEvictionTime time.Duration
 	// IgnoredTaints is a list of taints to ignore when considering a node template for scheduling.
 	IgnoredTaints []string
 	// BalancingExtraIgnoredLabels is a list of labels to additionally ignore when comparing if two node groups are similar.
@@ -169,4 +171,14 @@ type AutoscalingOptions struct {
 	DaemonSetEvictionForOccupiedNodes bool
 	// User agent to use for HTTP calls.
 	UserAgent string
+	// InitialNodeGroupBackoffDuration is the duration of first backoff after a new node failed to start
+	InitialNodeGroupBackoffDuration time.Duration
+	// MaxNodeGroupBackoffDuration is the maximum backoff duration for a NodeGroup after new nodes failed to start.
+	MaxNodeGroupBackoffDuration time.Duration
+	// NodeGroupBackoffResetTimeout is the time after last failed scale-up when the backoff duration is reset.
+	NodeGroupBackoffResetTimeout time.Duration
+	// MaxScaleDownParallelism is the maximum number of nodes (both empty and needing drain) that can be deleted in parallel.
+	MaxScaleDownParallelism int
+	// MaxDrainParallelism is the maximum number of nodes needing drain, that can be drained and deleted in parallel.
+	MaxDrainParallelism int
 }
