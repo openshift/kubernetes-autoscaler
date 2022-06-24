@@ -42,7 +42,8 @@ import (
 	schedulerframework "k8s.io/kubernetes/pkg/scheduler/framework"
 
 	apiv1 "k8s.io/api/core/v1"
-	policyv1 "k8s.io/api/policy/v1beta1"
+	policyv1 "k8s.io/api/policy/v1"
+	policyv1beta1 "k8s.io/api/policy/v1beta1"
 	kube_errors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
@@ -1266,7 +1267,7 @@ func evictPod(podToEvict *apiv1.Pod, isDaemonSetPod bool, client kube_client.Int
 	var lastError error
 	for first := true; first || time.Now().Before(retryUntil); time.Sleep(waitBetweenRetries) {
 		first = false
-		eviction := &policyv1.Eviction{
+		eviction := &policyv1beta1.Eviction{
 			ObjectMeta: metav1.ObjectMeta{
 				Namespace: podToEvict.Namespace,
 				Name:      podToEvict.Name,
