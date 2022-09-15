@@ -29,6 +29,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/autoscaler/cluster-autoscaler/utils/units"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/utils/ptr"
 )
@@ -333,8 +334,8 @@ func TestSetSizeAndReplicas(t *testing.T) {
 
 func TestAnnotations(t *testing.T) {
 	cpuQuantity := resource.MustParse("2")
-	memQuantity := resource.MustParse("1024Mi")
 	diskQuantity := resource.MustParse("100Gi")
+	memQuantity := resource.MustParse("1024")
 	gpuQuantity := resource.MustParse("1")
 	maxPodsQuantity := resource.MustParse("42")
 	expectedTaints := []v1.Taint{{Key: "key1", Effect: v1.TaintEffectNoSchedule, Value: "value1"}, {Key: "key2", Effect: v1.TaintEffectNoExecute, Value: "value2"}}
@@ -373,6 +374,11 @@ func TestAnnotations(t *testing.T) {
 		draDriverKey:    draDriver,
 	}
 
+	// convert the initial memory value from Mebibytes to bytes as this conversion happens internally
+	// when we use InstanceMemoryCapacity()
+	memVal, _ := memQuantity.AsInt64()
+	memQuantityAsBytes := resource.NewQuantity(memVal*units.MiB, resource.DecimalSI)
+
 	test := func(t *testing.T, testConfig *TestConfig, testResource *unstructured.Unstructured) {
 		controller := NewTestMachineController(t)
 		defer controller.Stop()
@@ -391,7 +397,7 @@ func TestAnnotations(t *testing.T) {
 
 		if mem, err := sr.InstanceMemoryCapacityAnnotation(); err != nil {
 			t.Fatal(err)
-		} else if memQuantity.Cmp(mem) != 0 {
+		} else if memQuantityAsBytes.Cmp(mem) != 0 {
 			t.Errorf("expected %v, got %v", memQuantity, mem)
 		}
 
@@ -461,7 +467,7 @@ func TestCanScaleFromZero(t *testing.T) {
 			"can scale from zero",
 			map[string]string{
 				cpuKey:    "1",
-				memoryKey: "1024Mi",
+				memoryKey: "1024",
 			},
 			nil,
 			true,
@@ -469,7 +475,7 @@ func TestCanScaleFromZero(t *testing.T) {
 		{
 			"with missing CPU info cannot scale from zero",
 			map[string]string{
-				memoryKey: "1024Mi",
+				memoryKey: "1024",
 			},
 			nil,
 			false,
@@ -517,7 +523,7 @@ func TestCanScaleFromZero(t *testing.T) {
 			"with both annotations and capacity in machine template can scale from zero",
 			map[string]string{
 				cpuKey:    "1",
-				memoryKey: "1024Mi",
+				memoryKey: "1024",
 			},
 			map[string]string{
 				cpuStatusKey:    "1",
