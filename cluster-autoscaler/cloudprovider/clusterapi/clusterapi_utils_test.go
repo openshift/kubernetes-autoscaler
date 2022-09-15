@@ -512,18 +512,18 @@ func TestParseMemoryCapacity(t *testing.T) {
 	}, {
 		description:      "quantity as with no unit type",
 		annotations:      map[string]string{memoryKey: "1024"},
-		expectedQuantity: *resource.NewQuantity(1024, resource.DecimalSI),
+		expectedQuantity: *resource.NewQuantity(1024*units.MiB, resource.DecimalSI),
 		expectedError:    false,
 	}, {
 		description:      "quantity with unit type (Mi)",
 		annotations:      map[string]string{memoryKey: "456Mi"},
-		expectedError:    false,
-		expectedQuantity: *resource.NewQuantity(456*units.MiB, resource.DecimalSI),
+		expectedQuantity: zeroQuantity.DeepCopy(),
+		expectedError:    true,
 	}, {
 		description:      "quantity with unit type (Gi)",
 		annotations:      map[string]string{memoryKey: "8Gi"},
-		expectedError:    false,
-		expectedQuantity: *resource.NewQuantity(8*units.GiB, resource.DecimalSI),
+		expectedQuantity: zeroQuantity.DeepCopy(),
+		expectedError:    true,
 	}} {
 		t.Run(tc.description, func(t *testing.T) {
 			got, err := parseMemoryCapacity(tc.annotations)
