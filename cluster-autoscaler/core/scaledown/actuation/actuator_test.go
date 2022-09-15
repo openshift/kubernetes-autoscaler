@@ -18,6 +18,7 @@ package actuation
 
 import (
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -537,12 +538,14 @@ func TestStartDeletion(t *testing.T) {
 			wantTaintUpdates: map[string][][]apiv1.Taint{
 				"drain-node-0": {
 					{toBeDeletedTaint},
+					{},
 				},
 				"drain-node-1": {
 					{toBeDeletedTaint},
 				},
 				"drain-node-2": {
 					{toBeDeletedTaint},
+					{},
 				},
 				"drain-node-3": {
 					{toBeDeletedTaint},
@@ -622,12 +625,14 @@ func TestStartDeletion(t *testing.T) {
 				},
 				"empty-node-1": {
 					{toBeDeletedTaint},
+					{},
 				},
 				"drain-node-0": {
 					{toBeDeletedTaint},
 				},
 				"drain-node-1": {
 					{toBeDeletedTaint},
+					{},
 				},
 			},
 			wantNodeDeleteResults: map[string]status.NodeDeleteResult{
@@ -716,8 +721,12 @@ func TestStartDeletion(t *testing.T) {
 		},
 	} {
 		t.Run(tn, func(t *testing.T) {
+			// This is needed because the tested code starts goroutines that can technically live longer than the execution
+			// of a single test case, and the goroutines eventually access tc in fakeClient hooks below.
+			tc := tc
 			// Insert all nodes into a map to support live node updates and GETs.
 			nodesByName := make(map[string]*apiv1.Node)
+			nodesLock := sync.Mutex{}
 			for _, node := range tc.emptyNodes {
 				nodesByName[node.Name] = node
 			}
@@ -737,6 +746,8 @@ func TestStartDeletion(t *testing.T) {
 
 			// We're faking the whole k8s client, and some of the code needs to get live nodes and pods, so GET on nodes and pods has to be set up.
 			fakeClient.Fake.AddReactor("get", "nodes", func(action core.Action) (bool, runtime.Object, error) {
+				nodesLock.Lock()
+				defer nodesLock.Unlock()
 				getAction := action.(core.GetAction)
 				node, found := nodesByName[getAction.GetName()]
 				if !found {
@@ -751,6 +762,8 @@ func TestStartDeletion(t *testing.T) {
 			// Hook node update to gather all taint updates, and to fail the update for certain nodes to simulate errors.
 			fakeClient.Fake.AddReactor("update", "nodes",
 				func(action core.Action) (bool, runtime.Object, error) {
+					nodesLock.Lock()
+					defer nodesLock.Unlock()
 					update := action.(core.UpdateAction)
 					obj := update.GetObject().(*apiv1.Node)
 					if tc.failedNodeTaint[obj.Name] {
@@ -902,6 +915,15 @@ func TestStartDeletion(t *testing.T) {
 				t.Errorf("taintUpdates diff (-want +got):\n%s", diff)
 			}
 
+			// Wait for all expected deletions to be reported in NodeDeletionTracker. Reporting happens shortly after the deletion
+			// in cloud provider we sync to above and so this will usually not wait at all. However, it can still happen
+			// that there is a delay between cloud provider deletion and reporting, in which case the results are not there yet
+			// and we need to wait for them before asserting.
+			err = waitForDeletionResultsCount(actuator.nodeDeletionTracker, len(tc.wantNodeDeleteResults), 3*time.Second, 200*time.Millisecond)
+			if err != nil {
+				t.Errorf("Timeout while waiting for node deletion results")
+			}
+
 			// Run StartDeletion again to gather node deletion results for deletions started in the previous call, and verify
 			// that they look as expected.
 			gotNextStatus, gotNextErr := actuator.StartDeletion(nil, nil, time.Now())
@@ -992,4 +1014,17 @@ func generateUtilInfo(cpuUtil, memUtil float64) utilization.Info {
 		ResourceName: higherUtilName,
 		Utilization:  higherUtilVal,
 	}
+}
+
+func waitForDeletionResultsCount(ndt *deletiontracker.NodeDeletionTracker, resultsCount int, timeout, retryTime time.Duration) error {
+	// This is quite ugly, but shouldn't matter much since in most cases there shouldn't be a need to wait at all, and
+	// the function should return quickly after the first if check.
+	// An alternative could be to turn NodeDeletionTracker into an interface, and use an implementation which allows
+	// synchronizing calls to EndDeletion in the test code.
+	for retryUntil := time.Now().Add(timeout); time.Now().Before(retryUntil); time.Sleep(retryTime) {
+		if results, _ := ndt.DeletionResults(); len(results) == resultsCount {
+			return nil
+		}
+	}
+	return fmt.Errorf("timed out while waiting for node deletion results")
 }

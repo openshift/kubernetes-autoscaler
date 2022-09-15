@@ -1,15 +1,10 @@
 approvers:
-- enxebre
-- frobware
-- elmiko
-- alexander-demichev
-- JoelSpeed
+- mwielgus
+- maciekpytel
+- bskiba
+- gjtempleton
 reviewers:
-- enxebre
-- frobware
-- elmiko
-- alexander-demichev
-- JoelSpeed
-
-component: "Cloud Compute"
-subcomponent: "Cluster Autoscaler"
+- mwielgus
+- maciekpytel
+- bskiba
+- gjtempleton

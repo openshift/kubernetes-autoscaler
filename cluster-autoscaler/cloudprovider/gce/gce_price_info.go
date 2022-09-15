@@ -16,27 +16,27 @@ limitations under the License.
 
 package gce
 
-// PriceInfo is the interface to fetch the pricing information needed for gce pricing
+// PriceInfo is the interface to fetch the pricing information needed for gce pricing.
 type PriceInfo interface {
-	// BaseCpuPricePerHour gets the base cpu price per hour
+	// BaseCpuPricePerHour gets the base cpu price per hour.
 	BaseCpuPricePerHour() float64
-	// BaseMemoryPricePerHourPerGb gets the base memory price per hour per Gb
+	// BaseMemoryPricePerHourPerGb gets the base memory price per hour per Gb.
 	BaseMemoryPricePerHourPerGb() float64
-	// BasePreemptibleDiscount gets the base preemptible discount applicable
+	// BasePreemptibleDiscount gets the base preemptible discount applicable.
 	BasePreemptibleDiscount() float64
-	// BaseGpuPricePerHour gets the base gpu price per hour
+	// BaseGpuPricePerHour gets the base gpu price per hour.
 	BaseGpuPricePerHour() float64
 
-	// PredefinedCpuPricePerHour gets the predefined cpu price per hour for machine family
+	// PredefinedCpuPricePerHour gets the predefined cpu price per hour for machine family.
 	PredefinedCpuPricePerHour() map[string]float64
-	// PredefinedMemoryPricePerHourPerGb gets the predefined memory price per hour per Gb for machine family
+	// PredefinedMemoryPricePerHourPerGb gets the predefined memory price per hour per Gb for machine family.
 	PredefinedMemoryPricePerHourPerGb() map[string]float64
-	// PredefinedPreemptibleDiscount gets the predefined preemptible discount for machine family
+	// PredefinedPreemptibleDiscount gets the predefined preemptible discount for machine family.
 	PredefinedPreemptibleDiscount() map[string]float64
 
-	// CustomCpuPricePerHour gets the cpu price per hour for custom machine of a machine family
+	// CustomCpuPricePerHour gets the cpu price per hour for custom machine of a machine family.
 	CustomCpuPricePerHour() map[string]float64
-	// CustomMemoryPricePerHourPerGb gets the memory price per hour per Gb for custom machine of a machine family
+	// CustomMemoryPricePerHourPerGb gets the memory price per hour per Gb for custom machine of a machine family.
 	CustomMemoryPricePerHourPerGb() map[string]float64
 	CustomPreemptibleDiscount() map[string]float64
 
@@ -44,16 +44,27 @@ type PriceInfo interface {
 	PreemptibleInstancePrices() map[string]float64
 
 	GpuPrices() map[string]float64
-	// PreemptibleGpuPrices gets the price of preemptible GPUs
+	// PreemptibleGpuPrices gets the price of preemptible GPUs.
 	PreemptibleGpuPrices() map[string]float64
+
+	// BootDiskPricePerHour returns the map of the prices per Gb of boot disk per hour.
+	BootDiskPricePerHour() map[string]float64
+	// LocalSsdPricePerHour returns the price per Gb of local SSD per hour.
+	LocalSsdPricePerHour() float64
+	// LocalSsdPricePerHour returns the price per Gb of local SSD per hour for Spot VMs.
+	SpotLocalSsdPricePerHour() float64
 }
 
+const hoursInMonth = float64(24 * 30)
+
 const (
-	//TODO: Move it to a config file.
-	cpuPricePerHour         = 0.033174
-	memoryPricePerHourPerGb = 0.004446
-	preemptibleDiscount     = 0.00698 / 0.033174
-	gpuPricePerHour         = 0.700
+	// TODO: Move it to a config file.
+	cpuPricePerHour          = 0.033174
+	memoryPricePerHourPerGb  = 0.004446
+	preemptibleDiscount      = 0.00698 / 0.033174
+	gpuPricePerHour          = 0.700
+	localSsdPriceMonthly     = 0.08
+	spotLocalSsdPriceMonthly = 0.048
 )
 
 var (
@@ -119,6 +130,10 @@ var (
 		"a2-highgpu-4g":    14.69354,
 		"a2-highgpu-8g":    29.38708,
 		"a2-megagpu-16g":   55.739504,
+		"a2-ultragpu-1g":   5.0688,
+		"a2-ultragpu-2g":   10.1376,
+		"a2-ultragpu-4g":   20.2752,
+		"a2-ultragpu-8g":   40.5504,
 		"c2-standard-4":    0.2088,
 		"c2-standard-8":    0.4176,
 		"c2-standard-16":   0.8352,
@@ -212,7 +227,7 @@ var (
 		"n2-highmem-64":    4.1924,
 		"n2-highmem-80":    5.2406,
 		"n2-highmem-96":    6.2886,
-		"n2-highmem-128":   8.3848,
+		"n2-highmem-128":   7.7069,
 		"n2-standard-2":    0.0971,
 		"n2-standard-4":    0.1942,
 		"n2-standard-8":    0.3885,
@@ -269,6 +284,10 @@ var (
 		"a2-highgpu-4g":    4.408062,
 		"a2-highgpu-8g":    8.816124,
 		"a2-megagpu-16g":   16.721851,
+		"a2-ultragpu-1g":   1.6,
+		"a2-ultragpu-2g":   3.2,
+		"a2-ultragpu-4g":   6.4,
+		"a2-ultragpu-8g":   12.8,
 		"c2-standard-4":    0.0505,
 		"c2-standard-8":    0.1011,
 		"c2-standard-16":   0.2021,
@@ -359,7 +378,7 @@ var (
 		"n2-highmem-64":    1.0145,
 		"n2-highmem-80":    1.2681,
 		"n2-highmem-96":    1.5218,
-		"n2-highmem-128":   2.029,
+		"n2-highmem-128":   1.8691,
 		"n2-standard-2":    0.0235,
 		"n2-standard-4":    0.0470,
 		"n2-standard-8":    0.0940,
@@ -370,37 +389,37 @@ var (
 		"n2-standard-80":   0.9400,
 		"n2-standard-96":   1.128,
 		"n2-standard-128":  1.504,
-		"n2d-highcpu-2":    0.0151,
-		"n2d-highcpu-4":    0.0302,
-		"n2d-highcpu-8":    0.0604,
-		"n2d-highcpu-16":   0.1208,
-		"n2d-highcpu-32":   0.2415,
-		"n2d-highcpu-48":   0.3623,
-		"n2d-highcpu-64":   0.4830,
-		"n2d-highcpu-80":   0.6038,
-		"n2d-highcpu-96":   0.7245,
-		"n2d-highcpu-128":  0.9660,
-		"n2d-highcpu-224":  1.6905,
-		"n2d-highmem-2":    0.0276,
-		"n2d-highmem-4":    0.0552,
-		"n2d-highmem-8":    0.1103,
-		"n2d-highmem-16":   0.2207,
-		"n2d-highmem-32":   0.4413,
-		"n2d-highmem-48":   0.6620,
-		"n2d-highmem-64":   0.8826,
-		"n2d-highmem-80":   1.1033,
-		"n2d-highmem-96":   1.3239,
-		"n2d-standard-2":   0.0204,
-		"n2d-standard-4":   0.0409,
-		"n2d-standard-8":   0.0818,
-		"n2d-standard-16":  0.1636,
-		"n2d-standard-32":  0.3271,
-		"n2d-standard-48":  0.4907,
-		"n2d-standard-64":  0.6543,
-		"n2d-standard-80":  0.8178,
-		"n2d-standard-96":  0.9814,
-		"n2d-standard-128": 1.3085,
-		"n2d-standard-224": 2.2900,
+		"n2d-highcpu-2":    0.00629,
+		"n2d-highcpu-4":    0.01258,
+		"n2d-highcpu-8":    0.02516,
+		"n2d-highcpu-16":   0.05032,
+		"n2d-highcpu-32":   0.10064,
+		"n2d-highcpu-48":   0.15096,
+		"n2d-highcpu-64":   0.20128,
+		"n2d-highcpu-80":   0.2516,
+		"n2d-highcpu-96":   0.30192,
+		"n2d-highcpu-128":  0.40256,
+		"n2d-highcpu-224":  0.70448,
+		"n2d-highmem-2":    0.011498,
+		"n2d-highmem-4":    0.022996,
+		"n2d-highmem-8":    0.045992,
+		"n2d-highmem-16":   0.091984,
+		"n2d-highmem-32":   0.183968,
+		"n2d-highmem-48":   0.275952,
+		"n2d-highmem-64":   0.367936,
+		"n2d-highmem-80":   0.45992,
+		"n2d-highmem-96":   0.551904,
+		"n2d-standard-2":   0.008522,
+		"n2d-standard-4":   0.017044,
+		"n2d-standard-8":   0.034088,
+		"n2d-standard-16":  0.068176,
+		"n2d-standard-32":  0.136352,
+		"n2d-standard-48":  0.204528,
+		"n2d-standard-64":  0.272704,
+		"n2d-standard-80":  0.34088,
+		"n2d-standard-96":  0.409056,
+		"n2d-standard-128": 0.545408,
+		"n2d-standard-224": 0.954464,
 		"t2d-standard-1":   0.0102,
 		"t2d-standard-2":   0.0204,
 		"t2d-standard-4":   0.0409,
@@ -417,6 +436,7 @@ var (
 		"nvidia-tesla-p100": 1.46,
 		"nvidia-tesla-k80":  0.45,
 		"nvidia-tesla-a100": 0, // price of this gpu is counted into A2 machine-type price
+		"nvidia-a100-80gb":  0, // price of this gpu is counted into A2 machine-type price
 	}
 	preemptibleGpuPrices = map[string]float64{
 		"nvidia-tesla-t4":   0.11,
@@ -425,15 +445,25 @@ var (
 		"nvidia-tesla-p100": 0.43,
 		"nvidia-tesla-k80":  0.037500,
 		"nvidia-tesla-a100": 0, // price of this gpu is counted into A2 machine-type price
+		"nvidia-a100-80gb":  0, // price of this gpu is counted into A2 machine-type price
 	}
+	bootDiskPricePerHour = map[string]float64{
+		"pd-standard": 0.04 / hoursInMonth,
+		"pd-balanced": 0.100 / hoursInMonth,
+		"pd-ssd":      0.170 / hoursInMonth,
+	}
+	// DefaultBootDiskType is pd-standard disk type.
+	DefaultBootDiskType = "pd-standard"
 )
 
-// GcePriceInfo is the GCE specific implementation of the PricingInfo
+// GcePriceInfo is the GCE specific implementation of the PricingInfo.
 type GcePriceInfo struct {
 	baseCpuPricePerHour         float64
 	baseMemoryPricePerHourPerGb float64
 	basePreemptibleDiscount     float64
 	baseGpuPricePerHour         float64
+	localSsdPriceMonthly        float64
+	spotLocalSsdPriceMonthly    float64
 
 	predefinedCpuPricePerHour         map[string]float64
 	predefinedMemoryPricePerHourPerGb map[string]float64
@@ -448,15 +478,18 @@ type GcePriceInfo struct {
 
 	gpuPrices            map[string]float64
 	preemptibleGpuPrices map[string]float64
+	bootDiskPricePerHour map[string]float64
 }
 
-// NewGcePriceInfo returns a new instance of the GcePriceInfo
+// NewGcePriceInfo returns a new instance of the GcePriceInfo.
 func NewGcePriceInfo() *GcePriceInfo {
 	return &GcePriceInfo{
 		baseCpuPricePerHour:         cpuPricePerHour,
 		baseMemoryPricePerHourPerGb: memoryPricePerHourPerGb,
 		basePreemptibleDiscount:     preemptibleDiscount,
 		baseGpuPricePerHour:         gpuPricePerHour,
+		localSsdPriceMonthly:        localSsdPriceMonthly,
+		spotLocalSsdPriceMonthly:    spotLocalSsdPriceMonthly,
 
 		predefinedCpuPricePerHour:         predefinedCpuPricePerHour,
 		predefinedMemoryPricePerHourPerGb: predefinedMemoryPricePerHourPerGb,
@@ -471,6 +504,7 @@ func NewGcePriceInfo() *GcePriceInfo {
 
 		gpuPrices:            gpuPrices,
 		preemptibleGpuPrices: preemptibleGpuPrices,
+		bootDiskPricePerHour: bootDiskPricePerHour,
 	}
 }
 
@@ -542,4 +576,19 @@ func (g *GcePriceInfo) GpuPrices() map[string]float64 {
 // PreemptibleGpuPrices gets the price of preemptible GPUs
 func (g *GcePriceInfo) PreemptibleGpuPrices() map[string]float64 {
 	return g.preemptibleGpuPrices
+}
+
+// BootDiskPricePerHour gets the price of boot disk.
+func (g *GcePriceInfo) BootDiskPricePerHour() map[string]float64 {
+	return g.bootDiskPricePerHour
+}
+
+// LocalSsdPricePerHour gets the price of boot disk.
+func (g *GcePriceInfo) LocalSsdPricePerHour() float64 {
+	return g.localSsdPriceMonthly / hoursInMonth
+}
+
+// SpotLocalSsdPricePerHour gets the price of boot disk.
+func (g *GcePriceInfo) SpotLocalSsdPricePerHour() float64 {
+	return g.spotLocalSsdPriceMonthly / hoursInMonth
 }

@@ -20,11 +20,11 @@ import (
 	"fmt"
 	"math/rand"
 
+	"github.com/pkg/errors"
+
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	gpuapis "k8s.io/autoscaler/cluster-autoscaler/utils/gpu"
 	kubeletapis "k8s.io/kubelet/pkg/apis"
 	schedulerframework "k8s.io/kubernetes/pkg/scheduler/framework"
 
@@ -35,9 +35,10 @@ import (
 const (
 	debugFormat = "%s (min: %d, max: %d, replicas: %d)"
 
-	// This default for the maximum number of pods comes from the machine-config-operator
-	// see https://github.com/openshift/machine-config-operator/blob/2f1bd6d99131fa4471ed95543a51dec3d5922b2b/templates/worker/01-worker-kubelet/_base/files/kubelet.yaml#L19
-	defaultMaxPods = 250
+	// The default for the maximum number of pods is inspired by the Kubernetes
+	// best practices documentation for large clusters.
+	// see https://kubernetes.io/docs/setup/best-practices/cluster-large/
+	defaultMaxPods = 110
 )
 
 type nodegroup struct {
@@ -61,7 +62,14 @@ func (ng *nodegroup) MaxSize() int {
 // (new nodes finish startup and registration or removed nodes are
 // deleted completely). Implementation required.
 func (ng *nodegroup) TargetSize() (int, error) {
-	return ng.scalableResource.Replicas()
+	replicas, found, err := unstructured.NestedInt64(ng.scalableResource.unstructured.Object, "spec", "replicas")
+	if err != nil {
+		return 0, errors.Wrap(err, "error getting replica count")
+	}
+	if !found {
+		return 0, fmt.Errorf("unable to find replicas")
+	}
+	return int(replicas), nil
 }
 
 // IncreaseSize increases the size of the node group. To delete a node
@@ -172,7 +180,7 @@ func (ng *nodegroup) DecreaseTargetSize(delta int) error {
 		return fmt.Errorf("size decrease must be negative")
 	}
 
-	size, err := ng.TargetSize()
+	size, err := ng.scalableResource.Replicas()
 	if err != nil {
 		return err
 	}
@@ -239,43 +247,9 @@ func (ng *nodegroup) TemplateNodeInfo() (*schedulerframework.NodeInfo, error) {
 		return nil, cloudprovider.ErrNotImplemented
 	}
 
-	cpu, err := ng.scalableResource.InstanceCPUCapacity()
+	capacity, err := ng.scalableResource.InstanceCapacity()
 	if err != nil {
 		return nil, err
-	}
-
-	mem, err := ng.scalableResource.InstanceMemoryCapacity()
-	if err != nil {
-		return nil, err
-	}
-
-	gpu, err := ng.scalableResource.InstanceGPUCapacity()
-	if err != nil {
-		return nil, err
-	}
-
-	pod, err := ng.scalableResource.InstanceMaxPodsCapacity()
-	if err != nil {
-		return nil, err
-	}
-
-	if cpu.IsZero() || mem.IsZero() {
-		return nil, cloudprovider.ErrNotImplemented
-	}
-
-	if gpu.IsZero() {
-		gpu = zeroQuantity.DeepCopy()
-	}
-
-	if pod.IsZero() {
-		pod = *resource.NewQuantity(defaultMaxPods, resource.DecimalSI)
-	}
-
-	capacity := map[corev1.ResourceName]resource.Quantity{
-		corev1.ResourceCPU:        cpu,
-		corev1.ResourceMemory:     mem,
-		corev1.ResourcePods:       pod,
-		gpuapis.ResourceNvidiaGPU: gpu,
 	}
 
 	nodeName := fmt.Sprintf("%s-asg-%d", ng.scalableResource.Name(), rand.Int63())
