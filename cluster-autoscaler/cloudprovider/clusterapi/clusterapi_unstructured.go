@@ -35,6 +35,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation"
+	gpuapis "k8s.io/autoscaler/cluster-autoscaler/utils/gpu"
 	klog "k8s.io/klog/v2"
 	"k8s.io/utils/ptr"
 )
@@ -309,9 +310,9 @@ func (r unstructuredScalableResource) InstanceCapacity() (map[corev1.ResourceNam
 	if err != nil {
 		return nil, err
 	}
-	gpuType := r.InstanceGPUTypeAnnotation()
-	if !gpuCount.IsZero() && gpuType != "" {
-		capacityAnnotations[corev1.ResourceName(gpuType)] = gpuCount
+	if !gpuCount.IsZero() {
+		// OpenShift does not yet use the gpu-type annotation, and assumes nvidia gpu
+		capacityAnnotations[gpuapis.ResourceNvidiaGPU] = gpuCount
 	}
 
 	maxPods, err := r.InstanceMaxPodsCapacityAnnotation()
