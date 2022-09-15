@@ -29,17 +29,25 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/autoscaler/cluster-autoscaler/utils/units"
 )
 
 const (
-	cpuKey          = "capacity.cluster-autoscaler.kubernetes.io/cpu"
-	memoryKey       = "capacity.cluster-autoscaler.kubernetes.io/memory"
+	// the following constants are used for scaling from zero
+	// they are split into two sections to represent the values which have been historically used
+	// by openshift, and the values which have been added in the upstream.
+	// we are keeping the historical prefixes "machine.openshift.io" while we develop a solution
+	// which will allow the usage of either prefix, while preferring the upstream prefix "capacity.clsuter-autoscaler.kuberenetes.io".
+	cpuKey      = "machine.openshift.io/vCPU"
+	memoryKey   = "machine.openshift.io/memoryMb"
+	gpuCountKey = "machine.openshift.io/GPU"
+	maxPodsKey  = "machine.openshift.io/maxPods"
+	// the following constants keep the upstream prefix so that we do not introduce separate values into the openshift api
 	diskCapacityKey = "capacity.cluster-autoscaler.kubernetes.io/ephemeral-disk"
-	gpuTypeKey      = "capacity.cluster-autoscaler.kubernetes.io/gpu-type"
-	gpuCountKey     = "capacity.cluster-autoscaler.kubernetes.io/gpu-count"
-	maxPodsKey      = "capacity.cluster-autoscaler.kubernetes.io/maxPods"
-	taintsKey       = "capacity.cluster-autoscaler.kubernetes.io/taints"
 	labelsKey       = "capacity.cluster-autoscaler.kubernetes.io/labels"
+	gpuTypeKey      = "capacity.cluster-autoscaler.kubernetes.io/gpu-type" // not currently used on OpenShift
+	taintsKey       = "capacity.cluster-autoscaler.kubernetes.io/taints"   // not currently used on OpenShift
+
 	// UnknownArch is used if the Architecture is Unknown
 	UnknownArch SystemArchitecture = ""
 	// Amd64 is used if the Architecture is x86_64
@@ -232,7 +240,18 @@ func parseCPUCapacity(annotations map[string]string) (resource.Quantity, error) 
 }
 
 func parseMemoryCapacity(annotations map[string]string) (resource.Quantity, error) {
-	return parseKey(annotations, memoryKey)
+	// The value for the memoryKey is expected to be an integer representing Mebibytes. e.g. "1024".
+	// https://www.iec.ch/si/binary.htm
+	val, exists := annotations[memoryKey]
+	if exists && val != "" {
+		valInt, err := strconv.ParseInt(val, 10, 0)
+		if err != nil {
+			return zeroQuantity.DeepCopy(), fmt.Errorf("value %q from annotation %q expected to be an integer: %v", val, memoryKey, err)
+		}
+		// Convert from Mebibytes to bytes
+		return *resource.NewQuantity(valInt*units.MiB, resource.DecimalSI), nil
+	}
+	return zeroQuantity.DeepCopy(), nil
 }
 
 func parseEphemeralDiskCapacity(annotations map[string]string) (resource.Quantity, error) {
