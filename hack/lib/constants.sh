@@ -132,6 +132,34 @@ function os::util::list_test_packages_under() {
               -o -path '*vendor/*'            \
               -o -path 'addon-resizer'        \
               -o -path 'vertical-pod-autoscaler' \
+              -o -path 'cluster-autoscaler/cloudprovider/alicloud' \
+              -o -path 'cluster-autoscaler/cloudprovider/aws' \
+              -o -path 'cluster-autoscaler/cloudprovider/azure' \
+              -o -path 'cluster-autoscaler/cloudprovider/baiducloud' \
+              -o -path 'cluster-autoscaler/cloudprovider/bizflycloud' \
+              -o -path 'cluster-autoscaler/cloudprovider/brightbox' \
+              -o -path 'cluster-autoscaler/cloudprovider/cherryservers' \
+              -o -path 'cluster-autoscaler/cloudprovider/civo' \
+              -o -path 'cluster-autoscaler/cloudprovider/cloudstack' \
+              -o -path 'cluster-autoscaler/cloudprovider/digitalocean' \
+              -o -path 'cluster-autoscaler/cloudprovider/exoscale' \
+              -o -path 'cluster-autoscaler/cloudprovider/externalgrpc' \
+              -o -path 'cluster-autoscaler/cloudprovider/gce' \
+              -o -path 'cluster-autoscaler/cloudprovider/hetzner' \
+              -o -path 'cluster-autoscaler/cloudprovider/huaweicloud' \
+              -o -path 'cluster-autoscaler/cloudprovider/ionoscloud' \
+              -o -path 'cluster-autoscaler/cloudprovider/kamatera' \
+              -o -path 'cluster-autoscaler/cloudprovider/kubemark' \
+              -o -path 'cluster-autoscaler/cloudprovider/linode' \
+              -o -path 'cluster-autoscaler/cloudprovider/magnum' \
+              -o -path 'cluster-autoscaler/cloudprovider/mocks' \
+              -o -path 'cluster-autoscaler/cloudprovider/oci' \
+              -o -path 'cluster-autoscaler/cloudprovider/ovhcloud' \
+              -o -path 'cluster-autoscaler/cloudprovider/packet' \
+              -o -path 'cluster-autoscaler/cloudprovider/rancher' \
+              -o -path 'cluster-autoscaler/cloudprovider/scaleway' \
+              -o -path 'cluster-autoscaler/cloudprovider/tencentcloud' \
+              -o -path 'cluster-autoscaler/cloudprovider/vultr' \
         \) -prune                             \
     \) -name '*_test.go' | xargs -n1 dirname | sort -u | xargs -n1 printf "${OS_GO_PACKAGE}/%s\n"
 }
