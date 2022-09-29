@@ -40,7 +40,7 @@ import (
 	kube_util "k8s.io/autoscaler/cluster-autoscaler/utils/kubernetes"
 
 	apiv1 "k8s.io/api/core/v1"
-	policyv1 "k8s.io/api/policy/v1beta1"
+	policyv1 "k8s.io/api/policy/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
 	klog "k8s.io/klog/v2"
@@ -706,6 +706,16 @@ func (sd *ScaleDown) NodesToDelete(currentTime time.Time, pdbs []*policyv1.PodDi
 		if checkResult.exceeded {
 			klog.V(4).Infof("Skipping %s - minimal limit exceeded for %v", node.Name, checkResult.exceededResources)
 			sd.unremovableNodes.AddReason(node, simulator.MinimalResourceLimitExceeded)
+			for _, resource := range checkResult.exceededResources {
+				switch resource {
+				case cloudprovider.ResourceNameCores:
+					metrics.RegisterSkippedScaleDownCPU()
+				case cloudprovider.ResourceNameMemory:
+					metrics.RegisterSkippedScaleDownMemory()
+				default:
+					continue
+				}
+			}
 			continue
 		}
 

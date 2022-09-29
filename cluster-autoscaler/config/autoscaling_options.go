@@ -154,6 +154,9 @@ type AutoscalingOptions struct {
 	// BalancingExtraIgnoredLabels is a list of labels to additionally ignore when comparing if two node groups are similar.
 	// Labels in BasicIgnoredLabels and the cloud provider-specific ignored labels are always ignored.
 	BalancingExtraIgnoredLabels []string
+	// BalancingLabels is a list of labels to use when comparing if two node groups are similar.
+	// If this is set, only labels are used to compare node groups. It is mutually exclusive with BalancingExtraIgnoredLabels.
+	BalancingLabels []string
 	// AWSUseStaticInstanceList tells if AWS cloud provider use static instance type list or dynamically fetch from remote APIs.
 	AWSUseStaticInstanceList bool
 	// ConcurrentGceRefreshes is the maximum number of concurrently refreshed instance groups or instance templates.
@@ -181,4 +184,15 @@ type AutoscalingOptions struct {
 	MaxScaleDownParallelism int
 	// MaxDrainParallelism is the maximum number of nodes needing drain, that can be drained and deleted in parallel.
 	MaxDrainParallelism int
+	// GceExpanderEphemeralStorageSupport is whether scale-up takes ephemeral storage resources into account.
+	GceExpanderEphemeralStorageSupport bool
+	// RecordDuplicatedEvents controls whether events should be duplicated within a 5 minute window.
+	RecordDuplicatedEvents bool
+	// MaxNodesPerScaleUp controls how many nodes can be added in a single scale-up.
+	// Note that this is strictly a performance optimization aimed at limiting binpacking time, not a tool to rate-limit
+	// scale-up. There is nothing stopping CA from adding MaxNodesPerScaleUp every loop.
+	MaxNodesPerScaleUp int
+	// MaxNodeGroupBinpackingDuration is a maximum time that can be spent binpacking a single NodeGroup. If the threshold
+	// is exceeded binpacking will be cut short and a partial scale-up will be performed.
+	MaxNodeGroupBinpackingDuration time.Duration
 }

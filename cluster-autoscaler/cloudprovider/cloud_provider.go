@@ -56,6 +56,8 @@ const (
 	HetznerProviderName = "hetzner"
 	// MagnumProviderName gets the provider name of magnum
 	MagnumProviderName = "magnum"
+	// KamateraProviderName gets the provider name of kamatera
+	KamateraProviderName = "kamatera"
 	// KubemarkProviderName gets the provider name of kubemark
 	KubemarkProviderName = "kubemark"
 	// HuaweicloudProviderName gets the provider name of huaweicloud
@@ -68,6 +70,8 @@ const (
 	OVHcloudProviderName = "ovhcloud"
 	// LinodeProviderName gets the provider name of linode
 	LinodeProviderName = "linode"
+	// ScalewayProviderName gets the provider name of scaleway
+	ScalewayProviderName = "scaleway"
 	// VultrProviderName gets the provider name of vultr
 	VultrProviderName = "vultr"
 	// PacketProviderName gets the provider name of packet
@@ -76,6 +80,10 @@ const (
 	TencentcloudProviderName = "tencentcloud"
 	// ExternalGrpcProviderName gets the provider name of the external grpc provider
 	ExternalGrpcProviderName = "externalgrpc"
+	// CivoProviderName gets the provider name of civo
+	CivoProviderName = "civo"
+	// RancherProviderName gets the provider name of rancher
+	RancherProviderName = "rancher"
 )
 
 // CloudProvider contains configuration info and functions for interacting with

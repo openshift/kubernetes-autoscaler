@@ -19,6 +19,7 @@ package gce
 import (
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -26,6 +27,8 @@ import (
 	gpuUtils "k8s.io/autoscaler/cluster-autoscaler/utils/gpu"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/units"
 
+	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/stretchr/testify/assert"
 	gce "google.golang.org/api/compute/v1"
 	apiv1 "k8s.io/api/core/v1"
@@ -156,6 +159,7 @@ func TestBuildNodeFromTemplateSetsResources(t *testing.T) {
 			kubeEnv:                       "AUTOSCALER_ENV_VARS: os_distribution=cos;os=linux;ephemeral_storage_local_ssd_count=2\n",
 			physicalCpu:                   8,
 			physicalMemory:                200 * units.MiB,
+			bootDiskSizeGiB:               300,
 			ephemeralStorageLocalSSDCount: 2,
 			attachedLocalSSDCount:         2,
 			expectedErr:                   false,
@@ -229,6 +233,19 @@ func TestBuildNodeFromTemplateSetsResources(t *testing.T) {
 				assert.NotNil(t, node.Status)
 				assert.NotNil(t, node.Status.Capacity)
 				assert.NotNil(t, node.Status.Allocatable)
+				if tc.bootDiskSizeGiB > 0 && !tc.isEphemeralStorageBlocked {
+					val, ok := node.Annotations[BootDiskSizeAnnotation]
+					if !ok {
+						t.Errorf("Expected to have boot disk size annotation, have nil")
+					}
+					assert.Equal(t, val, strconv.FormatInt(tc.bootDiskSizeGiB, 10))
+				} else if tc.attachedLocalSSDCount > 0 {
+					val, ok := node.Annotations[LocalSsdCountAnnotation]
+					if !ok {
+						t.Errorf("Expected to have local SSD count annotation")
+					}
+					assert.Equal(t, val, strconv.FormatInt(tc.attachedLocalSSDCount, 10))
+				}
 				// this logic is a duplicate of logic under test and would best be captured by
 				// specifying physicalEphemeralStorageGiB in the testCase struct
 				physicalEphemeralStorageGiB := tc.bootDiskSizeGiB
@@ -1146,6 +1163,111 @@ func TestParseKubeReserved(t *testing.T) {
 			assert.NoError(t, err)
 			assertEqualResourceLists(t, "Resources", expectedResources, resources)
 		}
+	}
+}
+
+func TestToSystemArchitecture(t *testing.T) {
+	for tn, tc := range map[string]struct {
+		archName string
+		wantArch SystemArchitecture
+	}{
+		"valid architecture is converted": {
+			archName: "amd64",
+			wantArch: Amd64,
+		},
+		"invalid architecture results in UnknownArchitecture": {
+			archName: "some-arch",
+			wantArch: UnknownArch,
+		},
+	} {
+		t.Run(tn, func(t *testing.T) {
+			gotArch := ToSystemArchitecture(tc.archName)
+			if diff := cmp.Diff(tc.wantArch, gotArch); diff != "" {
+				t.Errorf("ToSystemArchitecture diff (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestExtractSystemArchitectureFromKubeEnv(t *testing.T) {
+	for tn, tc := range map[string]struct {
+		kubeEnv  string
+		wantArch SystemArchitecture
+		wantErr  error
+	}{
+		"valid arch defined in AUTOSCALER_ENV_VARS": {
+			kubeEnv:  "AUTOSCALER_ENV_VARS: os_distribution=cos;arch=arm64;os=linux\n",
+			wantArch: Arm64,
+		},
+		"invalid arch defined in AUTOSCALER_ENV_VARS": {
+			kubeEnv:  "AUTOSCALER_ENV_VARS: os_distribution=cos;arch=blah;os=linux\n",
+			wantArch: UnknownArch,
+			wantErr:  cmpopts.AnyError,
+		},
+		"empty arch defined in AUTOSCALER_ENV_VARS": {
+			kubeEnv:  "AUTOSCALER_ENV_VARS: os_distribution=cos;arch=;os=linux\n",
+			wantArch: UnknownArch,
+			wantErr:  cmpopts.AnyError,
+		},
+
+		"no arch defined in AUTOSCALER_ENV_VARS": {
+			kubeEnv:  "AUTOSCALER_ENV_VARS: os_distribution=cos;os=linux\n",
+			wantArch: UnknownArch,
+			wantErr:  cmpopts.AnyError,
+		},
+		"KUBE_ENV parsing error": {
+			kubeEnv:  "some-invalid-string",
+			wantArch: UnknownArch,
+			wantErr:  cmpopts.AnyError,
+		},
+	} {
+		t.Run(tn, func(t *testing.T) {
+			gotArch, gotErr := extractSystemArchitectureFromKubeEnv(tc.kubeEnv)
+			if diff := cmp.Diff(tc.wantArch, gotArch); diff != "" {
+				t.Errorf("extractSystemArchitectureFromKubeEnv diff (-want +got):\n%s", diff)
+			}
+			if diff := cmp.Diff(tc.wantErr, gotErr, cmpopts.EquateErrors()); diff != "" {
+				t.Errorf("extractSystemArchitectureFromKubeEnv error diff (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestBuildNodeFromTemplateArch(t *testing.T) {
+	for tn, tc := range map[string]struct {
+		kubeEnv  string
+		wantArch SystemArchitecture
+	}{
+		"valid arch defined in KUBE_ENV is passed through": {
+			kubeEnv:  "AUTOSCALER_ENV_VARS: os_distribution=cos;arch=arm64;os=linux\n",
+			wantArch: Arm64,
+		},
+		"invalid arch defined in KUBE_ENV is defaulted to the default arch": {
+			kubeEnv:  "AUTOSCALER_ENV_VARS: os_distribution=cos;arch=;os=linux\n",
+			wantArch: DefaultArch,
+		},
+	} {
+		t.Run(tn, func(t *testing.T) {
+			mig := &gceMig{gceRef: GceRef{Name: "some-name", Project: "some-proj", Zone: "us-central1-b"}}
+			template := &gce.InstanceTemplate{
+				Name: "node-name",
+				Properties: &gce.InstanceProperties{
+					Metadata: &gce.Metadata{
+						Items: []*gce.MetadataItems{{Key: "kube-env", Value: &tc.kubeEnv}},
+					},
+					Disks: []*gce.AttachedDisk{},
+				},
+			}
+			tb := &GceTemplateBuilder{}
+			gotNode, gotErr := tb.BuildNodeFromTemplate(mig, template, 16, 128, nil, &GceReserved{})
+			if gotErr != nil {
+				t.Fatalf("BuildNodeFromTemplate unexpected error: %v", gotErr)
+			}
+			gotArch := gotNode.Labels[apiv1.LabelArchStable]
+			if diff := cmp.Diff(tc.wantArch.Name(), gotArch); diff != "" {
+				t.Errorf("BuildNodeFromTemplate arch label diff (-want +got):\n%s", diff)
+			}
+		})
 	}
 }
 

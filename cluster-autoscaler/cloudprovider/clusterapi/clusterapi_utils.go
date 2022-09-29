@@ -29,14 +29,16 @@ import (
 )
 
 const (
+	cpuKey      = "machine.openshift.io/vCPU"
+	memoryKey   = "machine.openshift.io/memoryMb"
+	gpuCountKey = "machine.openshift.io/GPU"
+	maxPodsKey  = "machine.openshift.io/maxPods"
+	// OpenShift does not yet use the gpu-type annotation
+	gpuTypeKey = "capacity.cluster-autoscaler.kubernetes.io/gpu-type"
+
 	// TODO: update machine API operator to match CAPI annotation so this can be inferred dynamically by getMachineDeleteAnnotationKey i.e ${apigroup}/delete-machine
 	// https://github.com/openshift/machine-api-operator/blob/128c5c90918c009172c6d24d5715888e0e1d59e4/pkg/controller/machineset/delete_policy.go#L34
 	oldMachineDeleteAnnotationKey = "machine.openshift.io/cluster-api-delete-machine"
-
-	cpuKey     = "machine.openshift.io/vCPU"
-	memoryKey  = "machine.openshift.io/memoryMb"
-	gpuKey     = "machine.openshift.io/GPU"
-	maxPodsKey = "machine.openshift.io/maxPods"
 )
 
 var (
@@ -79,8 +81,7 @@ var (
 	// variable, they are initialized here.
 	nodeGroupMinSizeAnnotationKey = getNodeGroupMinSizeAnnotationKey()
 	nodeGroupMaxSizeAnnotationKey = getNodeGroupMaxSizeAnnotationKey()
-
-	zeroQuantity = resource.MustParse("0")
+	zeroQuantity                  = resource.MustParse("0")
 )
 
 type normalizedProviderID string
@@ -172,7 +173,7 @@ func normalizedProviderString(s string) normalizedProviderID {
 	return normalizedProviderID(split[len(split)-1])
 }
 
-func scaleFromZeroEnabled(annotations map[string]string) bool {
+func scaleFromZeroAnnotationsEnabled(annotations map[string]string) bool {
 	cpu := annotations[cpuKey]
 	mem := annotations[memoryKey]
 
@@ -185,6 +186,17 @@ func scaleFromZeroEnabled(annotations map[string]string) bool {
 func parseKey(annotations map[string]string, key string) (resource.Quantity, error) {
 	if val, exists := annotations[key]; exists && val != "" {
 		return resource.ParseQuantity(val)
+	}
+	return zeroQuantity.DeepCopy(), nil
+}
+
+func parseIntKey(annotations map[string]string, key string) (resource.Quantity, error) {
+	if val, exists := annotations[key]; exists && val != "" {
+		valInt, err := strconv.ParseInt(val, 10, 0)
+		if err != nil {
+			return zeroQuantity.DeepCopy(), fmt.Errorf("value %q from annotation %q expected to be an integer: %v", val, key, err)
+		}
+		return *resource.NewQuantity(valInt, resource.DecimalSI), nil
 	}
 	return zeroQuantity.DeepCopy(), nil
 }
@@ -208,12 +220,23 @@ func parseMemoryCapacity(annotations map[string]string) (resource.Quantity, erro
 	return zeroQuantity.DeepCopy(), nil
 }
 
-func parseGPUCapacity(annotations map[string]string) (resource.Quantity, error) {
-	return parseKey(annotations, gpuKey)
+func parseGPUCount(annotations map[string]string) (resource.Quantity, error) {
+	return parseIntKey(annotations, gpuCountKey)
+}
+
+// The GPU type is not currently considered by the autoscaler when planning
+// expansion, but most likely will be in the future. This method is being added
+// in expectation of that arrival.
+// see https://github.com/kubernetes/autoscaler/blob/master/cluster-autoscaler/utils/gpu/gpu.go
+func parseGPUType(annotations map[string]string) string {
+	if val, found := annotations[gpuTypeKey]; found {
+		return val
+	}
+	return ""
 }
 
 func parseMaxPodsCapacity(annotations map[string]string) (resource.Quantity, error) {
-	return parseKey(annotations, maxPodsKey)
+	return parseIntKey(annotations, maxPodsKey)
 }
 
 func clusterNameFromResource(r *unstructured.Unstructured) string {
