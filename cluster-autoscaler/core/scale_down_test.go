@@ -29,7 +29,7 @@ import (
 
 	batchv1 "k8s.io/api/batch/v1"
 	apiv1 "k8s.io/api/core/v1"
-	policyv1 "k8s.io/api/policy/v1beta1"
+	policyv1beta1 "k8s.io/api/policy/v1beta1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -749,7 +749,7 @@ func TestDeleteNode(t *testing.T) {
 					if createAction == nil {
 						return false, nil, nil
 					}
-					eviction := createAction.GetObject().(*policyv1.Eviction)
+					eviction := createAction.GetObject().(*policyv1beta1.Eviction)
 					if eviction == nil {
 						return false, nil, nil
 					}
@@ -809,7 +809,7 @@ func TestDrainNode(t *testing.T) {
 		if createAction == nil {
 			return false, nil, nil
 		}
-		eviction := createAction.GetObject().(*policyv1.Eviction)
+		eviction := createAction.GetObject().(*policyv1beta1.Eviction)
 		if eviction == nil {
 			return false, nil, nil
 		}
@@ -855,7 +855,7 @@ func TestDrainNodeWithRescheduled(t *testing.T) {
 		if createAction == nil {
 			return false, nil, nil
 		}
-		eviction := createAction.GetObject().(*policyv1.Eviction)
+		eviction := createAction.GetObject().(*policyv1beta1.Eviction)
 		if eviction == nil {
 			return false, nil, nil
 		}
@@ -896,7 +896,7 @@ func TestDrainNodeWithRetries(t *testing.T) {
 		if createAction == nil {
 			return false, nil, nil
 		}
-		eviction := createAction.GetObject().(*policyv1.Eviction)
+		eviction := createAction.GetObject().(*policyv1beta1.Eviction)
 		if eviction == nil {
 			return false, nil, nil
 		}
@@ -945,7 +945,7 @@ func TestDrainNodeDaemonSetEvictionFailure(t *testing.T) {
 		if createAction == nil {
 			return false, nil, nil
 		}
-		eviction := createAction.GetObject().(*policyv1.Eviction)
+		eviction := createAction.GetObject().(*policyv1beta1.Eviction)
 		if eviction == nil {
 			return false, nil, nil
 		}
@@ -987,7 +987,7 @@ func TestDrainNodeEvictionFailure(t *testing.T) {
 		if createAction == nil {
 			return false, nil, nil
 		}
-		eviction := createAction.GetObject().(*policyv1.Eviction)
+		eviction := createAction.GetObject().(*policyv1beta1.Eviction)
 		if eviction == nil {
 			return false, nil, nil
 		}
@@ -1313,7 +1313,7 @@ func TestDaemonSetEvictionForEmptyNodes(t *testing.T) {
 				if createAction == nil {
 					return false, nil, nil
 				}
-				eviction := createAction.GetObject().(*policyv1.Eviction)
+				eviction := createAction.GetObject().(*policyv1beta1.Eviction)
 				if eviction == nil {
 					return false, nil, nil
 				}
