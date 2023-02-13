@@ -218,6 +218,10 @@ func (feeder *clusterStateFeeder) InitFromHistoryProvider(historyProvider histor
 						ContainerUsageSample: sample,
 						Container:            containerID,
 					}); err != nil {
+					// Ignore missing "POD" containers returned by prometheus adapter
+					if _, isKeyError := err.(model.KeyError); isKeyError && containerName == "POD" {
+						continue
+					}
 					klog.Warningf("Error adding metric sample for container %v: %v", containerID, err)
 				}
 			}
@@ -427,7 +431,8 @@ func (feeder *clusterStateFeeder) LoadRealTimeMetrics() {
 		for _, sample := range newContainerUsageSamplesWithKey(containerMetrics) {
 			if err := feeder.clusterState.AddSample(sample); err != nil {
 				// Not all pod states are tracked in memory saver mode
-				if _, isKeyError := err.(model.KeyError); isKeyError && feeder.memorySaveMode {
+				// Also ignore missing containers named "POD" which prometheus adapter returns
+				if _, isKeyError := err.(model.KeyError); isKeyError && (feeder.memorySaveMode || sample.Container.ContainerName == "POD") {
 					continue
 				}
 				klog.Warningf("Error adding metric sample for container %v: %v", sample.Container, err)
