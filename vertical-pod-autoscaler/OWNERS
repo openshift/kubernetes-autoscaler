@@ -1,12 +1,10 @@
 approvers:
-- joelsmith
-- wangchen615
-- sjenning
-- rphillips
-- schylek
 - kgolab
 - jbartosik
+- krzysied
 reviewers:
-- schylek
 - kgolab
 - jbartosik
+- krzysied
+emeritus_approvers:
+- schylek # 2022-09-30

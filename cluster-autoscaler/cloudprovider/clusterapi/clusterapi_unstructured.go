@@ -30,7 +30,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	gpuapis "k8s.io/autoscaler/cluster-autoscaler/utils/gpu"
 	klog "k8s.io/klog/v2"
 )
 
@@ -142,7 +141,6 @@ func (r unstructuredScalableResource) UnmarkMachineForDeletion(machine *unstruct
 
 	annotations := u.GetAnnotations()
 	delete(annotations, machineDeleteAnnotationKey)
-	delete(annotations, oldMachineDeleteAnnotationKey)
 	u.SetAnnotations(annotations)
 	_, updateErr := r.controller.managementClient.Resource(r.controller.machineResource).Namespace(u.GetNamespace()).Update(context.TODO(), u, metav1.UpdateOptions{})
 
@@ -163,7 +161,6 @@ func (r unstructuredScalableResource) MarkMachineForDeletion(machine *unstructur
 	}
 
 	annotations[machineDeleteAnnotationKey] = time.Now().String()
-	annotations[oldMachineDeleteAnnotationKey] = time.Now().String()
 	u.SetAnnotations(annotations)
 
 	_, updateErr := r.controller.managementClient.Resource(r.controller.machineResource).Namespace(u.GetNamespace()).Update(context.TODO(), u, metav1.UpdateOptions{})
@@ -172,28 +169,16 @@ func (r unstructuredScalableResource) MarkMachineForDeletion(machine *unstructur
 }
 
 func (r unstructuredScalableResource) Labels() map[string]string {
-	labels, found, err := unstructured.NestedStringMap(r.unstructured.Object, "spec", "template", "spec", "metadata", "labels")
-	if !found || err != nil {
-		return nil
-	}
-	return labels
+	// TODO implement this once the community has decided how they will handle labels
+	// this issue is related, https://github.com/kubernetes-sigs/cluster-api/issues/7006
+
+	return nil
 }
 
 func (r unstructuredScalableResource) Taints() []apiv1.Taint {
-	taints, found, err := unstructured.NestedSlice(r.unstructured.Object, "spec", "template", "spec", "taints")
-	if !found || err != nil {
-		return nil
-	}
-	ret := make([]apiv1.Taint, len(taints))
-	for i, t := range taints {
-		if v, ok := t.(apiv1.Taint); ok {
-			ret[i] = v
-		} else {
-			// if we cannot convert the interface to a Taint, return early with zero value
-			return nil
-		}
-	}
-	return ret
+	// TODO implement this once the community has decided how they will handle taints
+
+	return nil
 }
 
 // A node group can scale from zero if it can inform about the CPU and memory
@@ -238,9 +223,9 @@ func (r unstructuredScalableResource) InstanceCapacity() (map[corev1.ResourceNam
 	if err != nil {
 		return nil, err
 	}
-	if !gpuCount.IsZero() {
-		// OpenShift does not yet use the gpu-type annotation, and assumes nvidia gpu
-		capacityAnnotations[gpuapis.ResourceNvidiaGPU] = gpuCount
+	gpuType := r.InstanceGPUTypeAnnotation()
+	if !gpuCount.IsZero() && gpuType != "" {
+		capacityAnnotations[corev1.ResourceName(gpuType)] = gpuCount
 	}
 
 	maxPods, err := r.InstanceMaxPodsCapacityAnnotation()
