@@ -207,8 +207,9 @@ func (r *unstructuredScalableResource) Labels() map[string]string {
 
 	// get the managed labels from the scalable resource, if they exist.
 	if labels, found, err := unstructured.NestedStringMap(r.unstructured.UnstructuredContent(), "spec", "template", "spec", "metadata", "labels"); found && err == nil {
-		managedLabels := getManagedNodeLabelsFromLabels(labels)
-		allLabels = cloudprovider.JoinStringMaps(allLabels, managedLabels)
+		// In OpenShift, we want all labels, not just managed labels
+		// managedLabels := getManagedNodeLabelsFromLabels(labels)
+		allLabels = cloudprovider.JoinStringMaps(allLabels, labels)
 	}
 
 	// annotation labels are supplied as an override to other values, we process them last.
