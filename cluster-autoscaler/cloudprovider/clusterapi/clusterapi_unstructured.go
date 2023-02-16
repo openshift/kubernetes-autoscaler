@@ -200,46 +200,64 @@ func (r unstructuredScalableResource) MarkMachineForDeletion(machine *unstructur
 }
 
 func (r unstructuredScalableResource) Labels() map[string]string {
-	allLabels := map[string]string{}
+	labels := make(map[string]string, 0)
 
-	// get the managed labels from the scalable resource, if they exist.
-	if labels, found, err := unstructured.NestedStringMap(r.unstructured.UnstructuredContent(), "spec", "template", "spec", "metadata", "labels"); found && err == nil {
-		managedLabels := getManagedNodeLabelsFromLabels(labels)
-		allLabels = cloudprovider.JoinStringMaps(allLabels, managedLabels)
+	newlabels, found, err := unstructured.NestedStringMap(r.unstructured.Object, "spec", "template", "spec", "metadata", "labels")
+	if err != nil {
+		return nil
+	}
+	if found {
+		for k, v := range newlabels {
+			labels[k] = v
+		}
 	}
 
-	// annotation labels are supplied as an override to other values, we process them last.
 	annotations := r.unstructured.GetAnnotations()
 	// annotation value of the form "key1=value1,key2=value2"
 	if val, found := annotations[labelsKey]; found {
-		labels := strings.Split(val, ",")
-		annotationLabels := make(map[string]string, len(labels))
-		for _, label := range labels {
+		newlabels := strings.Split(val, ",")
+		for _, label := range newlabels {
 			split := strings.SplitN(label, "=", 2)
 			if len(split) == 2 {
-				annotationLabels[split[0]] = split[1]
+				labels[split[0]] = split[1]
 			}
 		}
-		allLabels = cloudprovider.JoinStringMaps(allLabels, annotationLabels)
 	}
-	return allLabels
+
+	return labels
 }
 
 func (r unstructuredScalableResource) Taints() []apiv1.Taint {
+	taints := make([]apiv1.Taint, 0)
+
+	newtaints, found, err := unstructured.NestedSlice(r.unstructured.Object, "spec", "template", "spec", "taints")
+	if err != nil {
+		return nil
+	}
+	if found {
+		for _, t := range newtaints {
+			if v, ok := t.(apiv1.Taint); ok {
+				taints = append(taints, v)
+			} else {
+				klog.Warning("Unable to convert data to taint: %v", t)
+				continue
+			}
+		}
+	}
+
 	annotations := r.unstructured.GetAnnotations()
 	// annotation value the form of "key1=value1:condition,key2=value2:condition"
 	if val, found := annotations[taintsKey]; found {
-		taints := strings.Split(val, ",")
-		ret := make([]apiv1.Taint, 0, len(taints))
-		for _, taintStr := range taints {
+		newtaints := strings.Split(val, ",")
+		for _, taintStr := range newtaints {
 			taint, err := parseTaint(taintStr)
 			if err == nil {
-				ret = append(ret, taint)
+				taints = append(taints, taint)
 			}
 		}
-		return ret
 	}
-	return nil
+
+	return taints
 }
 
 // A node group can scale from zero if it can inform about the CPU and memory
