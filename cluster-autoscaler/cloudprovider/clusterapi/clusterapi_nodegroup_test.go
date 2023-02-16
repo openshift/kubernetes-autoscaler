@@ -1492,6 +1492,7 @@ func TestNodeGroupTemplateNodeInfo(t *testing.T) {
 
 	type testCaseConfig struct {
 		nodeLabels            map[string]string
+		nodegroupLabels       map[string]string
 		includeNodes          bool
 		expectedErr           error
 		expectedCapacity      map[corev1.ResourceName]int64
@@ -1548,6 +1549,10 @@ func TestNodeGroupTemplateNodeInfo(t *testing.T) {
 			},
 			config: testCaseConfig{
 				expectedErr: nil,
+				nodegroupLabels: map[string]string{
+					"nodeGroupLabel": "value",
+					"anotherLabel":   "anotherValue",
+				},
 				expectedCapacity: map[corev1.ResourceName]int64{
 					corev1.ResourceCPU:        2,
 					corev1.ResourceMemory:     2048 * 1024 * 1024,
@@ -1555,9 +1560,11 @@ func TestNodeGroupTemplateNodeInfo(t *testing.T) {
 					gpuapis.ResourceNvidiaGPU: 1,
 				},
 				expectedNodeLabels: map[string]string{
+					"kubernetes.io/hostname": "random value",
 					"kubernetes.io/os":       "linux",
 					"kubernetes.io/arch":     "arm64",
-					"kubernetes.io/hostname": "random value",
+					"nodeGroupLabel":         "value",
+					"anotherLabel":           "anotherValue",
 					"my-custom-label":        "custom-value",
 				},
 			},
@@ -1619,6 +1626,12 @@ func TestNodeGroupTemplateNodeInfo(t *testing.T) {
 	}
 
 	test := func(t *testing.T, testConfig *TestConfig, config testCaseConfig) {
+		if testConfig.machineDeployment != nil {
+			unstructured.SetNestedStringMap(testConfig.machineDeployment.Object, config.nodegroupLabels, "spec", "template", "spec", "metadata", "labels")
+		} else {
+			unstructured.SetNestedStringMap(testConfig.machineSet.Object, config.nodegroupLabels, "spec", "template", "spec", "metadata", "labels")
+		}
+
 		if config.includeNodes {
 			for i := range testConfig.nodes {
 				testConfig.nodes[i].SetLabels(config.nodeLabels)
