@@ -172,16 +172,28 @@ func (r unstructuredScalableResource) MarkMachineForDeletion(machine *unstructur
 }
 
 func (r unstructuredScalableResource) Labels() map[string]string {
-	// TODO implement this once the community has decided how they will handle labels
-	// this issue is related, https://github.com/kubernetes-sigs/cluster-api/issues/7006
-
-	return nil
+	labels, found, err := unstructured.NestedStringMap(r.unstructured.Object, "spec", "template", "spec", "metadata", "labels")
+	if !found || err != nil {
+		return nil
+	}
+	return labels
 }
 
 func (r unstructuredScalableResource) Taints() []apiv1.Taint {
-	// TODO implement this once the community has decided how they will handle taints
-
-	return nil
+	taints, found, err := unstructured.NestedSlice(r.unstructured.Object, "spec", "template", "spec", "taints")
+	if !found || err != nil {
+		return nil
+	}
+	ret := make([]apiv1.Taint, len(taints))
+	for i, t := range taints {
+		if v, ok := t.(apiv1.Taint); ok {
+			ret[i] = v
+		} else {
+			// if we cannot convert the interface to a Taint, return early with zero value
+			return nil
+		}
+	}
+	return ret
 }
 
 // A node group can scale from zero if it can inform about the CPU and memory
