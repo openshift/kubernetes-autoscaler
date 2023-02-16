@@ -208,8 +208,9 @@ func (r *unstructuredScalableResource) Labels() map[string]string {
 
 	// get the managed labels from the scalable resource, if they exist.
 	if labels, found, err := unstructured.NestedStringMap(r.unstructured.UnstructuredContent(), "spec", "template", "spec", "metadata", "labels"); found && err == nil {
-		managedLabels := getManagedNodeLabelsFromLabels(labels)
-		allLabels = cloudprovider.JoinStringMaps(allLabels, managedLabels)
+		// In OpenShift, we want all labels, not just managed labels
+		// managedLabels := getManagedNodeLabelsFromLabels(labels)
+		allLabels = cloudprovider.JoinStringMaps(allLabels, labels)
 	}
 
 	// annotation labels are supplied as an override to other values, we process them last.
@@ -229,21 +230,37 @@ func (r *unstructuredScalableResource) Labels() map[string]string {
 	return allLabels
 }
 
-func (r *unstructuredScalableResource) Taints() []apiv1.Taint {
+func (r unstructuredScalableResource) Taints() []apiv1.Taint {
+	taints := make([]apiv1.Taint, 0)
+
+	newtaints, found, err := unstructured.NestedSlice(r.unstructured.Object, "spec", "template", "spec", "taints")
+	if err != nil {
+		return nil
+	}
+	if found {
+		for _, t := range newtaints {
+			if v, ok := t.(apiv1.Taint); ok {
+				taints = append(taints, v)
+			} else {
+				klog.Warning("Unable to convert data to taint", t)
+				continue
+			}
+		}
+	}
+
 	annotations := r.unstructured.GetAnnotations()
 	// annotation value the form of "key1=value1:condition,key2=value2:condition"
 	if val, found := annotations[taintsKey]; found {
-		taints := strings.Split(val, ",")
-		ret := make([]apiv1.Taint, 0, len(taints))
-		for _, taintStr := range taints {
+		newtaints := strings.Split(val, ",")
+		for _, taintStr := range newtaints {
 			taint, err := parseTaint(taintStr)
 			if err == nil {
-				ret = append(ret, taint)
+				taints = append(taints, taint)
 			}
 		}
-		return ret
 	}
-	return nil
+
+	return taints
 }
 
 // A node group can scale from zero if it can inform about the CPU and memory
