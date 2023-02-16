@@ -174,37 +174,64 @@ func (r unstructuredScalableResource) MarkMachineForDeletion(machine *unstructur
 }
 
 func (r unstructuredScalableResource) Labels() map[string]string {
+	labels := make(map[string]string, 0)
+
+	newlabels, found, err := unstructured.NestedStringMap(r.unstructured.Object, "spec", "template", "spec", "metadata", "labels")
+	if err != nil {
+		return nil
+	}
+	if found {
+		for k, v := range newlabels {
+			labels[k] = v
+		}
+	}
+
 	annotations := r.unstructured.GetAnnotations()
 	// annotation value of the form "key1=value1,key2=value2"
 	if val, found := annotations[labelsKey]; found {
-		labels := strings.Split(val, ",")
-		kv := make(map[string]string, len(labels))
-		for _, label := range labels {
+		newlabels := strings.Split(val, ",")
+		for _, label := range newlabels {
 			split := strings.SplitN(label, "=", 2)
 			if len(split) == 2 {
-				kv[split[0]] = split[1]
+				labels[split[0]] = split[1]
 			}
 		}
-		return kv
 	}
-	return nil
+
+	return labels
 }
 
 func (r unstructuredScalableResource) Taints() []apiv1.Taint {
+	taints := make([]apiv1.Taint, 0)
+
+	newtaints, found, err := unstructured.NestedSlice(r.unstructured.Object, "spec", "template", "spec", "taints")
+	if err != nil {
+		return nil
+	}
+	if found {
+		for _, t := range newtaints {
+			if v, ok := t.(apiv1.Taint); ok {
+				taints = append(taints, v)
+			} else {
+				klog.Warning("Unable to convert data to taint: %v", t)
+				continue
+			}
+		}
+	}
+
 	annotations := r.unstructured.GetAnnotations()
 	// annotation value the form of "key1=value1:condition,key2=value2:condition"
 	if val, found := annotations[taintsKey]; found {
-		taints := strings.Split(val, ",")
-		ret := make([]apiv1.Taint, 0, len(taints))
-		for _, taintStr := range taints {
+		newtaints := strings.Split(val, ",")
+		for _, taintStr := range newtaints {
 			taint, err := parseTaint(taintStr)
 			if err == nil {
-				ret = append(ret, taint)
+				taints = append(taints, taint)
 			}
 		}
-		return ret
 	}
-	return nil
+
+	return taints
 }
 
 // A node group can scale from zero if it can inform about the CPU and memory
