@@ -1309,6 +1309,10 @@ func TestNodeGroupTemplateNodeInfo(t *testing.T) {
 			},
 			config: testCaseConfig{
 				expectedErr: nil,
+				nodeLabels: map[string]string{
+					"kubernetes.io/os":   "linux",
+					"kubernetes.io/arch": "amd64",
+				},
 				expectedCapacity: map[corev1.ResourceName]int64{
 					corev1.ResourceCPU:        2,
 					corev1.ResourceMemory:     2048 * 1024 * 1024,
@@ -1316,10 +1320,9 @@ func TestNodeGroupTemplateNodeInfo(t *testing.T) {
 					gpuapis.ResourceNvidiaGPU: 1,
 				},
 				expectedNodeLabels: map[string]string{
-					"kubernetes.io/os":        "linux",
-					"beta.kubernetes.io/os":   "linux",
-					"kubernetes.io/arch":      "amd64",
-					"beta.kubernetes.io/arch": "amd64",
+					"kubernetes.io/os":       "linux",
+					"kubernetes.io/arch":     "amd64",
+					"kubernetes.io/hostname": "random value",
 				},
 			},
 		},
@@ -1341,12 +1344,11 @@ func TestNodeGroupTemplateNodeInfo(t *testing.T) {
 					corev1.ResourcePods:   110,
 				},
 				expectedNodeLabels: map[string]string{
-					"kubernetes.io/os":        "linux",
-					"beta.kubernetes.io/os":   "linux",
-					"kubernetes.io/arch":      "amd64",
-					"beta.kubernetes.io/arch": "amd64",
-					"nodeGroupLabel":          "value",
-					"anotherLabel":            "anotherValue",
+					"kubernetes.io/hostname": "random value",
+					"kubernetes.io/os":       "linux",
+					"kubernetes.io/arch":     "amd64",
+					"nodeGroupLabel":         "value",
+					"anotherLabel":           "anotherValue",
 				},
 			},
 		},
@@ -1363,11 +1365,6 @@ func TestNodeGroupTemplateNodeInfo(t *testing.T) {
 					"kubernetes.io/os":                 "windows",
 					"kubernetes.io/arch":               "arm64",
 					"node.kubernetes.io/instance-type": "instance1",
-					"anotherLabel":                     "nodeValue", // This should not be copied as it is not a well known label
-				},
-				nodegroupLabels: map[string]string{
-					"nodeGroupLabel": "value",
-					"anotherLabel":   "nodeGroupValue",
 				},
 				expectedCapacity: map[corev1.ResourceName]int64{
 					corev1.ResourceCPU:    2,
@@ -1375,12 +1372,9 @@ func TestNodeGroupTemplateNodeInfo(t *testing.T) {
 					corev1.ResourcePods:   110,
 				},
 				expectedNodeLabels: map[string]string{
+					"kubernetes.io/hostname":           "random value",
 					"kubernetes.io/os":                 "windows",
-					"beta.kubernetes.io/os":            "linux",
 					"kubernetes.io/arch":               "arm64",
-					"beta.kubernetes.io/arch":          "amd64",
-					"nodeGroupLabel":                   "value",
-					"anotherLabel":                     "nodeGroupValue",
 					"node.kubernetes.io/instance-type": "instance1",
 				},
 			},
@@ -1439,15 +1433,18 @@ func TestNodeGroupTemplateNodeInfo(t *testing.T) {
 			}
 		}
 
-		// expectedNodeLabels won't have the hostname label as it is randomized, so +1 to its length
-		if len(nodeInfo.Node().GetLabels()) != len(config.expectedNodeLabels)+1 {
-			t.Errorf("Expected node labels to have len: %d, but got: %d", len(config.expectedNodeLabels)+1, len(nodeInfo.Node().GetLabels()))
+		if len(nodeInfo.Node().GetLabels()) != len(config.expectedNodeLabels) {
+			t.Errorf("Expected node labels to have len: %d, but got: %d, labels are: %v", len(config.expectedNodeLabels), len(nodeInfo.Node().GetLabels()), nodeInfo.Node().GetLabels())
 		}
 		for key, value := range nodeInfo.Node().GetLabels() {
 			// Exclude the hostname label as it is randomized
 			if key != corev1.LabelHostname {
-				if value != config.expectedNodeLabels[key] {
-					t.Errorf("Expected node label %q: %q, Got: %q", key, config.expectedNodeLabels[key], value)
+				if expected, ok := config.expectedNodeLabels[key]; ok {
+					if value != expected {
+						t.Errorf("Expected node label %q: %q, Got: %q", key, config.expectedNodeLabels[key], value)
+					}
+				} else {
+					t.Errorf("Expected node label %q to exist in node", key)
 				}
 			}
 		}
