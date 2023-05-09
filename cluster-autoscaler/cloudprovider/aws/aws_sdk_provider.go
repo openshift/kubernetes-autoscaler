@@ -18,16 +18,18 @@ package aws
 
 import (
 	"fmt"
-	"gopkg.in/gcfg.v1"
 	"io"
+	"os"
+	"strconv"
+	"strings"
+
+	"gopkg.in/gcfg.v1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/aws/aws-sdk-go/aws"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/aws/aws-sdk-go/aws/ec2metadata"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/aws/aws-sdk-go/aws/endpoints"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/aws/aws-sdk-go/aws/session"
+	provider_aws "k8s.io/cloud-provider-aws/pkg/providers/v1"
 	"k8s.io/klog/v2"
-	provider_aws "k8s.io/legacy-cloud-providers/aws"
-	"os"
-	"strings"
 )
 
 // createAWSSDKProvider
@@ -49,8 +51,16 @@ func createAWSSDKProvider(configReader io.Reader) (*awsSDKProvider, error) {
 		return nil, err
 	}
 
-	sess, err := session.NewSession(aws.NewConfig().WithRegion(getRegion()).
-		WithEndpointResolver(getResolver(cfg)))
+	config := aws.NewConfig().
+		WithRegion(getRegion()).
+		WithEndpointResolver(getResolver(cfg))
+
+	config, err = setMaxRetriesFromEnv(config)
+	if err != nil {
+		return nil, err
+	}
+
+	sess, err := session.NewSession(config)
 
 	if err != nil {
 		return nil, err
@@ -61,6 +71,21 @@ func createAWSSDKProvider(configReader io.Reader) (*awsSDKProvider, error) {
 	}
 
 	return provider, nil
+}
+
+// setMaxRetriesFromEnv sets aws config MaxRetries by reading AWS_MAX_ATTEMPTS
+// aws sdk does not auto-set these so instead of having more config options we can reuse what the aws cli
+// does and read AWS_MAX_ATTEMPTS from the env https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-envvars.html
+func setMaxRetriesFromEnv(config *aws.Config) (*aws.Config, error) {
+	maxRetries := os.Getenv("AWS_MAX_ATTEMPTS")
+	if maxRetries != "" {
+		num, err := strconv.Atoi(maxRetries)
+		if err != nil {
+			return nil, err
+		}
+		config = config.WithMaxRetries(num)
+	}
+	return config, nil
 }
 
 type awsSDKProvider struct {

@@ -1,12 +1,14 @@
 approvers:
 - enxebre
-- frobware
 - elmiko
-- alexander-demichev
-- JoelSpeed
+- hardikdr
+- detiber
 reviewers:
 - enxebre
-- frobware
 - elmiko
-- alexander-demichev
-- JoelSpeed
+- hardikdr
+- detiber
+- jackfrancis
+- mrajashree
+- arunmk
+- shysank

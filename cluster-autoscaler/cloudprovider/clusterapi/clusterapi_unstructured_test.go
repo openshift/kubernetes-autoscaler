@@ -22,10 +22,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/autoscaler/cluster-autoscaler/utils/units"
 	"k8s.io/client-go/tools/cache"
 )
 
@@ -65,6 +66,9 @@ func TestSetSize(t *testing.T) {
 
 		s, err := sr.controller.managementScaleClient.Scales(testResource.GetNamespace()).
 			Get(context.TODO(), gvr.GroupResource(), testResource.GetName(), metav1.GetOptions{})
+		if err != nil {
+			t.Fatalf("error getting scale subresource: %v", err)
+		}
 
 		if s.Spec.Replicas != int32(updatedReplicas) {
 			t.Errorf("expected %v, got: %v", updatedReplicas, s.Spec.Replicas)
@@ -184,8 +188,12 @@ func TestReplicas(t *testing.T) {
 			},
 		}
 
-		controller.machineSetInformer.Informer().AddEventHandler(handler)
-		controller.machineDeploymentInformer.Informer().AddEventHandler(handler)
+		if _, err := controller.machineSetInformer.Informer().AddEventHandler(handler); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := controller.machineDeploymentInformer.Informer().AddEventHandler(handler); err != nil {
+			t.Fatal(err)
+		}
 
 		_, err = sr.controller.managementScaleClient.Scales(testResource.GetNamespace()).
 			Update(context.TODO(), gvr.GroupResource(), s, metav1.UpdateOptions{})
@@ -284,20 +292,20 @@ func TestSetSizeAndReplicas(t *testing.T) {
 
 func TestAnnotations(t *testing.T) {
 	cpuQuantity := resource.MustParse("2")
-	memQuantity := resource.MustParse("1024")
+	memQuantity := resource.MustParse("1024Mi")
+	diskQuantity := resource.MustParse("100Gi")
 	gpuQuantity := resource.MustParse("1")
 	maxPodsQuantity := resource.MustParse("42")
+	expectedTaints := []v1.Taint{{Key: "key1", Effect: v1.TaintEffectNoSchedule, Value: "value1"}, {Key: "key2", Effect: v1.TaintEffectNoExecute, Value: "value2"}}
 	annotations := map[string]string{
-		cpuKey:      cpuQuantity.String(),
-		memoryKey:   memQuantity.String(),
-		gpuCountKey: gpuQuantity.String(),
-		maxPodsKey:  maxPodsQuantity.String(),
+		cpuKey:          cpuQuantity.String(),
+		memoryKey:       memQuantity.String(),
+		diskCapacityKey: diskQuantity.String(),
+		gpuCountKey:     gpuQuantity.String(),
+		maxPodsKey:      maxPodsQuantity.String(),
+		taintsKey:       "key1=value1:NoSchedule,key2=value2:NoExecute",
+		labelsKey:       "key3=value3,key4=value4,key5=value5",
 	}
-
-	// convert the initial memory value from Mebibytes to bytes as this conversion happens internally
-	// when we use InstanceMemoryCapacity()
-	memVal, _ := memQuantity.AsInt64()
-	memQuantityAsBytes := resource.NewQuantity(memVal*units.MiB, resource.DecimalSI)
 
 	test := func(t *testing.T, testConfig *testConfig, testResource *unstructured.Unstructured) {
 		controller, stop := mustCreateTestController(t, testConfig)
@@ -316,8 +324,14 @@ func TestAnnotations(t *testing.T) {
 
 		if mem, err := sr.InstanceMemoryCapacityAnnotation(); err != nil {
 			t.Fatal(err)
-		} else if memQuantityAsBytes.Cmp(mem) != 0 {
+		} else if memQuantity.Cmp(mem) != 0 {
 			t.Errorf("expected %v, got %v", memQuantity, mem)
+		}
+
+		if disk, err := sr.InstanceEphemeralDiskCapacityAnnotation(); err != nil {
+			t.Fatal(err)
+		} else if diskQuantity.Cmp(disk) != 0 {
+			t.Errorf("expected %v, got %v", diskQuantity, disk)
 		}
 
 		if gpu, err := sr.InstanceGPUCapacityAnnotation(); err != nil {
@@ -331,6 +345,15 @@ func TestAnnotations(t *testing.T) {
 		} else if maxPodsQuantity.Cmp(maxPods) != 0 {
 			t.Errorf("expected %v, got %v", maxPodsQuantity, maxPods)
 		}
+
+		taints := sr.Taints()
+		assert.Equal(t, expectedTaints, taints)
+
+		labels := sr.Labels()
+		assert.Len(t, labels, 3)
+		assert.Equal(t, "value3", labels["key3"])
+		assert.Equal(t, "value4", labels["key4"])
+		assert.Equal(t, "value5", labels["key5"])
 	}
 
 	t.Run("MachineSet", func(t *testing.T) {
@@ -355,7 +378,7 @@ func TestCanScaleFromZero(t *testing.T) {
 			"can scale from zero",
 			map[string]string{
 				cpuKey:    "1",
-				memoryKey: "1024",
+				memoryKey: "1024Mi",
 			},
 			nil,
 			true,
@@ -363,7 +386,7 @@ func TestCanScaleFromZero(t *testing.T) {
 		{
 			"with missing CPU info cannot scale from zero",
 			map[string]string{
-				memoryKey: "1024",
+				memoryKey: "1024Mi",
 			},
 			nil,
 			false,
@@ -411,7 +434,7 @@ func TestCanScaleFromZero(t *testing.T) {
 			"with both annotations and capacity in machine template can scale from zero",
 			map[string]string{
 				cpuKey:    "1",
-				memoryKey: "1024",
+				memoryKey: "1024Mi",
 			},
 			map[string]string{
 				cpuStatusKey:    "1",

@@ -87,6 +87,10 @@ func TestExtractAllocatableResourcesFromAsg(t *testing.T) {
 			Key:   aws.String("k8s.io/cluster-autoscaler/node-template/resources/ephemeral-storage"),
 			Value: aws.String("20G"),
 		},
+		{
+			Key:   aws.String("k8s.io/cluster-autoscaler/node-template/resources/custom-resource"),
+			Value: aws.String("5"),
+		},
 	}
 
 	labels := extractAllocatableResourcesFromAsg(tags)
@@ -96,6 +100,28 @@ func TestExtractAllocatableResourcesFromAsg(t *testing.T) {
 	assert.Equal(t, (&expectedMemory).String(), labels["memory"].String())
 	expectedEphemeralStorage := resource.MustParse("20G")
 	assert.Equal(t, (&expectedEphemeralStorage).String(), labels["ephemeral-storage"].String())
+	assert.Equal(t, resource.NewQuantity(5, resource.DecimalSI).String(), labels["custom-resource"].String())
+}
+
+func TestExtractAllocatableResourcesFromTags(t *testing.T) {
+	tags := map[string]string{
+		"k8s.io/cluster-autoscaler/node-template/resources/cpu":               "100m",
+		"k8s.io/cluster-autoscaler/node-template/resources/memory":            "100M",
+		"k8s.io/cluster-autoscaler/node-template/resources/ephemeral-storage": "20G",
+		"k8s.io/cluster-autoscaler/node-template/resources/custom-resource":   "5",
+		"k8s.io/cluster-autoscaler/node-template/resources/error-resource":    "GG",
+	}
+
+	labels := extractAllocatableResourcesFromTags(tags)
+
+	assert.Equal(t, 4, len(labels))
+	assert.NotContains(t, labels, "error-resource")
+	assert.Equal(t, resource.NewMilliQuantity(100, resource.DecimalSI).String(), labels["cpu"].String())
+	expectedMemory := resource.MustParse("100M")
+	assert.Equal(t, (&expectedMemory).String(), labels["memory"].String())
+	expectedEphemeralStorage := resource.MustParse("20G")
+	assert.Equal(t, (&expectedEphemeralStorage).String(), labels["ephemeral-storage"].String())
+	assert.Equal(t, resource.NewQuantity(5, resource.DecimalSI).String(), labels["custom-resource"].String())
 }
 
 func TestGetAsgOptions(t *testing.T) {
@@ -207,11 +233,17 @@ func TestBuildNodeFromTemplateWithManagedNodegroup(t *testing.T) {
 		Value:  taintValue2,
 	}
 
+	ephemeralStorageKey := "ephemeral-storage"
+	diskSizeGb := 80
+	tagKey1 := fmt.Sprintf("k8s.io/cluster-autoscaler/node-template/resources/%s", ephemeralStorageKey)
+	tagValue1 := fmt.Sprintf("%dGi", diskSizeGb)
+
 	err := mngCache.Add(managedNodegroupCachedObject{
 		name:        ngNameLabelValue,
 		clusterName: clusterNameLabelValue,
 		taints:      []apiv1.Taint{taint1, taint2},
 		labels:      map[string]string{labelKey1: labelValue1, labelKey2: labelValue2},
+		tags:        map[string]string{tagKey1: tagValue1},
 	})
 	require.NoError(t, err)
 
@@ -234,6 +266,9 @@ func TestBuildNodeFromTemplateWithManagedNodegroup(t *testing.T) {
 		},
 	})
 	assert.NoError(t, observedErr)
+	esValue, esExist := observedNode.Status.Capacity[apiv1.ResourceName(ephemeralStorageKey)]
+	assert.True(t, esExist)
+	assert.Equal(t, int64(diskSizeGb*1024*1024*1024), esValue.Value())
 	assert.GreaterOrEqual(t, len(observedNode.Labels), 4)
 	ngNameValue, ngLabelExist := observedNode.Labels["nodegroup-name"]
 	assert.True(t, ngLabelExist)
@@ -364,6 +399,8 @@ func TestBuildNodeFromTemplate(t *testing.T) {
 	// Node with custom resource
 	ephemeralStorageKey := "ephemeral-storage"
 	ephemeralStorageValue := int64(20)
+	customResourceKey := "custom-resource"
+	customResourceValue := int64(5)
 	vpcIPKey := "vpc.amazonaws.com/PrivateIPv4Address"
 	observedNode, observedErr := awsManager.buildNodeFromTemplate(asg, &asgTemplate{
 		InstanceType: c5Instance,
@@ -372,12 +409,19 @@ func TestBuildNodeFromTemplate(t *testing.T) {
 				Key:   aws.String(fmt.Sprintf("k8s.io/cluster-autoscaler/node-template/resources/%s", ephemeralStorageKey)),
 				Value: aws.String(strconv.FormatInt(ephemeralStorageValue, 10)),
 			},
+			{
+				Key:   aws.String(fmt.Sprintf("k8s.io/cluster-autoscaler/node-template/resources/%s", customResourceKey)),
+				Value: aws.String(strconv.FormatInt(customResourceValue, 10)),
+			},
 		},
 	})
 	assert.NoError(t, observedErr)
 	esValue, esExist := observedNode.Status.Capacity[apiv1.ResourceName(ephemeralStorageKey)]
 	assert.True(t, esExist)
 	assert.Equal(t, int64(20), esValue.Value())
+	crValue, crExist := observedNode.Status.Capacity[apiv1.ResourceName(customResourceKey)]
+	assert.True(t, crExist)
+	assert.Equal(t, int64(5), crValue.Value())
 	_, ipExist := observedNode.Status.Capacity[apiv1.ResourceName(vpcIPKey)]
 	assert.False(t, ipExist)
 
