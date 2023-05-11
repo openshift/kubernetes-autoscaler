@@ -53,6 +53,12 @@ if [[ -n "${junit_report}" && -n "${coverage_output_dir}" ]]; then
     exit 1
 fi
 
+if [[ "${gotest_flags}" != *"-mod=vendor"* ]]; then
+    # if the user has not explicitly set the flag, we set it implicitly.
+    # this is because we want to ensure that we are testing against the vendored dependencies.
+    gotest_flags+=" -mod=vendor"
+fi
+
 # determine if user wanted verbosity
 verbose=
 if [[ "${gotest_flags}" =~ -v( |$) ]]; then
