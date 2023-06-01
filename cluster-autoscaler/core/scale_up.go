@@ -372,6 +372,13 @@ func ScaleUp(context *context.AutoscalingContext, processors *ca_processors.Auto
 					&status.ScaleUpStatus{CreateNodeGroupResults: createNodeGroupResults, PodsTriggeredScaleUp: bestOption.Pods},
 					typedErr.AddPrefix("failed to find matching node groups: "))
 			}
+			{
+				similarNodeGroupIds := make([]string, 0)
+				for _, sng := range similarNodeGroups {
+					similarNodeGroupIds = append(similarNodeGroupIds, sng.Id())
+				}
+				klog.V(2).Infof("Found %d similar groups: %v", len(similarNodeGroups), similarNodeGroupIds)
+			}
 
 			similarNodeGroups = filterNodeGroupsByPods(similarNodeGroups, bestOption.Pods, expansionOptions)
 			for _, ng := range similarNodeGroups {
@@ -383,6 +390,13 @@ func ScaleUp(context *context.AutoscalingContext, processors *ca_processors.Auto
 					// really cost us anything
 					klog.V(2).Infof("Ignoring node group %s when balancing: group is not ready for scaleup", ng.Id())
 				}
+			}
+			{
+				similarNodeGroupIds := make([]string, 0)
+				for _, sng := range similarNodeGroups {
+					similarNodeGroupIds = append(similarNodeGroupIds, sng.Id())
+				}
+				klog.V(2).Infof("Found %d similar groups after filtering for pods: %v", len(similarNodeGroups), similarNodeGroupIds)
 			}
 
 			if len(targetNodeGroups) > 1 {
