@@ -22,6 +22,7 @@ import (
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/scheduler"
+	klog "k8s.io/klog/v2"
 	schedulerframework "k8s.io/kubernetes/pkg/scheduler/framework"
 )
 
@@ -132,11 +133,13 @@ func IsCloudProviderNodeInfoSimilar(n1, n2 *schedulerframework.NodeInfo, ignored
 
 	for kind, qtyList := range capacity {
 		if len(qtyList) != 2 {
+			klog.V(3).Infof("nodes %s and %s are not similar, missing capacity %s", n1.Node().Name, n2.Node().Name, kind)
 			return false
 		}
 		switch kind {
 		case apiv1.ResourceMemory:
 			if !resourceListWithinTolerance(qtyList, MaxCapacityMemoryDifferenceRatio) {
+				klog.V(3).Infof("nodes %s and %s are not similar, memory not within tolerance", n1.Node().Name, n2.Node().Name)
 				return false
 			}
 		default:
@@ -144,6 +147,7 @@ func IsCloudProviderNodeInfoSimilar(n1, n2 *schedulerframework.NodeInfo, ignored
 			// If this is ever changed, enforcing MaxCoresTotal limits
 			// as it is now may no longer work.
 			if qtyList[0].Cmp(qtyList[1]) != 0 {
+				klog.V(3).Infof("nodes %s and %s are not similar, %s does not match", n1.Node().Name, n2.Node().Name, kind)
 				return false
 			}
 		}
@@ -151,13 +155,16 @@ func IsCloudProviderNodeInfoSimilar(n1, n2 *schedulerframework.NodeInfo, ignored
 
 	// For allocatable and free we allow resource quantities to be within a few % of each other
 	if !resourceMapsWithinTolerance(allocatable, MaxAllocatableDifferenceRatio) {
+		klog.V(3).Infof("nodes %s and %s are not similar, allocatable resources not within tolerance", n1.Node().Name, n2.Node().Name)
 		return false
 	}
 	if !resourceMapsWithinTolerance(free, MaxFreeDifferenceRatio) {
+		klog.V(3).Infof("nodes %s and %s are not similar, free resources not within tolerance", n1.Node().Name, n2.Node().Name)
 		return false
 	}
 
 	if !compareLabels(nodes, ignoredLabels) {
+		klog.V(3).Infof("nodes %s and %s are not similar, labels do not match", n1.Node().Name, n2.Node().Name)
 		return false
 	}
 
