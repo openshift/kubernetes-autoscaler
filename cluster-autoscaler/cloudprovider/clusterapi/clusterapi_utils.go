@@ -29,12 +29,20 @@ import (
 )
 
 const (
+	// the following constants are used for scaling from zero
+	// they are split into two sections to represent the values which have been historically used
+	// by openshift, and the values which have been added in the upstream.
+	// we are keeping the historical prefixes "machine.openshift.io" while we develop a solution
+	// which will allow the usage of either prefix, while preferring the upstream prefix "capacity.clsuter-autoscaler.kuberenetes.io".
 	cpuKey      = "machine.openshift.io/vCPU"
 	memoryKey   = "machine.openshift.io/memoryMb"
 	gpuCountKey = "machine.openshift.io/GPU"
 	maxPodsKey  = "machine.openshift.io/maxPods"
-	// OpenShift does not yet use the gpu-type annotation
-	gpuTypeKey = "capacity.cluster-autoscaler.kubernetes.io/gpu-type"
+	// the following constants keep the upstream prefix so that we do not introduce separate values into the openshift api
+	diskCapacityKey = "capacity.cluster-autoscaler.kubernetes.io/ephemeral-disk"
+	labelsKey       = "capacity.cluster-autoscaler.kubernetes.io/labels"
+	gpuTypeKey      = "capacity.cluster-autoscaler.kubernetes.io/gpu-type" // not currently used on OpenShift
+	taintsKey       = "capacity.cluster-autoscaler.kubernetes.io/taints"   // not currently used on OpenShift
 
 	// TODO: update machine API operator to match CAPI annotation so this can be inferred dynamically by getMachineDeleteAnnotationKey i.e ${apigroup}/delete-machine
 	// https://github.com/openshift/machine-api-operator/blob/128c5c90918c009172c6d24d5715888e0e1d59e4/pkg/controller/machineset/delete_policy.go#L34
@@ -145,9 +153,11 @@ func parseScalingBounds(annotations map[string]string) (int, int, error) {
 }
 
 func getOwnerForKind(u *unstructured.Unstructured, kind string) *metav1.OwnerReference {
-	for _, ref := range u.GetOwnerReferences() {
-		if ref.Kind == kind && ref.Name != "" {
-			return ref.DeepCopy()
+	if u != nil {
+		for _, ref := range u.GetOwnerReferences() {
+			if ref.Kind == kind && ref.Name != "" {
+				return ref.DeepCopy()
+			}
 		}
 	}
 
@@ -218,6 +228,10 @@ func parseMemoryCapacity(annotations map[string]string) (resource.Quantity, erro
 		return *resource.NewQuantity(valInt*units.MiB, resource.DecimalSI), nil
 	}
 	return zeroQuantity.DeepCopy(), nil
+}
+
+func parseEphemeralDiskCapacity(annotations map[string]string) (resource.Quantity, error) {
+	return parseKey(annotations, diskCapacityKey)
 }
 
 func parseGPUCount(annotations map[string]string) (resource.Quantity, error) {
