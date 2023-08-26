@@ -20,6 +20,7 @@ import (
 	ctx "context"
 	"flag"
 	"fmt"
+	"k8s.io/autoscaler/cluster-autoscaler/utils/cpu"
 	"net/http"
 	"net/url"
 	"os"
@@ -577,15 +578,9 @@ func main() {
 	leaderElection.LeaderElect = true
 	componentopts.BindLeaderElectionFlags(&leaderElection, pflag.CommandLine)
 
-	featureGate := utilfeature.DefaultMutableFeatureGate
-	loggingConfig := logsapi.NewLoggingConfiguration()
-
-	if err := logsapi.AddFeatureGates(featureGate); err != nil {
-		klog.Fatalf("Failed to add logging feature flags: %v", err)
-	}
-
-	logsapi.AddFlags(loggingConfig, pflag.CommandLine)
-	featureGate.AddFlag(pflag.CommandLine)
+	options.BindLeaderElectionFlags(&leaderElection, pflag.CommandLine)
+	utilfeature.DefaultMutableFeatureGate.AddFlag(pflag.CommandLine)
+	cpu.BindFlags(pflag.CommandLine)
 	kube_flag.InitFlags()
 
 	logs.InitLogs()
