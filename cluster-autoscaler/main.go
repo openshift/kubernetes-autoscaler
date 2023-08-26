@@ -20,6 +20,7 @@ import (
 	ctx "context"
 	"flag"
 	"fmt"
+	"k8s.io/autoscaler/cluster-autoscaler/utils/cpu"
 	"net/http"
 	"net/url"
 	"os"
@@ -546,6 +547,7 @@ func main() {
 
 	options.BindLeaderElectionFlags(&leaderElection, pflag.CommandLine)
 	utilfeature.DefaultMutableFeatureGate.AddFlag(pflag.CommandLine)
+	cpu.BindFlags(pflag.CommandLine)
 	kube_flag.InitFlags()
 
 	healthCheck := metrics.NewHealthCheck(*maxInactivityTimeFlag, *maxFailingTimeFlag)
