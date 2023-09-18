@@ -1,11 +1,11 @@
-FROM registry.ci.openshift.org/ocp/builder:rhel-8-golang-1.20-openshift-4.14 AS builder
+FROM registry.ci.openshift.org/ocp/builder:rhel-8-golang-1.20-openshift-4.15 AS builder
 WORKDIR /go/src/k8s.io/autoscaler/vertical-pod-autoscaler
 COPY . .
 RUN go build ./pkg/admission-controller
 RUN go build ./pkg/updater
 RUN go build ./pkg/recommender
 
-FROM registry.ci.openshift.org/ocp/4.14:base
+FROM registry.ci.openshift.org/ocp/4.15:base
 COPY --from=builder \
     /go/src/k8s.io/autoscaler/vertical-pod-autoscaler/admission-controller \
     /go/src/k8s.io/autoscaler/vertical-pod-autoscaler/updater \
