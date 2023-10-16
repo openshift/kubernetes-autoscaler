@@ -18,6 +18,7 @@ package context
 
 import (
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
+	"k8s.io/autoscaler/cluster-autoscaler/clusterstate"
 	"k8s.io/autoscaler/cluster-autoscaler/clusterstate/utils"
 	"k8s.io/autoscaler/cluster-autoscaler/config"
 	"k8s.io/autoscaler/cluster-autoscaler/core/scaledown"
@@ -29,6 +30,7 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/simulator/clustersnapshot"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator/predicatechecker"
 	kube_util "k8s.io/autoscaler/cluster-autoscaler/utils/kubernetes"
+	"k8s.io/client-go/informers"
 	kube_client "k8s.io/client-go/kubernetes"
 	kube_record "k8s.io/client-go/tools/record"
 	klog "k8s.io/klog/v2"
@@ -60,6 +62,8 @@ type AutoscalingContext struct {
 	ScaleDownActuator scaledown.Actuator
 	// RemainingPdbTracker tracks the remaining pod disruption budget
 	RemainingPdbTracker pdb.RemainingPdbTracker
+	// ClusterStateRegistry tracks the health of the node groups and pending scale-ups and scale-downs
+	ClusterStateRegistry *clusterstate.ClusterStateRegistry
 }
 
 // AutoscalingKubeClients contains all Kubernetes API clients,
@@ -105,7 +109,9 @@ func NewAutoscalingContext(
 	estimatorBuilder estimator.EstimatorBuilder,
 	processorCallbacks processor_callbacks.ProcessorCallbacks,
 	debuggingSnapshotter debuggingsnapshot.DebuggingSnapshotter,
-	remainingPdbTracker pdb.RemainingPdbTracker) *AutoscalingContext {
+	remainingPdbTracker pdb.RemainingPdbTracker,
+	clusterStateRegistry *clusterstate.ClusterStateRegistry,
+) *AutoscalingContext {
 	return &AutoscalingContext{
 		AutoscalingOptions:     options,
 		CloudProvider:          cloudProvider,
@@ -117,13 +123,13 @@ func NewAutoscalingContext(
 		ProcessorCallbacks:     processorCallbacks,
 		DebuggingSnapshotter:   debuggingSnapshotter,
 		RemainingPdbTracker:    remainingPdbTracker,
+		ClusterStateRegistry:   clusterStateRegistry,
 	}
 }
 
 // NewAutoscalingKubeClients builds AutoscalingKubeClients out of basic client.
-func NewAutoscalingKubeClients(opts config.AutoscalingOptions, kubeClient, eventsKubeClient kube_client.Interface) *AutoscalingKubeClients {
-	listerRegistryStopChannel := make(chan struct{})
-	listerRegistry := kube_util.NewListerRegistryWithDefaultListers(kubeClient, listerRegistryStopChannel)
+func NewAutoscalingKubeClients(opts config.AutoscalingOptions, kubeClient, eventsKubeClient kube_client.Interface, informerFactory informers.SharedInformerFactory) *AutoscalingKubeClients {
+	listerRegistry := kube_util.NewListerRegistryWithDefaultListers(informerFactory)
 	kubeEventRecorder := kube_util.CreateEventRecorder(eventsKubeClient, opts.RecordDuplicatedEvents)
 	logRecorder, err := utils.NewStatusMapRecorder(kubeClient, opts.ConfigNamespace, kubeEventRecorder, opts.WriteStatusConfigMap, opts.StatusConfigMapName)
 	if err != nil {

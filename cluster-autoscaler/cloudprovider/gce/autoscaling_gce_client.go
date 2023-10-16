@@ -59,8 +59,33 @@ const (
 	// is facing errors caused by vmExternalIpAccess policy constraint misconfiguration.
 	ErrorCodeVmExternalIpAccessPolicyConstraint = "VM_EXTERNAL_IP_ACCESS_POLICY_CONSTRAINT"
 
+	// ErrorInvalidReservation is an error code for InstanceErrorInfo if the node group couldn't
+	// be scaled up because no reservation was found, or the reservation associated with the MIG
+	// was invalid.
+	ErrorInvalidReservation = "INVALID_RESERVATION"
+
+	// ErrorReservationNotReady is an error code for InstanceErrorInfo if the node group couldn't
+	// be scaled up because the associated reservation was not ready.
+	ErrorReservationNotReady = "RESERVATION_NOT_READY"
+
 	// ErrorCodeOther is an error code used in InstanceErrorInfo if other error occurs.
 	ErrorCodeOther = "OTHER"
+)
+
+var (
+	regexReservationErrors = []*regexp.Regexp{
+		regexp.MustCompile("Incompatible AggregateReservation VMFamily"),
+		regexp.MustCompile("Could not find the given reservation with the following name"),
+		regexp.MustCompile("must use ReservationAffinity of"),
+		regexp.MustCompile("The reservation must exist in the same project as the instance"),
+		regexp.MustCompile("only compatible with Aggregate Reservations"),
+		regexp.MustCompile("Please target a reservation with workload_type ="),
+		regexp.MustCompile("AggregateReservation VMFamily: should be a (.*) VM Family for instance with (.*) machine type"),
+		regexp.MustCompile("VM Family: (.*) is not supported for aggregate reservations. It must be one of"),
+		regexp.MustCompile("Reservation (.*) is incorrect for the requested resources"),
+		regexp.MustCompile("Zone does not currently have sufficient capacity for the requested resources"),
+		regexp.MustCompile("Reservation (.*) does not have sufficient capacity for the requested resources."),
+	}
 )
 
 // AutoscalingGceClient is used for communicating with GCE API.
@@ -78,6 +103,7 @@ type AutoscalingGceClient interface {
 	FetchZones(region string) ([]string, error)
 	FetchAvailableCpuPlatforms() (map[string][]string, error)
 	FetchReservations() ([]*gce.Reservation, error)
+	FetchReservationsInProject(projectId string) ([]*gce.Reservation, error)
 
 	// modifying resources
 	ResizeMig(GceRef, int64) error
@@ -372,6 +398,16 @@ func GetErrorInfo(errorCode, errorMessage, instanceStatus string, previousErrorI
 			ErrorClass: cloudprovider.OtherErrorClass,
 			ErrorCode:  ErrorCodeVmExternalIpAccessPolicyConstraint,
 		}
+	} else if isReservationNotReady(errorCode, errorMessage) {
+		return &cloudprovider.InstanceErrorInfo{
+			ErrorClass: cloudprovider.OtherErrorClass,
+			ErrorCode:  ErrorReservationNotReady,
+		}
+	} else if isInvalidReservationError(errorCode, errorMessage) {
+		return &cloudprovider.InstanceErrorInfo{
+			ErrorClass: cloudprovider.OtherErrorClass,
+			ErrorCode:  ErrorInvalidReservation,
+		}
 	} else if isInstanceStatusNotRunningYet(instanceStatus) {
 		if previousErrorInfo != nil {
 			// keep the current error
@@ -426,6 +462,19 @@ func isVmExternalIpAccessPolicyConstraintError(errorCode, errorMessage string) b
 
 func isInstanceStatusNotRunningYet(instanceStatus string) bool {
 	return instanceStatus == "" || instanceStatus == "PROVISIONING" || instanceStatus == "STAGING"
+}
+
+func isReservationNotReady(errorCode, errorMessage string) bool {
+	return strings.Contains(errorMessage, "it requires reservation to be in READY state")
+}
+
+func isInvalidReservationError(errorCode, errorMessage string) bool {
+	for _, re := range regexReservationErrors {
+		if re.MatchString(errorMessage) {
+			return true
+		}
+	}
+	return false
 }
 
 func generateInstanceName(baseName string, existingNames map[string]bool) string {
@@ -511,8 +560,12 @@ func (client *autoscalingGceClientV1) FetchMigsWithName(zone string, name *regex
 }
 
 func (client *autoscalingGceClientV1) FetchReservations() ([]*gce.Reservation, error) {
+	return client.FetchReservationsInProject(client.projectId)
+}
+
+func (client *autoscalingGceClientV1) FetchReservationsInProject(projectId string) ([]*gce.Reservation, error) {
 	reservations := make([]*gce.Reservation, 0)
-	call := client.gceService.Reservations.AggregatedList(client.projectId)
+	call := client.gceService.Reservations.AggregatedList(projectId)
 	err := call.Pages(context.TODO(), func(ls *gce.ReservationAggregatedList) error {
 		for _, items := range ls.Items {
 			reservations = append(reservations, items.Reservations...)

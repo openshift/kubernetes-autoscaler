@@ -73,8 +73,8 @@ type ServicePort interface {
 	StickyMaxAgeSeconds() int
 	// ExternalIPStrings returns service ExternalIPs as a string array.
 	ExternalIPStrings() []string
-	// LoadBalancerIPStrings returns service LoadBalancerIPs as a string array.
-	LoadBalancerIPStrings() []string
+	// LoadBalancerVIPStrings returns service LoadBalancerIPs which are VIP mode as a string array.
+	LoadBalancerVIPStrings() []string
 	// Protocol returns service protocol.
 	Protocol() v1.Protocol
 	// LoadBalancerSourceRanges returns service LoadBalancerSourceRanges if present empty array if not
@@ -126,13 +126,11 @@ type Endpoint interface {
 	IsTerminating() bool
 	// GetZoneHints returns the zone hint for the endpoint. This is based on
 	// endpoint.hints.forZones[0].name in the EndpointSlice API.
-	GetZoneHints() sets.String
+	GetZoneHints() sets.Set[string]
 	// IP returns IP part of the endpoint.
 	IP() string
 	// Port returns the Port part of the endpoint.
 	Port() (int, error)
-	// Equal checks if two endpoints are equal.
-	Equal(Endpoint) bool
 	// GetNodeName returns the node name for the endpoint
 	GetNodeName() string
 	// GetZone returns the zone for the endpoint

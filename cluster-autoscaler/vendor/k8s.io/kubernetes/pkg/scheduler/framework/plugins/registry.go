@@ -34,7 +34,6 @@ import (
 	"k8s.io/kubernetes/pkg/scheduler/framework/plugins/podtopologyspread"
 	"k8s.io/kubernetes/pkg/scheduler/framework/plugins/queuesort"
 	"k8s.io/kubernetes/pkg/scheduler/framework/plugins/schedulinggates"
-	"k8s.io/kubernetes/pkg/scheduler/framework/plugins/selectorspread"
 	"k8s.io/kubernetes/pkg/scheduler/framework/plugins/tainttoleration"
 	"k8s.io/kubernetes/pkg/scheduler/framework/plugins/volumebinding"
 	"k8s.io/kubernetes/pkg/scheduler/framework/plugins/volumerestrictions"
@@ -56,11 +55,11 @@ func NewInTreeRegistry() runtime.Registry {
 		EnablePodSchedulingReadiness:                 feature.DefaultFeatureGate.Enabled(features.PodSchedulingReadiness),
 		EnablePodDisruptionConditions:                feature.DefaultFeatureGate.Enabled(features.PodDisruptionConditions),
 		EnableInPlacePodVerticalScaling:              feature.DefaultFeatureGate.Enabled(features.InPlacePodVerticalScaling),
+		EnableSidecarContainers:                      feature.DefaultFeatureGate.Enabled(features.SidecarContainers),
 	}
 
 	registry := runtime.Registry{
 		dynamicresources.Name:                runtime.FactoryAdapter(fts, dynamicresources.New),
-		selectorspread.Name:                  selectorspread.New,
 		imagelocality.Name:                   imagelocality.New,
 		tainttoleration.Name:                 tainttoleration.New,
 		nodename.Name:                        nodename.New,

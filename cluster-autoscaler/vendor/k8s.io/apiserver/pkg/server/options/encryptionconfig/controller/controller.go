@@ -27,6 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/apiserver/pkg/server/healthz"
 	"k8s.io/apiserver/pkg/server/options/encryptionconfig"
+	"k8s.io/apiserver/pkg/server/options/encryptionconfig/metrics"
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/klog/v2"
 )
@@ -49,6 +50,13 @@ type DynamicKMSEncryptionConfigContent struct {
 
 	// dynamicTransformers updates the transformers when encryption config file changes.
 	dynamicTransformers *encryptionconfig.DynamicTransformers
+
+	// identity of the api server
+	apiServerID string
+}
+
+func init() {
+	metrics.RegisterMetrics()
 }
 
 // NewDynamicEncryptionConfiguration returns controller that dynamically reacts to changes in encryption config file.
@@ -56,6 +64,7 @@ func NewDynamicEncryptionConfiguration(
 	name, filePath string,
 	dynamicTransformers *encryptionconfig.DynamicTransformers,
 	configContentHash string,
+	apiServerID string,
 ) *DynamicKMSEncryptionConfigContent {
 	encryptionConfig := &DynamicKMSEncryptionConfigContent{
 		name:                           name,
@@ -63,6 +72,7 @@ func NewDynamicEncryptionConfiguration(
 		lastLoadedEncryptionConfigHash: configContentHash,
 		dynamicTransformers:            dynamicTransformers,
 		queue:                          workqueue.NewNamedRateLimitingQueue(workqueue.DefaultControllerRateLimiter(), name),
+		apiServerID:                    apiServerID,
 	}
 	encryptionConfig.queue.Add(workqueueKey) // to avoid missing any file changes that occur in between the initial load and Run
 
@@ -163,16 +173,19 @@ func (d *DynamicKMSEncryptionConfigContent) processNextWorkItem(serverCtx contex
 	ctx, closeTransformers := context.WithCancel(serverCtx)
 
 	defer func() {
-		// TODO: increment success metric when updatedEffectiveConfig=true
-
 		// TODO can work queue metrics help here?
 
 		if !updatedEffectiveConfig {
 			// avoid leaking if we're not using the newly constructed transformers (due to an error or them not being changed)
 			closeTransformers()
 		}
+
+		if updatedEffectiveConfig && err == nil {
+			metrics.RecordEncryptionConfigAutomaticReloadSuccess(d.apiServerID)
+		}
+
 		if err != nil {
-			// TODO: increment failure metric
+			metrics.RecordEncryptionConfigAutomaticReloadFailure(d.apiServerID)
 			utilruntime.HandleError(fmt.Errorf("error processing encryption config file %s: %v", d.filePath, err))
 			// add dummy item back to the queue to trigger file content processing.
 			d.queue.AddRateLimited(key)
@@ -220,7 +233,7 @@ func (d *DynamicKMSEncryptionConfigContent) processEncryptionConfig(ctx context.
 	err error,
 ) {
 	// this code path will only execute if reload=true. So passing true explicitly.
-	encryptionConfiguration, err = encryptionconfig.LoadEncryptionConfig(ctx, d.filePath, true)
+	encryptionConfiguration, err = encryptionconfig.LoadEncryptionConfig(ctx, d.filePath, true, d.apiServerID)
 	if err != nil {
 		return nil, false, err
 	}

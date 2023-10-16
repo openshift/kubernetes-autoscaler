@@ -1,0 +1,16 @@
+approvers:
+- feiskyer
+- nilo19
+- gandhipr
+- tallaxes
+reviewers:
+- feiskyer
+- nilo19
+- gandhipr
+- tallaxes
+emeritus_approvers:
+- marwanad
+
+
+labels:
+- area/provider/azure

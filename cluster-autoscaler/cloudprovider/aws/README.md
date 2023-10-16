@@ -246,6 +246,8 @@ as string). Currently supported autoscaling options (and example values) are:
   (overrides `--scale-down-unneeded-time` value for that specific ASG)
 * `k8s.io/cluster-autoscaler/node-template/autoscaling-options/scaledownunreadytime`: `20m0s`
   (overrides `--scale-down-unready-time` value for that specific ASG)
+* `k8s.io/cluster-autoscaler/node-template/autoscaling-options/ignoredaemonsetsutilization`: `true`
+  (overrides `--ignore-daemonsets-utilization` value for that specific ASG) 
 
 **NOTE:** It is your responsibility to ensure such labels and/or taints are
 applied via the node's kubelet configuration at startup. Cluster Autoscaler will not set the node taints for you.
@@ -524,3 +526,4 @@ Please note: it is also possible to mount the cloud config file from host:
   Otherwise, the `/latest/api/token` call will timeout and result in an error. See [AWS docs here](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/configuring-instance-metadata-service.html#configuring-instance-metadata-options) for further information.
 - If you don't use EKS managed nodegroups, don't add the `eks:nodegroup-name` tag to the ASG as this will lead to extra EKS API calls that could slow down scaling when there are 0 nodes in the nodegroup.
 - Set `AWS_MAX_ATTEMPTS` to configure max retries
+- If you are running a private cluster in a VPC without certain VPC interfaces for AWS services, the CA might crash on startup due to failing to dynamically fetch supported EC2-instance types. To avoid this, add the argument `--aws-use-static-instance-list=true` to the CA startup command. For more information on private cluster requirements, see [AWS docs here](https://docs.aws.amazon.com/eks/latest/userguide/private-clusters.html).

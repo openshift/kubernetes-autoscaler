@@ -50,6 +50,7 @@ const (
 	autoDiscovererTypeASG   = "asg"
 	asgAutoDiscovererKeyTag = "tag"
 	optionsTagsPrefix       = "k8s.io/cluster-autoscaler/node-template/autoscaling-options/"
+	labelAwsCSITopologyZone = "topology.ebs.csi.aws.com/zone"
 )
 
 // AwsManager is handles aws communication and data caching.
@@ -245,6 +246,15 @@ func (m *AwsManager) GetAsgOptions(asg asg, defaults config.NodeGroupAutoscaling
 		}
 	}
 
+	if stringOpt, found := options[config.DefaultIgnoreDaemonSetsUtilizationKey]; found {
+		if opt, err := strconv.ParseBool(stringOpt); err != nil {
+			klog.Warningf("failed to convert asg %s %s tag to bool: %v",
+				asg.Name, config.DefaultIgnoreDaemonSetsUtilizationKey, err)
+		} else {
+			defaults.IgnoreDaemonSetsUtilization = opt
+		}
+	}
+
 	return &defaults
 }
 
@@ -407,6 +417,7 @@ func buildGenericLabels(template *asgTemplate, nodeName string) map[string]strin
 
 	result[apiv1.LabelTopologyRegion] = template.Region
 	result[apiv1.LabelTopologyZone] = template.Zone
+	result[labelAwsCSITopologyZone] = template.Zone
 	result[apiv1.LabelHostname] = nodeName
 	return result
 }

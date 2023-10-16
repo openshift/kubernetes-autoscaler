@@ -30,10 +30,10 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/kubernetes/pkg/proxy/metrics"
-	utilproxy "k8s.io/kubernetes/pkg/proxy/util"
+	proxyutil "k8s.io/kubernetes/pkg/proxy/util"
 )
 
-var supportedEndpointSliceAddressTypes = sets.NewString(
+var supportedEndpointSliceAddressTypes = sets.New[string](
 	string(discovery.AddressTypeIPv4),
 	string(discovery.AddressTypeIPv6),
 )
@@ -49,7 +49,7 @@ type BaseEndpointInfo struct {
 
 	// ZoneHints represent the zone hints for the endpoint. This is based on
 	// endpoint.hints.forZones[*].name in the EndpointSlice API.
-	ZoneHints sets.String
+	ZoneHints sets.Set[string]
 	// Ready indicates whether this endpoint is ready and NOT terminating.
 	// For pods, this is true if a pod has a ready status and a nil deletion timestamp.
 	// This is only set when watching EndpointSlices. If using Endpoints, this is always
@@ -103,25 +103,18 @@ func (info *BaseEndpointInfo) IsTerminating() bool {
 }
 
 // GetZoneHints returns the zone hint for the endpoint.
-func (info *BaseEndpointInfo) GetZoneHints() sets.String {
+func (info *BaseEndpointInfo) GetZoneHints() sets.Set[string] {
 	return info.ZoneHints
 }
 
 // IP returns just the IP part of the endpoint, it's a part of proxy.Endpoint interface.
 func (info *BaseEndpointInfo) IP() string {
-	return utilproxy.IPPart(info.Endpoint)
+	return proxyutil.IPPart(info.Endpoint)
 }
 
 // Port returns just the Port part of the endpoint.
 func (info *BaseEndpointInfo) Port() (int, error) {
-	return utilproxy.PortPart(info.Endpoint)
-}
-
-// Equal is part of proxy.Endpoint interface.
-func (info *BaseEndpointInfo) Equal(other Endpoint) bool {
-	return info.String() == other.String() &&
-		info.GetIsLocal() == other.GetIsLocal() &&
-		info.IsReady() == other.IsReady()
+	return proxyutil.PortPart(info.Endpoint)
 }
 
 // GetNodeName returns the NodeName for this endpoint.
@@ -135,7 +128,7 @@ func (info *BaseEndpointInfo) GetZone() string {
 }
 
 func newBaseEndpointInfo(IP, nodeName, zone string, port int, isLocal bool,
-	ready, serving, terminating bool, zoneHints sets.String) *BaseEndpointInfo {
+	ready, serving, terminating bool, zoneHints sets.Set[string]) *BaseEndpointInfo {
 	return &BaseEndpointInfo{
 		Endpoint:    net.JoinHostPort(IP, strconv.Itoa(port)),
 		IsLocal:     isLocal,
@@ -232,7 +225,7 @@ func (ect *EndpointChangeTracker) EndpointSliceUpdate(endpointSlice *discovery.E
 // PendingChanges returns a set whose keys are the names of the services whose endpoints
 // have changed since the last time ect was used to update an EndpointsMap. (You must call
 // this _before_ calling em.Update(ect).)
-func (ect *EndpointChangeTracker) PendingChanges() sets.String {
+func (ect *EndpointChangeTracker) PendingChanges() sets.Set[string] {
 	return ect.endpointSliceCache.pendingChanges()
 }
 
@@ -361,8 +354,8 @@ func (em EndpointsMap) unmerge(other EndpointsMap) {
 }
 
 // getLocalEndpointIPs returns endpoints IPs if given endpoint is local - local means the endpoint is running in same host as kube-proxy.
-func (em EndpointsMap) getLocalReadyEndpointIPs() map[types.NamespacedName]sets.String {
-	localIPs := make(map[types.NamespacedName]sets.String)
+func (em EndpointsMap) getLocalReadyEndpointIPs() map[types.NamespacedName]sets.Set[string] {
+	localIPs := make(map[types.NamespacedName]sets.Set[string])
 	for svcPortName, epList := range em {
 		for _, ep := range epList {
 			// Only add ready endpoints for health checking. Terminating endpoints may still serve traffic
@@ -374,7 +367,7 @@ func (em EndpointsMap) getLocalReadyEndpointIPs() map[types.NamespacedName]sets.
 			if ep.GetIsLocal() {
 				nsn := svcPortName.NamespacedName
 				if localIPs[nsn] == nil {
-					localIPs[nsn] = sets.NewString()
+					localIPs[nsn] = sets.New[string]()
 				}
 				localIPs[nsn].Insert(ep.IP())
 			}
@@ -414,18 +407,18 @@ func detectStaleConntrackEntries(oldEndpointsMap, newEndpointsMap EndpointsMap, 
 		}
 
 		for _, ep := range epList {
-			// If the old endpoint wasn't Ready then there can't be stale
+			// If the old endpoint wasn't Serving then there can't be stale
 			// conntrack entries since there was no traffic sent to it.
-			if !ep.IsReady() {
+			if !ep.IsServing() {
 				continue
 			}
 
 			deleted := true
 			// Check if the endpoint has changed, including if it went from
-			// ready to not ready. If it did change stale entries for the old
+			// serving to not serving. If it did change stale entries for the old
 			// endpoint have to be cleared.
 			for i := range newEndpointsMap[svcPortName] {
-				if newEndpointsMap[svcPortName][i].Equal(ep) {
+				if newEndpointsMap[svcPortName][i].String() == ep.String() {
 					deleted = false
 					break
 				}
@@ -446,21 +439,21 @@ func detectStaleConntrackEntries(oldEndpointsMap, newEndpointsMap EndpointsMap, 
 			continue
 		}
 
-		epReady := 0
+		epServing := 0
 		for _, ep := range epList {
-			if ep.IsReady() {
-				epReady++
+			if ep.IsServing() {
+				epServing++
 			}
 		}
 
-		oldEpReady := 0
+		oldEpServing := 0
 		for _, ep := range oldEndpointsMap[svcPortName] {
-			if ep.IsReady() {
-				oldEpReady++
+			if ep.IsServing() {
+				oldEpServing++
 			}
 		}
 
-		if epReady > 0 && oldEpReady == 0 {
+		if epServing > 0 && oldEpServing == 0 {
 			*newlyActiveUDPServices = append(*newlyActiveUDPServices, svcPortName)
 		}
 	}

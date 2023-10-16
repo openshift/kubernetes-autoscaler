@@ -65,8 +65,11 @@ func TestBuildGenericLabels(t *testing.T) {
 			Architecture: cloudprovider.DefaultArch,
 		},
 		Region: "us-east-1",
+		Zone:   "us-east-1c",
 	}, "sillyname")
-	assert.Equal(t, "us-east-1", labels[apiv1.LabelZoneRegionStable])
+	assert.Equal(t, "us-east-1", labels[apiv1.LabelTopologyRegion])
+	assert.Equal(t, "us-east-1c", labels[apiv1.LabelTopologyZone])
+	assert.Equal(t, "us-east-1c", labels[labelAwsCSITopologyZone])
 	assert.Equal(t, "sillyname", labels[apiv1.LabelHostname])
 	assert.Equal(t, "c4.large", labels[apiv1.LabelInstanceTypeStable])
 	assert.Equal(t, cloudprovider.DefaultArch, labels[apiv1.LabelArchStable])
@@ -130,6 +133,7 @@ func TestGetAsgOptions(t *testing.T) {
 		ScaleDownGpuUtilizationThreshold: 0.2,
 		ScaleDownUnneededTime:            time.Second,
 		ScaleDownUnreadyTime:             time.Minute,
+		IgnoreDaemonSetsUtilization:      false,
 	}
 
 	tests := []struct {
@@ -145,39 +149,60 @@ func TestGetAsgOptions(t *testing.T) {
 		{
 			description: "keep defaults on invalid tags values",
 			tags: map[string]string{
-				"scaledownutilizationthreshold": "not-a-float",
-				"scaledownunneededtime":         "not-a-duration",
-				"ScaleDownUnreadyTime":          "",
+				config.DefaultScaleDownUtilizationThresholdKey: "not-a-float",
+				config.DefaultScaleDownUnneededTimeKey:         "not-a-duration",
+				"ScaleDownUnreadyTime":                         "",
+				config.DefaultIgnoreDaemonSetsUtilizationKey:   "not-a-bool",
 			},
 			expected: &defaultOptions,
 		},
 		{
 			description: "use provided tags and fill missing with defaults",
 			tags: map[string]string{
-				"scaledownutilizationthreshold": "0.42",
-				"scaledownunneededtime":         "1h",
+				config.DefaultScaleDownUtilizationThresholdKey: "0.42",
+				config.DefaultScaleDownUnneededTimeKey:         "1h",
+				config.DefaultIgnoreDaemonSetsUtilizationKey:   "true",
 			},
 			expected: &config.NodeGroupAutoscalingOptions{
 				ScaleDownUtilizationThreshold:    0.42,
 				ScaleDownGpuUtilizationThreshold: defaultOptions.ScaleDownGpuUtilizationThreshold,
 				ScaleDownUnneededTime:            time.Hour,
 				ScaleDownUnreadyTime:             defaultOptions.ScaleDownUnreadyTime,
+				IgnoreDaemonSetsUtilization:      true,
+			},
+		},
+		{
+			description: "use provided tags (happy path)",
+			tags: map[string]string{
+				config.DefaultScaleDownUtilizationThresholdKey:    "0.42",
+				config.DefaultScaleDownUnneededTimeKey:            "1h",
+				config.DefaultScaleDownGpuUtilizationThresholdKey: "0.7",
+				config.DefaultScaleDownUnreadyTimeKey:             "25m",
+				config.DefaultIgnoreDaemonSetsUtilizationKey:      "true",
+			},
+			expected: &config.NodeGroupAutoscalingOptions{
+				ScaleDownUtilizationThreshold:    0.42,
+				ScaleDownGpuUtilizationThreshold: 0.7,
+				ScaleDownUnneededTime:            time.Hour,
+				ScaleDownUnreadyTime:             25 * time.Minute,
+				IgnoreDaemonSetsUtilization:      true,
 			},
 		},
 		{
 			description: "ignore unknown tags",
 			tags: map[string]string{
-				"scaledownutilizationthreshold":    "0.6",
-				"scaledowngpuutilizationthreshold": "0.7",
-				"scaledownunneededtime":            "1m",
-				"scaledownunreadytime":             "1h",
-				"notyetspecified":                  "42",
+				config.DefaultScaleDownUtilizationThresholdKey:    "0.6",
+				config.DefaultScaleDownGpuUtilizationThresholdKey: "0.7",
+				config.DefaultScaleDownUnneededTimeKey:            "1m",
+				config.DefaultScaleDownUnreadyTimeKey:             "1h",
+				"notyetspecified":                                 "42",
 			},
 			expected: &config.NodeGroupAutoscalingOptions{
 				ScaleDownUtilizationThreshold:    0.6,
 				ScaleDownGpuUtilizationThreshold: 0.7,
 				ScaleDownUnneededTime:            time.Minute,
 				ScaleDownUnreadyTime:             time.Hour,
+				IgnoreDaemonSetsUtilization:      false,
 			},
 		},
 	}

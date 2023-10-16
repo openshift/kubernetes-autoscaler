@@ -33,6 +33,11 @@ const (
 	KubeletSubsystem                   = "kubelet"
 	NodeNameKey                        = "node_name"
 	NodeLabelKey                       = "node"
+	NodeStartupPreKubeletKey           = "node_startup_pre_kubelet_duration_seconds"
+	NodeStartupPreRegistrationKey      = "node_startup_pre_registration_duration_seconds"
+	NodeStartupRegistrationKey         = "node_startup_registration_duration_seconds"
+	NodeStartupPostRegistrationKey     = "node_startup_post_registration_duration_seconds"
+	NodeStartupKey                     = "node_startup_duration_seconds"
 	PodWorkerDurationKey               = "pod_worker_duration_seconds"
 	PodStartDurationKey                = "pod_start_duration_seconds"
 	PodStartSLIDurationKey             = "pod_start_sli_duration_seconds"
@@ -613,7 +618,7 @@ var (
 		&metrics.CounterOpts{
 			Subsystem:      KubeletSubsystem,
 			Name:           StartedHostProcessContainersTotalKey,
-			Help:           "Cumulative number of hostprocess containers started. This metric will only be collected on Windows and requires WindowsHostProcessContainers feature gate to be enabled.",
+			Help:           "Cumulative number of hostprocess containers started. This metric will only be collected on Windows.",
 			StabilityLevel: metrics.ALPHA,
 		},
 		[]string{"container_type"},
@@ -623,7 +628,7 @@ var (
 		&metrics.CounterOpts{
 			Subsystem:      KubeletSubsystem,
 			Name:           StartedHostProcessContainersErrorsTotalKey,
-			Help:           "Cumulative number of errors when starting hostprocess containers. This metric will only be collected on Windows and requires WindowsHostProcessContainers feature gate to be enabled.",
+			Help:           "Cumulative number of errors when starting hostprocess containers. This metric will only be collected on Windows.",
 			StabilityLevel: metrics.ALPHA,
 		},
 		[]string{"container_type", "code"},
@@ -736,6 +741,51 @@ var (
 			StabilityLevel: metrics.ALPHA,
 		},
 	)
+
+	NodeStartupPreKubeletDuration = metrics.NewGauge(
+		&metrics.GaugeOpts{
+			Subsystem:      KubeletSubsystem,
+			Name:           NodeStartupPreKubeletKey,
+			Help:           "Duration in seconds of node startup before kubelet starts.",
+			StabilityLevel: metrics.ALPHA,
+		},
+	)
+
+	NodeStartupPreRegistrationDuration = metrics.NewGauge(
+		&metrics.GaugeOpts{
+			Subsystem:      KubeletSubsystem,
+			Name:           NodeStartupPreRegistrationKey,
+			Help:           "Duration in seconds of node startup before registration.",
+			StabilityLevel: metrics.ALPHA,
+		},
+	)
+
+	NodeStartupRegistrationDuration = metrics.NewGauge(
+		&metrics.GaugeOpts{
+			Subsystem:      KubeletSubsystem,
+			Name:           NodeStartupRegistrationKey,
+			Help:           "Duration in seconds of node startup during registration.",
+			StabilityLevel: metrics.ALPHA,
+		},
+	)
+
+	NodeStartupPostRegistrationDuration = metrics.NewGauge(
+		&metrics.GaugeOpts{
+			Subsystem:      KubeletSubsystem,
+			Name:           NodeStartupPostRegistrationKey,
+			Help:           "Duration in seconds of node startup after registration.",
+			StabilityLevel: metrics.ALPHA,
+		},
+	)
+
+	NodeStartupDuration = metrics.NewGauge(
+		&metrics.GaugeOpts{
+			Subsystem:      KubeletSubsystem,
+			Name:           NodeStartupKey,
+			Help:           "Duration in seconds of node startup in total.",
+			StabilityLevel: metrics.ALPHA,
+		},
+	)
 )
 
 var registerMetrics sync.Once
@@ -748,6 +798,11 @@ func Register(collectors ...metrics.StableCollector) {
 		legacyregistry.MustRegister(PodWorkerDuration)
 		legacyregistry.MustRegister(PodStartDuration)
 		legacyregistry.MustRegister(PodStartSLIDuration)
+		legacyregistry.MustRegister(NodeStartupPreKubeletDuration)
+		legacyregistry.MustRegister(NodeStartupPreRegistrationDuration)
+		legacyregistry.MustRegister(NodeStartupRegistrationDuration)
+		legacyregistry.MustRegister(NodeStartupPostRegistrationDuration)
+		legacyregistry.MustRegister(NodeStartupDuration)
 		legacyregistry.MustRegister(CgroupManagerDuration)
 		legacyregistry.MustRegister(PodWorkerStartDuration)
 		legacyregistry.MustRegister(PodStatusSyncDuration)
@@ -776,19 +831,14 @@ func Register(collectors ...metrics.StableCollector) {
 		legacyregistry.MustRegister(OrphanedRuntimePodTotal)
 		legacyregistry.MustRegister(RestartedPodTotal)
 		legacyregistry.MustRegister(ManagedEphemeralContainers)
-		if utilfeature.DefaultFeatureGate.Enabled(features.KubeletPodResources) {
-			legacyregistry.MustRegister(PodResourcesEndpointRequestsTotalCount)
-
-			if utilfeature.DefaultFeatureGate.Enabled(features.KubeletPodResourcesGetAllocatable) {
-				legacyregistry.MustRegister(PodResourcesEndpointRequestsListCount)
-				legacyregistry.MustRegister(PodResourcesEndpointRequestsGetAllocatableCount)
-				legacyregistry.MustRegister(PodResourcesEndpointErrorsListCount)
-				legacyregistry.MustRegister(PodResourcesEndpointErrorsGetAllocatableCount)
-			}
-			if utilfeature.DefaultFeatureGate.Enabled(features.KubeletPodResourcesGet) {
-				legacyregistry.MustRegister(PodResourcesEndpointRequestsGetCount)
-				legacyregistry.MustRegister(PodResourcesEndpointErrorsGetCount)
-			}
+		legacyregistry.MustRegister(PodResourcesEndpointRequestsTotalCount)
+		legacyregistry.MustRegister(PodResourcesEndpointRequestsListCount)
+		legacyregistry.MustRegister(PodResourcesEndpointRequestsGetAllocatableCount)
+		legacyregistry.MustRegister(PodResourcesEndpointErrorsListCount)
+		legacyregistry.MustRegister(PodResourcesEndpointErrorsGetAllocatableCount)
+		if utilfeature.DefaultFeatureGate.Enabled(features.KubeletPodResourcesGet) {
+			legacyregistry.MustRegister(PodResourcesEndpointRequestsGetCount)
+			legacyregistry.MustRegister(PodResourcesEndpointErrorsGetCount)
 		}
 		legacyregistry.MustRegister(StartedPodsTotal)
 		legacyregistry.MustRegister(StartedPodsErrorsTotal)

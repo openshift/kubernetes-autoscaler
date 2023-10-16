@@ -22,6 +22,7 @@ import (
 	autoscaling "k8s.io/api/autoscaling/v1"
 	core "k8s.io/api/core/v1"
 	meta "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	vpa_types "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/apis/autoscaling.k8s.io/v1"
 )
 
@@ -36,20 +37,25 @@ type VerticalPodAutoscalerBuilder interface {
 	WithMaxAllowed(cpu, memory string) VerticalPodAutoscalerBuilder
 	WithControlledValues(mode vpa_types.ContainerControlledValues) VerticalPodAutoscalerBuilder
 	WithTarget(cpu, memory string) VerticalPodAutoscalerBuilder
+	WithTargetResource(resource core.ResourceName, value string) VerticalPodAutoscalerBuilder
 	WithLowerBound(cpu, memory string) VerticalPodAutoscalerBuilder
 	WithTargetRef(targetRef *autoscaling.CrossVersionObjectReference) VerticalPodAutoscalerBuilder
 	WithUpperBound(cpu, memory string) VerticalPodAutoscalerBuilder
 	WithAnnotations(map[string]string) VerticalPodAutoscalerBuilder
 	WithRecommender(string2 string) VerticalPodAutoscalerBuilder
+	WithGroupVersion(gv meta.GroupVersion) VerticalPodAutoscalerBuilder
 	AppendCondition(conditionType vpa_types.VerticalPodAutoscalerConditionType,
 		status core.ConditionStatus, reason, message string, lastTransitionTime time.Time) VerticalPodAutoscalerBuilder
 	AppendRecommendation(vpa_types.RecommendedContainerResources) VerticalPodAutoscalerBuilder
 	Get() *vpa_types.VerticalPodAutoscaler
 }
 
+// TODO part of this interface is a repetition of RecommendationBuilder, we can probably factorize some code
+
 // VerticalPodAutoscaler returns a new VerticalPodAutoscalerBuilder.
 func VerticalPodAutoscaler() VerticalPodAutoscalerBuilder {
 	return &verticalPodAutoscalerBuilder{
+		groupVersion:            meta.GroupVersion(vpa_types.SchemeGroupVersion),
 		recommendation:          Recommendation(),
 		appendedRecommendations: []vpa_types.RecommendedContainerResources{},
 		namespace:               "default",
@@ -58,6 +64,7 @@ func VerticalPodAutoscaler() VerticalPodAutoscalerBuilder {
 }
 
 type verticalPodAutoscalerBuilder struct {
+	groupVersion            meta.GroupVersion
 	vpaName                 string
 	containerName           string
 	namespace               string
@@ -131,6 +138,12 @@ func (b *verticalPodAutoscalerBuilder) WithTarget(cpu, memory string) VerticalPo
 	return &c
 }
 
+func (b *verticalPodAutoscalerBuilder) WithTargetResource(resource core.ResourceName, value string) VerticalPodAutoscalerBuilder {
+	c := *b
+	c.recommendation = c.recommendation.WithTargetResource(resource, value)
+	return &c
+}
+
 func (b *verticalPodAutoscalerBuilder) WithLowerBound(cpu, memory string) VerticalPodAutoscalerBuilder {
 	c := *b
 	c.recommendation = c.recommendation.WithLowerBound(cpu, memory)
@@ -158,6 +171,12 @@ func (b *verticalPodAutoscalerBuilder) WithAnnotations(annotations map[string]st
 func (b *verticalPodAutoscalerBuilder) WithRecommender(recommender string) VerticalPodAutoscalerBuilder {
 	c := *b
 	c.recommender = recommender
+	return &c
+}
+
+func (b *verticalPodAutoscalerBuilder) WithGroupVersion(gv meta.GroupVersion) VerticalPodAutoscalerBuilder {
+	c := *b
+	c.groupVersion = gv
 	return &c
 }
 
@@ -198,6 +217,10 @@ func (b *verticalPodAutoscalerBuilder) Get() *vpa_types.VerticalPodAutoscaler {
 	recommendation.ContainerRecommendations = append(recommendation.ContainerRecommendations, b.appendedRecommendations...)
 
 	return &vpa_types.VerticalPodAutoscaler{
+		TypeMeta: meta.TypeMeta{
+			APIVersion: b.groupVersion.String(),
+			Kind:       "VerticalPodAutoscaler",
+		},
 		ObjectMeta: meta.ObjectMeta{
 			Name:              b.vpaName,
 			Namespace:         b.namespace,

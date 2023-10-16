@@ -29,6 +29,7 @@ this document:
   * [I'm running cluster with nodes in multiple zones for HA purposes. Is that supported by Cluster Autoscaler?](#im-running-cluster-with-nodes-in-multiple-zones-for-ha-purposes-is-that-supported-by-cluster-autoscaler)
   * [How can I monitor Cluster Autoscaler?](#how-can-i-monitor-cluster-autoscaler)
   * [How can I increase the information that the CA is logging?](#how-can-i-increase-the-information-that-the-ca-is-logging)
+  * [How can I change the log format that the CA outputs?](#how-can-i-change-the-log-format-that-the-ca-outputs)
   * [How can I see all the events from Cluster Autoscaler?](#how-can-i-see-all-events-from-cluster-autoscaler)
   * [How can I scale my cluster to just 1 node?](#how-can-i-scale-my-cluster-to-just-1-node)
   * [How can I scale a node group to 0?](#how-can-i-scale-a-node-group-to-0)
@@ -88,7 +89,7 @@ Cluster Autoscaler decreases the size of the cluster when some nodes are consist
   * are not run on the node by default, *
   * don't have a [pod disruption budget](https://kubernetes.io/docs/concepts/workloads/pods/disruptions/#how-disruption-budgets-work) set or their PDB is too restrictive (since CA 0.6).
 * Pods that are not backed by a controller object (so not created by deployment, replica set, job, stateful set etc). *
-* Pods with local storage. *  
+* Pods with local storage **. *
     - unless the pod has the following annotation set:
       ```
       "cluster-autoscaler.kubernetes.io/safe-to-evict-local-volumes": "volume-1,volume-2,.."
@@ -108,6 +109,13 @@ matching anti-affinity, etc)
 
 __Or__ you have overridden this behaviour with one of the relevant flags. [See below for more information on these flags.](#what-are-the-parameters-to-ca)
 
+<sup>**</sup>Local storage in this case considers a Volume configured with properties making it a local Volume, such as the following examples:
+
+* [`hostPath`](https://kubernetes.io/docs/concepts/storage/volumes/#hostpath)
+* [`emptyDir`](https://kubernetes.io/docs/concepts/storage/volumes/#emptydir) which does **not** use "Memory" for its `emptyDir.medium` field
+
+ConfigMaps, Secrets, Projected volumes and emptyDir with `medium=Memory` are not considered local storage.
+
 ### Which version on Cluster Autoscaler should I use in my cluster?
 
 See [Cluster Autoscaler Releases](https://github.com/kubernetes/autoscaler/tree/master/cluster-autoscaler#releases).
@@ -118,8 +126,8 @@ Since version 1.0.0 we consider CA as GA. It means that:
 
  * We have enough confidence that it does what it is expected to do. Each commit goes through a big suite of unit tests
    with more than 75% coverage (on average). We have a series of e2e tests that validate that CA works well on
-   [GCE](https://k8s-testgrid.appspot.com/sig-autoscaling#gce-autoscaling)
-   and [GKE](https://k8s-testgrid.appspot.com/sig-autoscaling#gke-autoscaling).
+   [GCE](https://testgrid.k8s.io/sig-autoscaling#gce-autoscaling)
+   and [GKE](https://testgrid.k8s.io/sig-autoscaling#gke-autoscaling).
    Due to the missing testing infrastructure, AWS (or any other cloud provider) compatibility
    tests are not the part of the standard development or release procedure.
    However there is a number of AWS users who run CA in their production environment and submit new code, patches and bug reports.
@@ -855,7 +863,7 @@ Events:
 ```
 
 This limitation was solved with
-[volume topological scheduling](https://github.com/kubernetes/community/blob/master/contributors/design-proposals/storage/volume-topology-scheduling.md)
+[volume topological scheduling](https://github.com/kubernetes/design-proposals-archive/blob/main/storage/volume-topology-scheduling.md)
 introduced as beta in Kubernetes 1.11 and planned for GA in 1.13.
 To allow CA to take advantage of topological scheduling, use separate node groups per zone.
 This way CA knows exactly which node group will create nodes in the required zone rather than relying on the cloud provider choosing a zone for a new node in a multi-zone node group.
@@ -915,6 +923,20 @@ debugging connection issues between the Cluster Autoscaler and the Kubernetes AP
 or infrastructure endpoints, then setting a value of `--v=9` will show all the individual
 HTTP calls made. Be aware that using verbosity levels higher than `--v=1` will generate
 an increased amount of logs, prepare your deployments and storage accordingly.
+
+### How Can I change the log format that the CA outputs?
+
+There are 2 log format options, `text` and `json`. By default (`text`), the Cluster Autoscaler will output 
+logs in the [klog native format](https://kubernetes.io/docs/concepts/cluster-administration/system-logs/#klog-output).
+```
+I0823 17:15:11.472183   29944 main.go:569] Cluster Autoscaler 1.28.0-beta.0
+```
+
+Alternatively, adding the flag `--logging-format=json` changes the 
+[log output to json](https://kubernetes.io/docs/concepts/cluster-administration/system-logs/#klog-output).
+```
+{"ts":1692825334994.433,"caller":"cluster-autoscaler/main.go:569","msg":"Cluster Autoscaler 1.28.0-beta.0\n","v":1}
+```
 
 ### What events are emitted by CA?
 
