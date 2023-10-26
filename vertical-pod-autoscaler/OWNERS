@@ -1,5 +1,13 @@
 approvers:
-- joelsmith
-- wangchen615
-- sjenning
-- rphillips
+- kgolab
+- jbartosik
+- krzysied
+reviewers:
+- kgolab
+- jbartosik
+- krzysied
+- voelzmo
+emeritus_approvers:
+- schylek # 2022-09-30
+labels:
+- vertical-pod-autoscaler
