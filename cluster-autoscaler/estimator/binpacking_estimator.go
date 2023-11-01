@@ -30,10 +30,12 @@ import (
 
 // BinpackingNodeEstimator estimates the number of needed nodes to handle the given amount of pods.
 type BinpackingNodeEstimator struct {
-	predicateChecker predicatechecker.PredicateChecker
-	clusterSnapshot  clustersnapshot.ClusterSnapshot
-	limiter          EstimationLimiter
-	podOrderer       EstimationPodOrderer
+	predicateChecker       predicatechecker.PredicateChecker
+	clusterSnapshot        clustersnapshot.ClusterSnapshot
+	limiter                EstimationLimiter
+	podOrderer             EstimationPodOrderer
+	context                EstimationContext
+	estimationAnalyserFunc EstimationAnalyserFunc // optional
 }
 
 // NewBinpackingNodeEstimator builds a new BinpackingNodeEstimator.
@@ -41,12 +43,17 @@ func NewBinpackingNodeEstimator(
 	predicateChecker predicatechecker.PredicateChecker,
 	clusterSnapshot clustersnapshot.ClusterSnapshot,
 	limiter EstimationLimiter,
-	podOrderer EstimationPodOrderer) *BinpackingNodeEstimator {
+	podOrderer EstimationPodOrderer,
+	context EstimationContext,
+	estimationAnalyserFunc EstimationAnalyserFunc,
+) *BinpackingNodeEstimator {
 	return &BinpackingNodeEstimator{
-		predicateChecker: predicateChecker,
-		clusterSnapshot:  clusterSnapshot,
-		limiter:          limiter,
-		podOrderer:       podOrderer,
+		predicateChecker:       predicateChecker,
+		clusterSnapshot:        clusterSnapshot,
+		limiter:                limiter,
+		podOrderer:             podOrderer,
+		context:                context,
+		estimationAnalyserFunc: estimationAnalyserFunc,
 	}
 }
 
@@ -65,7 +72,7 @@ func (e *BinpackingNodeEstimator) Estimate(
 	nodeTemplate *schedulerframework.NodeInfo,
 	nodeGroup cloudprovider.NodeGroup) (int, []*apiv1.Pod) {
 
-	e.limiter.StartEstimation(pods, nodeGroup)
+	e.limiter.StartEstimation(pods, nodeGroup, e.context)
 	defer e.limiter.EndEstimation()
 
 	pods = e.podOrderer.Order(pods, nodeTemplate, nodeGroup)
@@ -137,6 +144,11 @@ func (e *BinpackingNodeEstimator) Estimate(
 			scheduledPods = append(scheduledPods, pod)
 		}
 	}
+
+	if e.estimationAnalyserFunc != nil {
+		e.estimationAnalyserFunc(e.clusterSnapshot, nodeGroup, newNodesWithPods)
+	}
+
 	return len(newNodesWithPods), scheduledPods
 }
 

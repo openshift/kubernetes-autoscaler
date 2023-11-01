@@ -43,16 +43,20 @@ type Estimator interface {
 }
 
 // EstimatorBuilder creates a new estimator object.
-type EstimatorBuilder func(predicatechecker.PredicateChecker, clustersnapshot.ClusterSnapshot) Estimator
+type EstimatorBuilder func(predicatechecker.PredicateChecker, clustersnapshot.ClusterSnapshot, EstimationContext) Estimator
+
+// EstimationAnalyserFunc to be run at the end of the estimation logic.
+type EstimationAnalyserFunc func(clustersnapshot.ClusterSnapshot, cloudprovider.NodeGroup, map[string]bool)
 
 // NewEstimatorBuilder creates a new estimator object from flag.
-func NewEstimatorBuilder(name string, limiter EstimationLimiter, orderer EstimationPodOrderer) (EstimatorBuilder, error) {
+func NewEstimatorBuilder(name string, limiter EstimationLimiter, orderer EstimationPodOrderer, estimationAnalyserFunc EstimationAnalyserFunc) (EstimatorBuilder, error) {
 	switch name {
 	case BinpackingEstimatorName:
 		return func(
 			predicateChecker predicatechecker.PredicateChecker,
-			clusterSnapshot clustersnapshot.ClusterSnapshot) Estimator {
-			return NewBinpackingNodeEstimator(predicateChecker, clusterSnapshot, limiter, orderer)
+			clusterSnapshot clustersnapshot.ClusterSnapshot,
+			context EstimationContext) Estimator {
+			return NewBinpackingNodeEstimator(predicateChecker, clusterSnapshot, limiter, orderer, context, estimationAnalyserFunc)
 		}, nil
 	}
 	return nil, fmt.Errorf("unknown estimator: %s", name)
@@ -63,7 +67,7 @@ func NewEstimatorBuilder(name string, limiter EstimationLimiter, orderer Estimat
 // scale-up is limited by external factors.
 type EstimationLimiter interface {
 	// StartEstimation is called at the start of estimation.
-	StartEstimation([]*apiv1.Pod, cloudprovider.NodeGroup)
+	StartEstimation([]*apiv1.Pod, cloudprovider.NodeGroup, EstimationContext)
 	// EndEstimation is called at the end of estimation.
 	EndEstimation()
 	// PermissionToAddNode is called by an estimator when it wants to add additional

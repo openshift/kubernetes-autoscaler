@@ -185,10 +185,9 @@ func TestBinpackingEstimate(t *testing.T) {
 
 			predicateChecker, err := predicatechecker.NewTestPredicateChecker()
 			assert.NoError(t, err)
-			limiter := NewThresholdBasedEstimationLimiter(tc.maxNodes, time.Duration(0))
+			limiter := NewThresholdBasedEstimationLimiter([]Threshold{NewStaticThreshold(tc.maxNodes, time.Duration(0))})
 			processor := NewDecreasingPodOrderer()
-			estimator := NewBinpackingNodeEstimator(predicateChecker, clusterSnapshot, limiter, processor)
-
+			estimator := NewBinpackingNodeEstimator(predicateChecker, clusterSnapshot, limiter, processor, nil /* EstimationContext */, nil /* EstimationAnalyserFunc */)
 			node := makeNode(tc.millicores, tc.memory, "template", "zone-mars")
 			nodeInfo := schedulerframework.NewNodeInfo()
 			nodeInfo.SetNode(node)
