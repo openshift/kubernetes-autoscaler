@@ -1181,7 +1181,7 @@ func TestNodeGroupWithFailedMachine(t *testing.T) {
 		machine := testConfig.machines[3].DeepCopy()
 
 		unstructured.RemoveNestedField(machine.Object, "spec", "providerID")
-		unstructured.SetNestedField(machine.Object, "ErrorMessage", "status", "errorMessage")
+		unstructured.SetNestedField(machine.Object, "FailureMessage", "status", "failureMessage")
 
 		if err := updateResource(controller.managementClient, controller.machineInformer, controller.machineResource, machine); err != nil {
 			t.Fatalf("unexpected error updating machine, got %v", err)
@@ -1281,7 +1281,6 @@ func TestNodeGroupTemplateNodeInfo(t *testing.T) {
 
 	type testCaseConfig struct {
 		nodeLabels         map[string]string
-		nodegroupLabels    map[string]string
 		includeNodes       bool
 		expectedErr        error
 		expectedCapacity   map[corev1.ResourceName]int64
@@ -1302,7 +1301,7 @@ func TestNodeGroupTemplateNodeInfo(t *testing.T) {
 		{
 			name: "When the NodeGroup can scale from zero",
 			nodeGroupAnnotations: map[string]string{
-				memoryKey:   "2048",
+				memoryKey:   "2048Mi",
 				cpuKey:      "2",
 				gpuTypeKey:  gpuapis.ResourceNvidiaGPU,
 				gpuCountKey: "1",
@@ -1327,35 +1326,9 @@ func TestNodeGroupTemplateNodeInfo(t *testing.T) {
 			},
 		},
 		{
-			name: "When the NodeGroup can scale from zero and the nodegroup adds labels to the Node",
-			nodeGroupAnnotations: map[string]string{
-				memoryKey: "2048",
-				cpuKey:    "2",
-			},
-			config: testCaseConfig{
-				expectedErr: nil,
-				nodegroupLabels: map[string]string{
-					"nodeGroupLabel": "value",
-					"anotherLabel":   "anotherValue",
-				},
-				expectedCapacity: map[corev1.ResourceName]int64{
-					corev1.ResourceCPU:    2,
-					corev1.ResourceMemory: 2048 * 1024 * 1024,
-					corev1.ResourcePods:   110,
-				},
-				expectedNodeLabels: map[string]string{
-					"kubernetes.io/hostname": "random value",
-					"kubernetes.io/os":       "linux",
-					"kubernetes.io/arch":     "amd64",
-					"nodeGroupLabel":         "value",
-					"anotherLabel":           "anotherValue",
-				},
-			},
-		},
-		{
 			name: "When the NodeGroup can scale from zero and the Node still exists, it includes the known node labels",
 			nodeGroupAnnotations: map[string]string{
-				memoryKey: "2048",
+				memoryKey: "2048Mi",
 				cpuKey:    "2",
 			},
 			config: testCaseConfig{
@@ -1382,12 +1355,6 @@ func TestNodeGroupTemplateNodeInfo(t *testing.T) {
 	}
 
 	test := func(t *testing.T, testConfig *testConfig, config testCaseConfig) {
-		if testConfig.machineDeployment != nil {
-			unstructured.SetNestedStringMap(testConfig.machineDeployment.Object, config.nodegroupLabels, "spec", "template", "spec", "metadata", "labels")
-		} else {
-			unstructured.SetNestedStringMap(testConfig.machineSet.Object, config.nodegroupLabels, "spec", "template", "spec", "metadata", "labels")
-		}
-
 		if config.includeNodes {
 			for i := range testConfig.nodes {
 				testConfig.nodes[i].SetLabels(config.nodeLabels)
@@ -1445,6 +1412,8 @@ func TestNodeGroupTemplateNodeInfo(t *testing.T) {
 					}
 				} else {
 					t.Errorf("Expected node label %q to exist in node", key)
+				}
+				if value != config.expectedNodeLabels[key] {
 				}
 			}
 		}

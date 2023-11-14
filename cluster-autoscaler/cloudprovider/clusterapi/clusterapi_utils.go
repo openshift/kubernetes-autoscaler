@@ -25,20 +25,14 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/autoscaler/cluster-autoscaler/utils/units"
 )
 
 const (
-	cpuKey      = "machine.openshift.io/vCPU"
-	memoryKey   = "machine.openshift.io/memoryMb"
-	gpuCountKey = "machine.openshift.io/GPU"
-	maxPodsKey  = "machine.openshift.io/maxPods"
-	// OpenShift does not yet use the gpu-type annotation
-	gpuTypeKey = "capacity.cluster-autoscaler.kubernetes.io/gpu-type"
-
-	// TODO: update machine API operator to match CAPI annotation so this can be inferred dynamically by getMachineDeleteAnnotationKey i.e ${apigroup}/delete-machine
-	// https://github.com/openshift/machine-api-operator/blob/128c5c90918c009172c6d24d5715888e0e1d59e4/pkg/controller/machineset/delete_policy.go#L34
-	oldMachineDeleteAnnotationKey = "machine.openshift.io/cluster-api-delete-machine"
+	cpuKey      = "capacity.cluster-autoscaler.kubernetes.io/cpu"
+	memoryKey   = "capacity.cluster-autoscaler.kubernetes.io/memory"
+	gpuTypeKey  = "capacity.cluster-autoscaler.kubernetes.io/gpu-type"
+	gpuCountKey = "capacity.cluster-autoscaler.kubernetes.io/gpu-count"
+	maxPodsKey  = "capacity.cluster-autoscaler.kubernetes.io/maxPods"
 )
 
 var (
@@ -206,18 +200,7 @@ func parseCPUCapacity(annotations map[string]string) (resource.Quantity, error) 
 }
 
 func parseMemoryCapacity(annotations map[string]string) (resource.Quantity, error) {
-	// The value for the memoryKey is expected to be an integer representing Mebibytes. e.g. "1024".
-	// https://www.iec.ch/si/binary.htm
-	val, exists := annotations[memoryKey]
-	if exists && val != "" {
-		valInt, err := strconv.ParseInt(val, 10, 0)
-		if err != nil {
-			return zeroQuantity.DeepCopy(), fmt.Errorf("value %q from annotation %q expected to be an integer: %v", val, memoryKey, err)
-		}
-		// Convert from Mebibytes to bytes
-		return *resource.NewQuantity(valInt*units.MiB, resource.DecimalSI), nil
-	}
-	return zeroQuantity.DeepCopy(), nil
+	return parseKey(annotations, memoryKey)
 }
 
 func parseGPUCount(annotations map[string]string) (resource.Quantity, error) {
