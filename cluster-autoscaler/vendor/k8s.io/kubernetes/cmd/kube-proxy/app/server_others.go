@@ -163,12 +163,14 @@ func newProxyServer(
 	}
 
 	var nodeInfo *v1.Node
+	podCIDRs := []string{}
 	if detectLocalMode == proxyconfigapi.LocalModeNodeCIDR {
 		klog.InfoS("Watching for node, awaiting podCIDR allocation", "hostname", hostname)
 		nodeInfo, err = waitForPodCIDR(client, hostname)
 		if err != nil {
 			return nil, err
 		}
+		podCIDRs = nodeInfo.Spec.PodCIDRs
 		klog.InfoS("NodeInfo", "PodCIDR", nodeInfo.Spec.PodCIDR, "PodCIDRs", nodeInfo.Spec.PodCIDRs)
 	}
 
@@ -387,6 +389,8 @@ func newProxyServer(
 		ConfigSyncPeriod:       config.ConfigSyncPeriod.Duration,
 		HealthzServer:          healthzServer,
 		UseEndpointSlices:      useEndpointSlices,
+		localDetectorMode:      detectLocalMode,
+		podCIDRs:               podCIDRs,
 	}, nil
 }
 
@@ -408,10 +412,20 @@ func waitForPodCIDR(client clientset.Interface, nodeName string) (*v1.Node, erro
 		},
 	}
 	condition := func(event watch.Event) (bool, error) {
-		if n, ok := event.Object.(*v1.Node); ok {
-			return n.Spec.PodCIDR != "" && len(n.Spec.PodCIDRs) > 0, nil
+		// don't process delete events
+		if event.Type != watch.Modified && event.Type != watch.Added {
+			return false, nil
 		}
-		return false, fmt.Errorf("event object not of type Node")
+
+		n, ok := event.Object.(*v1.Node)
+		if !ok {
+			return false, fmt.Errorf("event object not of type Node")
+		}
+		// don't consider the node if is going to be deleted and keep waiting
+		if !n.DeletionTimestamp.IsZero() {
+			return false, nil
+		}
+		return n.Spec.PodCIDR != "" && len(n.Spec.PodCIDRs) > 0, nil
 	}
 
 	evt, err := toolswatch.UntilWithSync(ctx, lw, &v1.Node{}, nil, condition)

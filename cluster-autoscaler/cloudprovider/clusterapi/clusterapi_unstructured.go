@@ -30,7 +30,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	gpuapis "k8s.io/autoscaler/cluster-autoscaler/utils/gpu"
 	klog "k8s.io/klog/v2"
 )
 
@@ -142,7 +141,6 @@ func (r unstructuredScalableResource) UnmarkMachineForDeletion(machine *unstruct
 
 	annotations := u.GetAnnotations()
 	delete(annotations, machineDeleteAnnotationKey)
-	delete(annotations, oldMachineDeleteAnnotationKey)
 	u.SetAnnotations(annotations)
 	_, updateErr := r.controller.managementClient.Resource(r.controller.machineResource).Namespace(u.GetNamespace()).Update(context.TODO(), u, metav1.UpdateOptions{})
 
@@ -163,7 +161,6 @@ func (r unstructuredScalableResource) MarkMachineForDeletion(machine *unstructur
 	}
 
 	annotations[machineDeleteAnnotationKey] = time.Now().String()
-	annotations[oldMachineDeleteAnnotationKey] = time.Now().String()
 	u.SetAnnotations(annotations)
 
 	_, updateErr := r.controller.managementClient.Resource(r.controller.machineResource).Namespace(u.GetNamespace()).Update(context.TODO(), u, metav1.UpdateOptions{})
@@ -238,9 +235,9 @@ func (r unstructuredScalableResource) InstanceCapacity() (map[corev1.ResourceNam
 	if err != nil {
 		return nil, err
 	}
-	if !gpuCount.IsZero() {
-		// OpenShift does not yet use the gpu-type annotation, and assumes nvidia gpu
-		capacityAnnotations[gpuapis.ResourceNvidiaGPU] = gpuCount
+	gpuType := r.InstanceGPUTypeAnnotation()
+	if !gpuCount.IsZero() && gpuType != "" {
+		capacityAnnotations[corev1.ResourceName(gpuType)] = gpuCount
 	}
 
 	maxPods, err := r.InstanceMaxPodsCapacityAnnotation()

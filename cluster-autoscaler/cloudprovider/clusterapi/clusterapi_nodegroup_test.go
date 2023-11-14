@@ -1181,7 +1181,7 @@ func TestNodeGroupWithFailedMachine(t *testing.T) {
 		machine := testConfig.machines[3].DeepCopy()
 
 		unstructured.RemoveNestedField(machine.Object, "spec", "providerID")
-		unstructured.SetNestedField(machine.Object, "ErrorMessage", "status", "errorMessage")
+		unstructured.SetNestedField(machine.Object, "FailureMessage", "status", "failureMessage")
 
 		if err := updateResource(controller.managementClient, controller.machineInformer, controller.machineResource, machine); err != nil {
 			t.Fatalf("unexpected error updating machine, got %v", err)
@@ -1302,7 +1302,7 @@ func TestNodeGroupTemplateNodeInfo(t *testing.T) {
 		{
 			name: "When the NodeGroup can scale from zero",
 			nodeGroupAnnotations: map[string]string{
-				memoryKey:   "2048",
+				memoryKey:   "2048Mi",
 				cpuKey:      "2",
 				gpuTypeKey:  gpuapis.ResourceNvidiaGPU,
 				gpuCountKey: "1",
@@ -1326,7 +1326,7 @@ func TestNodeGroupTemplateNodeInfo(t *testing.T) {
 		{
 			name: "When the NodeGroup can scale from zero and the nodegroup adds labels to the Node",
 			nodeGroupAnnotations: map[string]string{
-				memoryKey: "2048",
+				memoryKey: "2048Mi",
 				cpuKey:    "2",
 			},
 			config: testCaseConfig{
@@ -1353,7 +1353,7 @@ func TestNodeGroupTemplateNodeInfo(t *testing.T) {
 		{
 			name: "When the NodeGroup can scale from zero and the Node still exists, it includes the known node labels",
 			nodeGroupAnnotations: map[string]string{
-				memoryKey: "2048",
+				memoryKey: "2048Mi",
 				cpuKey:    "2",
 			},
 			config: testCaseConfig{
