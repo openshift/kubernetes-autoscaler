@@ -18,6 +18,7 @@ package clusterapi
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"path"
 	"strings"
@@ -94,6 +95,13 @@ func (r unstructuredScalableResource) Replicas() (int, error) {
 		return 0, err
 	}
 
+	// this function needs to differentiate between machine-api and cluster-api
+	// due to the fact that the machine-api controllers exclude machines in
+	// deleting phase when calculating replicas.
+	if gvr.Group == openshiftMAPIGroup {
+		return r.replicasOpenshift()
+	}
+
 	s, err := r.controller.managementScaleClient.Scales(r.Namespace()).Get(context.TODO(), gvr.GroupResource(), r.Name(), metav1.GetOptions{})
 	if err != nil {
 		return 0, err
@@ -103,6 +111,60 @@ func (r unstructuredScalableResource) Replicas() (int, error) {
 		return 0, fmt.Errorf("failed to fetch resource scale: unknown %s %s/%s", r.Kind(), r.Namespace(), r.Name())
 	}
 	return int(s.Spec.Replicas), nil
+}
+
+func (r unstructuredScalableResource) replicasOpenshift() (int, error) {
+	gvr, err := r.GroupVersionResource()
+	if err != nil {
+		return 0, err
+	}
+
+	if gvr.Group != openshiftMAPIGroup {
+		return 0, fmt.Errorf("incorrect group for replica count on %s %s/%s", r.Kind(), r.Namespace(), r.Name())
+	}
+
+	// get the selector labels from the scalable resource to find the machines
+	rawSelector, found, err := unstructured.NestedMap(r.unstructured.Object, "spec", "selector")
+	if !found || err != nil {
+		return 0, err
+	}
+
+	// we want to massage the unstructured selector data into a LabelSelector struct
+	// so that we can more easily create the necessary string for the ListOptions struct,
+	// the following code helps with that.
+	data, err := json.Marshal(rawSelector)
+	if err != nil {
+		return 0, err
+	}
+
+	var labelSelector metav1.LabelSelector
+	err = json.Unmarshal(data, &labelSelector)
+	if err != nil {
+		return 0, err
+	}
+
+	selector, err := metav1.LabelSelectorAsSelector(&labelSelector)
+	if err != nil {
+		return 0, err
+	}
+
+	// get a list of machines filtered by the namespace and the selector labels from the scalable resource
+	machinesList, err := r.controller.managementClient.Resource(r.controller.machineResource).Namespace(r.Namespace()).List(context.TODO(), metav1.ListOptions{LabelSelector: selector.String()})
+	if err != nil {
+		return 0, err
+	}
+
+	// filter out inactive machines
+	var activeMachines []unstructured.Unstructured
+	for _, item := range machinesList.Items {
+		if metav1.GetControllerOf(&item) != nil && !metav1.IsControlledBy(&item, r.unstructured) {
+			continue
+		}
+
+		activeMachines = append(activeMachines, item)
+	}
+
+	return len(activeMachines), nil
 }
 
 func (r unstructuredScalableResource) SetSize(nreplicas int) error {
