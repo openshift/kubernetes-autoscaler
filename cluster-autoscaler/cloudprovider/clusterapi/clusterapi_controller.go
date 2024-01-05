@@ -46,6 +46,7 @@ const (
 	machinePoolProviderIDIndex = "machinePoolProviderIDIndex"
 	nodeProviderIDIndex        = "nodeProviderIDIndex"
 	defaultCAPIGroup           = "cluster.x-k8s.io"
+	openshiftMAPIGroup         = "machine.openshift.io"
 	// CAPIGroupEnvVar contains the environment variable name which allows overriding defaultCAPIGroup.
 	CAPIGroupEnvVar = "CAPI_GROUP"
 	// CAPIVersionEnvVar contains the environment variable name which allows overriding the Cluster API group version.
