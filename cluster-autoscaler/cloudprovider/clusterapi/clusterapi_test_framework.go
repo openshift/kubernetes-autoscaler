@@ -220,6 +220,17 @@ func createTestConfigs(specs ...TestSpec) []*TestConfig {
 								"kind":       machineTemplateKind,
 								"name":       "TestMachineTemplate",
 							},
+							"taints": []interface{}{
+								map[string]interface{}{
+									"key":    "test",
+									"value":  "test",
+									"effect": "NoSchedule",
+								},
+								map[string]interface{}{
+									"key":    "test-no-value",
+									"effect": "NoSchedule",
+								},
+							},
 						},
 					},
 				},
@@ -257,6 +268,17 @@ func createTestConfigs(specs ...TestSpec) []*TestConfig {
 									"apiGroup": "infrastructure.cluster.x-k8s.io",
 									"kind":     machineTemplateKind,
 									"name":     "TestMachineTemplate",
+								},
+								"taints": []interface{}{
+									map[string]interface{}{
+										"key":    "test",
+										"value":  "test",
+										"effect": "NoSchedule",
+									},
+									map[string]interface{}{
+										"key":    "test-no-value",
+										"effect": "NoSchedule",
+									},
 								},
 							},
 						},
