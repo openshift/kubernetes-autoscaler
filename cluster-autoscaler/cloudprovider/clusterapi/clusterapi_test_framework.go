@@ -53,14 +53,14 @@ const (
 )
 
 type testConfigBuilder struct {
-	scalableType  scalableTestType
-	namespace     string
-	clusterName   string
-	namePrefix    string
-	nodeCount     int
-	annotations   map[string]string
-	capacity      map[string]string
-	managedLabels map[string]string
+	scalableType scalableTestType
+	namespace    string
+	clusterName  string
+	namePrefix   string
+	nodeCount    int
+	annotations  map[string]string
+	capacity     map[string]string
+	taints       []interface{}
 }
 
 // NewTestConfigBuilder returns a builder for dynamically constructing mock ClusterAPI resources for testing.
@@ -93,7 +93,7 @@ func (b *testConfigBuilder) Build() *TestConfig {
 			isMachineDeployment,
 			b.annotations,
 			b.capacity,
-			b.managedLabels,
+			b.taints,
 		)[0],
 	)[0]
 }
@@ -114,7 +114,7 @@ func (b *testConfigBuilder) BuildMultiple(configCount int) []*TestConfig {
 			isMachineDeployment,
 			b.annotations,
 			b.capacity,
-			b.managedLabels,
+			b.taints,
 		)...,
 	)
 }
@@ -158,6 +158,38 @@ func (b *testConfigBuilder) WithAnnotations(a map[string]string) *testConfigBuil
 			b.annotations = map[string]string{}
 		}
 		maps.Insert(b.annotations, maps.All(a))
+	}
+	return b
+}
+
+func (b *testConfigBuilder) WithTaints(a []interface{}) *testConfigBuilder {
+	if a == nil {
+		// explicitly setting taints to nil
+		b.annotations = nil
+	} else {
+	OuterLoop:
+		for i := range a {
+			unstructuredTaint := a[i].(map[string]interface{})
+			if unstructuredTaint == nil {
+				// invalid taint
+				klog.V(4).Infof("Unable to convert invalid taint of type %s to map[string]interface{}", reflect.TypeOf(a))
+				continue
+			}
+			keyname := unstructuredTaint["key"].(string)
+			for j := range b.taints {
+				if existingTaint, ok := b.taints[j].(map[string]interface{}); !ok {
+					klog.V(4).Infof("Unable to convert invalid taint of type %s to map[string]interface{}", reflect.TypeOf(b.taints[j]))
+					continue
+				} else if existingTaint == nil {
+					continue
+				} else if keyname == existingTaint["key"].(string) {
+					// found, overwrite with passed-in value & effect
+					b.taints[j] = unstructuredTaint
+					continue OuterLoop
+				}
+			}
+			b.taints = append(b.taints, unstructuredTaint)
+		}
 	}
 	return b
 }
@@ -237,9 +269,7 @@ func createTestConfigs(specs ...TestSpec) []*TestConfig {
 								"kind":       machineTemplateKind,
 								"name":       "TestMachineTemplate",
 							},
-							"metadata": map[string]interface{}{
-								"labels": map[string]interface{}{},
-							},
+							"taints": spec.taints,
 						},
 					},
 				},
@@ -284,9 +314,7 @@ func createTestConfigs(specs ...TestSpec) []*TestConfig {
 									"kind":     machineTemplateKind,
 									"name":     "TestMachineTemplate",
 								},
-								"metadata": map[string]interface{}{
-									"labels": map[string]interface{}{},
-								},
+								"taints": spec.taints,
 							},
 						},
 					},
@@ -359,7 +387,7 @@ func createTestConfigs(specs ...TestSpec) []*TestConfig {
 type TestSpec struct {
 	annotations             map[string]string
 	capacity                map[string]string
-	managedLabels           map[string]string
+	taints                  []interface{}
 	machineDeploymentName   string
 	machineSetName          string
 	machinePoolName         string
@@ -369,17 +397,17 @@ type TestSpec struct {
 	rootIsMachineDeployment bool
 }
 
-func createTestSpecs(namespace, clusterName, namePrefix string, scalableResourceCount, nodeCount int, isMachineDeployment bool, annotations map[string]string, capacity map[string]string, managedLabels map[string]string) []TestSpec {
+func createTestSpecs(namespace, clusterName, namePrefix string, scalableResourceCount, nodeCount int, isMachineDeployment bool, annotations map[string]string, capacity map[string]string, taints []interface{}) []TestSpec {
 	var specs []TestSpec
 
 	for i := 0; i < scalableResourceCount; i++ {
-		specs = append(specs, createTestSpec(namespace, clusterName, fmt.Sprintf("%s-%d", namePrefix, i), nodeCount, isMachineDeployment, annotations, capacity, managedLabels))
+		specs = append(specs, createTestSpec(namespace, clusterName, fmt.Sprintf("%s-%d", namePrefix, i), nodeCount, isMachineDeployment, annotations, capacity, taints))
 	}
 
 	return specs
 }
 
-func createTestSpec(namespace, clusterName, name string, nodeCount int, isMachineDeployment bool, annotations map[string]string, capacity map[string]string, managedLabels map[string]string) TestSpec {
+func createTestSpec(namespace, clusterName, name string, nodeCount int, isMachineDeployment bool, annotations map[string]string, capacity map[string]string, taints []interface{}) TestSpec {
 	return TestSpec{
 		annotations:             annotations,
 		capacity:                capacity,
@@ -390,6 +418,7 @@ func createTestSpec(namespace, clusterName, name string, nodeCount int, isMachin
 		namespace:               namespace,
 		nodeCount:               nodeCount,
 		rootIsMachineDeployment: isMachineDeployment,
+		taints:                  taints,
 	}
 }
 
