@@ -19,6 +19,7 @@ package clusterapi
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"testing"
 	"time"
 
@@ -222,6 +223,57 @@ func TestReplicas(t *testing.T) {
 	})
 }
 
+func TestTaints(t *testing.T) {
+	initialReplicas := 1
+
+	expectedTaints := []v1.Taint{{Key: "test", Effect: v1.TaintEffectNoSchedule, Value: "test"}}
+	expectedTaintsWithAnnotations := []v1.Taint{{Key: "test", Effect: v1.TaintEffectNoSchedule, Value: "test"}, {Key: "key1", Effect: v1.TaintEffectNoSchedule, Value: "value1"}, {Key: "key2", Effect: v1.TaintEffectNoExecute, Value: "value2"}}
+	taintAnnotation := "key1=value1:NoSchedule,key2=value2:NoExecute"
+
+	test := func(t *testing.T, testConfig *testConfig) {
+		controller, stop := mustCreateTestController(t, testConfig)
+		defer stop()
+
+		testResource := testConfig.machineSet
+		if testConfig.machineDeployment != nil {
+			testResource = testConfig.machineDeployment
+		}
+
+		sr, err := newUnstructuredScalableResource(controller, testResource)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		taints := sr.Taints()
+
+		if !reflect.DeepEqual(taints, expectedTaints) {
+			t.Errorf("expected %v, got: %v", expectedTaints, taints)
+		}
+
+		srAnnotations := sr.unstructured.GetAnnotations()
+		if srAnnotations == nil {
+			srAnnotations = make(map[string]string)
+		}
+
+		srAnnotations[taintsKey] = taintAnnotation
+		sr.unstructured.SetAnnotations(srAnnotations)
+
+		taints = sr.Taints()
+
+		if !reflect.DeepEqual(taints, expectedTaintsWithAnnotations) {
+			t.Errorf("expected %v, got: %v", expectedTaintsWithAnnotations, taints)
+		}
+	}
+
+	t.Run("MachineSet", func(t *testing.T) {
+		test(t, createMachineSetTestConfig(RandomString(6), RandomString(6), RandomString(6), initialReplicas, nil, nil))
+	})
+
+	t.Run("MachineDeployment", func(t *testing.T) {
+		test(t, createMachineDeploymentTestConfig(RandomString(6), RandomString(6), RandomString(6), initialReplicas, nil, nil))
+	})
+}
+
 func TestSetSizeAndReplicas(t *testing.T) {
 	initialReplicas := 1
 	updatedReplicas := 5
@@ -297,7 +349,9 @@ func TestAnnotations(t *testing.T) {
 	memQuantity := resource.MustParse("1024")
 	gpuQuantity := resource.MustParse("1")
 	maxPodsQuantity := resource.MustParse("42")
-	expectedTaints := []v1.Taint{{Key: "key1", Effect: v1.TaintEffectNoSchedule, Value: "value1"}, {Key: "key2", Effect: v1.TaintEffectNoExecute, Value: "value2"}}
+
+	// Note, the first taint comes from the spec of the machine template, the rest from the annotations.
+	expectedTaints := []v1.Taint{{Key: "test", Effect: v1.TaintEffectNoSchedule, Value: "test"}, {Key: "key1", Effect: v1.TaintEffectNoSchedule, Value: "value1"}, {Key: "key2", Effect: v1.TaintEffectNoExecute, Value: "value2"}}
 	annotations := map[string]string{
 		cpuKey:          cpuQuantity.String(),
 		memoryKey:       memQuantity.String(),
