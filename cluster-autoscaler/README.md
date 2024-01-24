@@ -31,6 +31,7 @@ You should also take a look at the notes and "gotchas" for your specific cloud p
 * [HuaweiCloud](./cloudprovider/huaweicloud/README.md)
 * [IonosCloud](./cloudprovider/ionoscloud/README.md)
 * [Kamatera](./cloudprovider/kamatera/README.md)
+* [Kwok](./cloudprovider/kwok/README.md)
 * [Linode](./cloudprovider/linode/README.md)
 * [Magnum](./cloudprovider/magnum/README.md)
 * [OracleCloud](./cloudprovider/oci/README.md)
@@ -48,6 +49,7 @@ Starting from Kubernetes 1.12, versioning scheme was changed to match Kubernetes
 
 | Kubernetes Version  | CA Version   |
 |--------|--------|
+| 1.28.X | 1.28.X |
 | 1.27.X | 1.27.X |
 | 1.26.X | 1.26.X |
 | 1.25.X | 1.25.X |

@@ -91,13 +91,6 @@ func (o *ScaleUpOrchestrator) ScaleUp(
 		return scaleUpError(&status.ScaleUpStatus{}, errors.NewAutoscalerError(errors.InternalError, "ScaleUpOrchestrator is not initialized"))
 	}
 
-	// From now on we only care about unschedulable pods that were marked after the newest
-	// node became available for the scheduler.
-	if len(unschedulablePods) == 0 {
-		klog.V(1).Info("No unschedulable pods")
-		return &status.ScaleUpStatus{Result: status.ScaleUpNotNeeded}, nil
-	}
-
 	loggingQuota := klogx.PodsLoggingQuota()
 	for _, pod := range unschedulablePods {
 		klogx.V(1).UpTo(loggingQuota).Infof("Pod %s/%s is unschedulable", pod.Namespace, pod.Name)
@@ -163,6 +156,9 @@ func (o *ScaleUpOrchestrator) ScaleUp(
 			break
 		}
 	}
+
+	// Finalize binpacking limiter.
+	o.processors.BinpackingLimiter.FinalizeBinpacking(o.autoscalingContext, options)
 
 	if len(options) == 0 {
 		klog.V(1).Info("No expansion options")
@@ -367,20 +363,20 @@ func (o *ScaleUpOrchestrator) ScaleUpToNodeGroupMinSize(
 		}
 
 		if skipReason := o.IsNodeGroupResourceExceeded(resourcesLeft, ng, nodeInfo, 1); skipReason != nil {
-			klog.Warning("ScaleUpToNodeGroupMinSize: node group resource excceded: %v", skipReason)
+			klog.Warningf("ScaleUpToNodeGroupMinSize: node group resource excceded: %v", skipReason)
 			continue
 		}
 
 		newNodeCount := ng.MinSize() - targetSize
 		newNodeCount, err = o.resourceManager.ApplyLimits(o.autoscalingContext, newNodeCount, resourcesLeft, nodeInfo, ng)
 		if err != nil {
-			klog.Warning("ScaleUpToNodeGroupMinSize: failed to apply resource limits: %v", err)
+			klog.Warningf("ScaleUpToNodeGroupMinSize: failed to apply resource limits: %v", err)
 			continue
 		}
 
 		newNodeCount, err = o.GetCappedNewNodeCount(newNodeCount, targetSize)
 		if err != nil {
-			klog.Warning("ScaleUpToNodeGroupMinSize: failed to get capped node count: %v", err)
+			klog.Warningf("ScaleUpToNodeGroupMinSize: failed to get capped node count: %v", err)
 			continue
 		}
 
@@ -573,13 +569,15 @@ func (o *ScaleUpOrchestrator) UpcomingNodes(nodeInfos map[string]*schedulerframe
 // IsNodeGroupReadyToScaleUp returns nil if node group is ready to be scaled up, otherwise a reason is provided.
 func (o *ScaleUpOrchestrator) IsNodeGroupReadyToScaleUp(nodeGroup cloudprovider.NodeGroup, now time.Time) *SkippedReasons {
 	// Non-existing node groups are created later so skip check for them.
-	if nodeGroup.Exist() && !o.clusterStateRegistry.IsNodeGroupSafeToScaleUp(nodeGroup, now) {
-		// Hack that depends on internals of IsNodeGroupSafeToScaleUp.
-		if !o.clusterStateRegistry.IsNodeGroupHealthy(nodeGroup.Id()) {
+	if !nodeGroup.Exist() {
+		return nil
+	}
+	if scaleUpSafety := o.clusterStateRegistry.IsNodeGroupSafeToScaleUp(nodeGroup, now); !scaleUpSafety.SafeToScale {
+		if !scaleUpSafety.Healthy {
 			klog.Warningf("Node group %s is not ready for scaleup - unhealthy", nodeGroup.Id())
 			return NotReadyReason
 		}
-		klog.Warningf("Node group %s is not ready for scaleup - backoff", nodeGroup.Id())
+		klog.Warningf("Node group %s is not ready for scaleup - backoff with status: %v", nodeGroup.Id(), scaleUpSafety.BackoffStatus)
 		return BackoffReason
 	}
 	return nil
@@ -662,7 +660,7 @@ func (o *ScaleUpOrchestrator) ComputeSimilarNodeGroups(
 	var validSimilarNodeGroups []cloudprovider.NodeGroup
 	for _, ng := range similarNodeGroups {
 		// Non-existing node groups are created later so skip check for them.
-		if ng.Exist() && !o.clusterStateRegistry.IsNodeGroupSafeToScaleUp(ng, now) {
+		if ng.Exist() && !o.clusterStateRegistry.IsNodeGroupSafeToScaleUp(ng, now).SafeToScale {
 			klog.V(2).Infof("Ignoring node group %s when balancing: group is not ready for scaleup", ng.Id())
 		} else if similarSchedulablePods, found := schedulablePods[ng.Id()]; found && matchingSchedulablePods(groupSchedulablePods, similarSchedulablePods) {
 			validSimilarNodeGroups = append(validSimilarNodeGroups, ng)

@@ -18,35 +18,42 @@ package clusterapi
 
 import (
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
+	"sync"
+
+	"k8s.io/klog/v2"
 
 	"github.com/pkg/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/autoscaler/cluster-autoscaler/utils/units"
 )
 
 const (
-	// the following constants are used for scaling from zero
-	// they are split into two sections to represent the values which have been historically used
-	// by openshift, and the values which have been added in the upstream.
-	// we are keeping the historical prefixes "machine.openshift.io" while we develop a solution
-	// which will allow the usage of either prefix, while preferring the upstream prefix "capacity.clsuter-autoscaler.kuberenetes.io".
-	cpuKey      = "machine.openshift.io/vCPU"
-	memoryKey   = "machine.openshift.io/memoryMb"
-	gpuCountKey = "machine.openshift.io/GPU"
-	maxPodsKey  = "machine.openshift.io/maxPods"
-	// the following constants keep the upstream prefix so that we do not introduce separate values into the openshift api
+	cpuKey          = "capacity.cluster-autoscaler.kubernetes.io/cpu"
+	memoryKey       = "capacity.cluster-autoscaler.kubernetes.io/memory"
 	diskCapacityKey = "capacity.cluster-autoscaler.kubernetes.io/ephemeral-disk"
+	gpuTypeKey      = "capacity.cluster-autoscaler.kubernetes.io/gpu-type"
+	gpuCountKey     = "capacity.cluster-autoscaler.kubernetes.io/gpu-count"
+	maxPodsKey      = "capacity.cluster-autoscaler.kubernetes.io/maxPods"
+	taintsKey       = "capacity.cluster-autoscaler.kubernetes.io/taints"
 	labelsKey       = "capacity.cluster-autoscaler.kubernetes.io/labels"
-	gpuTypeKey      = "capacity.cluster-autoscaler.kubernetes.io/gpu-type" // not currently used on OpenShift
-	taintsKey       = "capacity.cluster-autoscaler.kubernetes.io/taints"   // not currently used on OpenShift
-
-	// TODO: update machine API operator to match CAPI annotation so this can be inferred dynamically by getMachineDeleteAnnotationKey i.e ${apigroup}/delete-machine
-	// https://github.com/openshift/machine-api-operator/blob/128c5c90918c009172c6d24d5715888e0e1d59e4/pkg/controller/machineset/delete_policy.go#L34
-	oldMachineDeleteAnnotationKey = "machine.openshift.io/cluster-api-delete-machine"
+	// UnknownArch is used if the Architecture is Unknown
+	UnknownArch SystemArchitecture = ""
+	// Amd64 is used if the Architecture is x86_64
+	Amd64 SystemArchitecture = "amd64"
+	// Arm64 is used if the Architecture is ARM64
+	Arm64 SystemArchitecture = "arm64"
+	// Ppc64le is used if the Architecture is ppc64le
+	Ppc64le SystemArchitecture = "ppc64le"
+	// S390x is used if the Architecture is s390x
+	S390x SystemArchitecture = "s390x"
+	// DefaultArch should be used as a fallback if not passed by the environment via the --scale-up-from-zero-default-arch
+	DefaultArch = Amd64
+	// scaleUpFromZeroDefaultEnvVar is the name of the env var for the default architecture
+	scaleUpFromZeroDefaultArchEnvVar = "CAPI_SCALE_ZERO_DEFAULT_ARCH"
 )
 
 var (
@@ -90,9 +97,24 @@ var (
 	nodeGroupMinSizeAnnotationKey = getNodeGroupMinSizeAnnotationKey()
 	nodeGroupMaxSizeAnnotationKey = getNodeGroupMaxSizeAnnotationKey()
 	zeroQuantity                  = resource.MustParse("0")
+
+	systemArchitecture *SystemArchitecture
+	once               sync.Once
 )
 
 type normalizedProviderID string
+
+// SystemArchitecture represents a CPU architecture (e.g., amd64, arm64, ppc64le, s390x).
+// It is used to determine the default architecture to use when building the nodes templates for scaling up from zero
+// by some cloud providers. This code is the same as the GCE implementation at
+// https://github.com/kubernetes/autoscaler/blob/3852f352d96b8763292a9122163c1152dfedec55/cluster-autoscaler/cloudprovider/gce/templates.go#L611-L657
+// which is kept to allow for a smooth transition to this package, once the GCE team is ready to use it.
+type SystemArchitecture string
+
+// Name returns the string value for SystemArchitecture
+func (s SystemArchitecture) Name() string {
+	return string(s)
+}
 
 // minSize returns the minimum value encoded in the annotations keyed
 // by nodeGroupMinSizeAnnotationKey. Returns errMissingMinAnnotation
@@ -206,18 +228,7 @@ func parseCPUCapacity(annotations map[string]string) (resource.Quantity, error) 
 }
 
 func parseMemoryCapacity(annotations map[string]string) (resource.Quantity, error) {
-	// The value for the memoryKey is expected to be an integer representing Mebibytes. e.g. "1024".
-	// https://www.iec.ch/si/binary.htm
-	val, exists := annotations[memoryKey]
-	if exists && val != "" {
-		valInt, err := strconv.ParseInt(val, 10, 0)
-		if err != nil {
-			return zeroQuantity.DeepCopy(), fmt.Errorf("value %q from annotation %q expected to be an integer: %v", val, memoryKey, err)
-		}
-		// Convert from Mebibytes to bytes
-		return *resource.NewQuantity(valInt*units.MiB, resource.DecimalSI), nil
-	}
-	return zeroQuantity.DeepCopy(), nil
+	return parseKey(annotations, memoryKey)
 }
 
 func parseEphemeralDiskCapacity(annotations map[string]string) (resource.Quantity, error) {
@@ -300,4 +311,38 @@ func getMachineAnnotationKey() string {
 func getClusterNameLabel() string {
 	key := fmt.Sprintf("%s/cluster-name", getCAPIGroup())
 	return key
+}
+
+// SystemArchitectureFromString parses a string to SystemArchitecture. Returns UnknownArch if the string doesn't represent a
+// valid architecture.
+func SystemArchitectureFromString(arch string) SystemArchitecture {
+	switch arch {
+	case string(Arm64):
+		return Arm64
+	case string(Amd64):
+		return Amd64
+	case string(Ppc64le):
+		return Ppc64le
+	case string(S390x):
+		return S390x
+	default:
+		return UnknownArch
+	}
+}
+
+// GetDefaultScaleFromZeroArchitecture returns the SystemArchitecture from the environment variable
+// CAPI_SCALE_ZERO_DEFAULT_ARCH or DefaultArch if the variable is set to an invalid value.
+func GetDefaultScaleFromZeroArchitecture() SystemArchitecture {
+	once.Do(func() {
+		archStr := os.Getenv(scaleUpFromZeroDefaultArchEnvVar)
+		arch := SystemArchitectureFromString(archStr)
+		klog.V(5).Infof("the default scale from zero architecture value is set to %s (%s)", archStr, arch.Name())
+		if arch == UnknownArch {
+			arch = DefaultArch
+			klog.Errorf("Unrecognized architecture '%s', falling back to %s",
+				scaleUpFromZeroDefaultArchEnvVar, DefaultArch.Name())
+		}
+		systemArchitecture = &arch
+	})
+	return *systemArchitecture
 }

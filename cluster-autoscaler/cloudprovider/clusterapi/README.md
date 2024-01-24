@@ -240,8 +240,8 @@ If you are using the opt-in support for scaling from zero as defined by the
 Cluster API infrastructure provider, you will need to add the infrastructure
 machine template types to your role permissions for the service account
 associated with the cluster autoscaler deployment. The service account will
-need permission to `get` and `list` the infrastructure machine templates for
-your infrastructure provider.
+need permission to `get`, `list`, and `watch` the infrastructure machine
+templates for your infrastructure provider.
 
 For example, when using the [Kubemark provider](https://github.com/kubernetes-sigs/cluster-api-provider-kubemark)
 you will need to set the following permissions:
@@ -255,6 +255,7 @@ rules:
     verbs:
     - get
     - list
+    - watch
 ```
 
 #### Pre-defined labels and taints on nodes scaled from zero
@@ -279,10 +280,10 @@ metadata:
 #### CPU Architecture awareness for single-arch clusters 
 
 Users of single-arch non-amd64 clusters who are using scale from zero 
-support should also set the `--scale-up-from-zero-default-arch` flag to the 
-architecture of the nodes they want to default the node group templates to.
-The autoscaler will default to `amd64` if the flag is not set, and the node 
-group templates will not match the nodes' architecture, specifically when 
+support should also set the `CAPI_SCALE_ZERO_DEFAULT_ARCH` environment variable
+to set the architecture of the nodes they want to default the node group templates to.
+The autoscaler will default to `amd64` if it is not set, and the node 
+group templates may not match the nodes' architecture, specifically when 
 the workload triggering the scale-up uses a node affinity predicate checking 
 for the node's architecture.
 

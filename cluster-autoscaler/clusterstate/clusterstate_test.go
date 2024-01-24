@@ -122,6 +122,7 @@ func TestEmptyOK(t *testing.T) {
 	assert.Empty(t, clusterstate.GetScaleUpFailures())
 	assert.True(t, clusterstate.IsNodeGroupHealthy("ng1"))
 	assert.False(t, clusterstate.IsNodeGroupScalingUp("ng1"))
+	assert.False(t, clusterstate.HasNodeGroupStartedScaleUp("ng1"))
 
 	provider.AddNodeGroup("ng1", 0, 10, 3)
 	clusterstate.RegisterOrUpdateScaleUp(provider.GetNodeGroup("ng1"), 3, now.Add(-3*time.Second))
@@ -133,6 +134,48 @@ func TestEmptyOK(t *testing.T) {
 	assert.True(t, clusterstate.IsClusterHealthy())
 	assert.True(t, clusterstate.IsNodeGroupHealthy("ng1"))
 	assert.True(t, clusterstate.IsNodeGroupScalingUp("ng1"))
+	assert.True(t, clusterstate.HasNodeGroupStartedScaleUp("ng1"))
+}
+
+func TestHasNodeGroupStartedScaleUp(t *testing.T) {
+	tests := map[string]struct {
+		initialSize int
+		delta       int
+	}{
+		"Target size reverts back to zero": {
+			initialSize: 0,
+			delta:       3,
+		},
+	}
+	for tn, tc := range tests {
+		t.Run(tn, func(t *testing.T) {
+			now := time.Now()
+			provider := testprovider.NewTestCloudProvider(nil, nil)
+			provider.AddNodeGroup("ng1", 0, 5, tc.initialSize)
+			fakeClient := &fake.Clientset{}
+			fakeLogRecorder, _ := utils.NewStatusMapRecorder(fakeClient, "kube-system", kube_record.NewFakeRecorder(5), false, "my-cool-configmap")
+			clusterstate := NewClusterStateRegistry(provider, ClusterStateRegistryConfig{
+				MaxTotalUnreadyPercentage: 10,
+				OkTotalUnreadyCount:       1,
+			}, fakeLogRecorder, newBackoff(), nodegroupconfig.NewDefaultNodeGroupConfigProcessor(config.NodeGroupAutoscalingOptions{MaxNodeProvisionTime: time.Minute}))
+			err := clusterstate.UpdateNodes([]*apiv1.Node{}, nil, now.Add(-5*time.Second))
+			assert.NoError(t, err)
+			assert.False(t, clusterstate.IsNodeGroupScalingUp("ng1"))
+			assert.False(t, clusterstate.HasNodeGroupStartedScaleUp("ng1"))
+
+			provider.AddNodeGroup("ng1", 0, 5, tc.initialSize+tc.delta)
+			clusterstate.RegisterOrUpdateScaleUp(provider.GetNodeGroup("ng1"), tc.delta, now.Add(-3*time.Second))
+			err = clusterstate.UpdateNodes([]*apiv1.Node{}, nil, now)
+			assert.NoError(t, err)
+			assert.True(t, clusterstate.IsNodeGroupScalingUp("ng1"))
+			assert.True(t, clusterstate.HasNodeGroupStartedScaleUp("ng1"))
+
+			provider.AddNodeGroup("ng1", 0, 5, tc.initialSize)
+			clusterstate.Recalculate()
+			assert.False(t, clusterstate.IsNodeGroupScalingUp("ng1"))
+			assert.True(t, clusterstate.HasNodeGroupStartedScaleUp("ng1"))
+		})
+	}
 }
 
 func TestOKOneUnreadyNode(t *testing.T) {
@@ -880,13 +923,31 @@ func TestScaleUpBackoff(t *testing.T) {
 	assert.NoError(t, err)
 	assert.True(t, clusterstate.IsClusterHealthy())
 	assert.True(t, clusterstate.IsNodeGroupHealthy("ng1"))
-	assert.False(t, clusterstate.IsNodeGroupSafeToScaleUp(ng1, now))
+	assert.Equal(t, NodeGroupScalingSafety{
+		SafeToScale: false,
+		Healthy:     true,
+		BackoffStatus: backoff.Status{
+			IsBackedOff: true,
+			ErrorInfo: cloudprovider.InstanceErrorInfo{
+				ErrorClass:   cloudprovider.OtherErrorClass,
+				ErrorCode:    "timeout",
+				ErrorMessage: "Scale-up timed out for node group ng1 after 3m0s",
+			},
+		},
+	}, clusterstate.IsNodeGroupSafeToScaleUp(ng1, now))
+	assert.Equal(t, backoff.Status{
+		IsBackedOff: true,
+		ErrorInfo: cloudprovider.InstanceErrorInfo{
+			ErrorClass:   cloudprovider.OtherErrorClass,
+			ErrorCode:    "timeout",
+			ErrorMessage: "Scale-up timed out for node group ng1 after 3m0s",
+		}}, clusterstate.backoff.BackoffStatus(ng1, nil, now))
 
 	// Backoff should expire after timeout
 	now = now.Add(5 * time.Minute /*InitialNodeGroupBackoffDuration*/).Add(time.Second)
 	assert.True(t, clusterstate.IsClusterHealthy())
 	assert.True(t, clusterstate.IsNodeGroupHealthy("ng1"))
-	assert.True(t, clusterstate.IsNodeGroupSafeToScaleUp(ng1, now))
+	assert.Equal(t, NodeGroupScalingSafety{SafeToScale: true, Healthy: true}, clusterstate.IsNodeGroupSafeToScaleUp(ng1, now))
 
 	// Another failed scale up should cause longer backoff
 	clusterstate.RegisterOrUpdateScaleUp(provider.GetNodeGroup("ng1"), 1, now.Add(-121*time.Second))
@@ -895,10 +956,32 @@ func TestScaleUpBackoff(t *testing.T) {
 	assert.NoError(t, err)
 	assert.True(t, clusterstate.IsClusterHealthy())
 	assert.True(t, clusterstate.IsNodeGroupHealthy("ng1"))
-	assert.False(t, clusterstate.IsNodeGroupSafeToScaleUp(ng1, now))
+	assert.Equal(t, NodeGroupScalingSafety{
+		SafeToScale: false,
+		Healthy:     true,
+		BackoffStatus: backoff.Status{
+			IsBackedOff: true,
+			ErrorInfo: cloudprovider.InstanceErrorInfo{
+				ErrorClass:   cloudprovider.OtherErrorClass,
+				ErrorCode:    "timeout",
+				ErrorMessage: "Scale-up timed out for node group ng1 after 2m1s",
+			},
+		},
+	}, clusterstate.IsNodeGroupSafeToScaleUp(ng1, now))
 
 	now = now.Add(5 * time.Minute /*InitialNodeGroupBackoffDuration*/).Add(time.Second)
-	assert.False(t, clusterstate.IsNodeGroupSafeToScaleUp(ng1, now))
+	assert.Equal(t, NodeGroupScalingSafety{
+		SafeToScale: false,
+		Healthy:     true,
+		BackoffStatus: backoff.Status{
+			IsBackedOff: true,
+			ErrorInfo: cloudprovider.InstanceErrorInfo{
+				ErrorClass:   cloudprovider.OtherErrorClass,
+				ErrorCode:    "timeout",
+				ErrorMessage: "Scale-up timed out for node group ng1 after 2m1s",
+			},
+		},
+	}, clusterstate.IsNodeGroupSafeToScaleUp(ng1, now))
 
 	// The backoff should be cleared after a successful scale-up
 	clusterstate.RegisterOrUpdateScaleUp(provider.GetNodeGroup("ng1"), 1, now)
@@ -909,8 +992,8 @@ func TestScaleUpBackoff(t *testing.T) {
 	assert.NoError(t, err)
 	assert.True(t, clusterstate.IsClusterHealthy())
 	assert.True(t, clusterstate.IsNodeGroupHealthy("ng1"))
-	assert.True(t, clusterstate.IsNodeGroupSafeToScaleUp(ng1, now))
-	assert.False(t, clusterstate.backoff.IsBackedOff(ng1, nil, now))
+	assert.Equal(t, NodeGroupScalingSafety{SafeToScale: true, Healthy: true}, clusterstate.IsNodeGroupSafeToScaleUp(ng1, now))
+	assert.Equal(t, backoff.Status{IsBackedOff: false}, clusterstate.backoff.BackoffStatus(ng1, nil, now))
 }
 
 func TestGetClusterSize(t *testing.T) {
@@ -1027,9 +1110,9 @@ func TestScaleUpFailures(t *testing.T) {
 	fakeLogRecorder, _ := utils.NewStatusMapRecorder(fakeClient, "kube-system", kube_record.NewFakeRecorder(5), false, "my-cool-configmap")
 	clusterstate := NewClusterStateRegistry(provider, ClusterStateRegistryConfig{}, fakeLogRecorder, newBackoff(), nodegroupconfig.NewDefaultNodeGroupConfigProcessor(config.NodeGroupAutoscalingOptions{MaxNodeProvisionTime: 15 * time.Minute}))
 
-	clusterstate.RegisterFailedScaleUp(provider.GetNodeGroup("ng1"), metrics.Timeout, "", "", now)
-	clusterstate.RegisterFailedScaleUp(provider.GetNodeGroup("ng2"), metrics.Timeout, "", "", now)
-	clusterstate.RegisterFailedScaleUp(provider.GetNodeGroup("ng1"), metrics.APIError, "", "", now.Add(time.Minute))
+	clusterstate.RegisterFailedScaleUp(provider.GetNodeGroup("ng1"), metrics.Timeout, "", "", "", now)
+	clusterstate.RegisterFailedScaleUp(provider.GetNodeGroup("ng2"), metrics.Timeout, "", "", "", now)
+	clusterstate.RegisterFailedScaleUp(provider.GetNodeGroup("ng1"), metrics.APIError, "", "", "", now.Add(time.Minute))
 
 	failures := clusterstate.GetScaleUpFailures()
 	assert.Equal(t, map[string][]ScaleUpFailure{

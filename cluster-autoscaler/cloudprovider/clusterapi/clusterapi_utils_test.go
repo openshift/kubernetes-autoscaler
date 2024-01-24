@@ -18,8 +18,10 @@ package clusterapi
 
 import (
 	"fmt"
+	"github.com/google/go-cmp/cmp"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -501,18 +503,18 @@ func TestParseMemoryCapacity(t *testing.T) {
 	}, {
 		description:      "quantity as with no unit type",
 		annotations:      map[string]string{memoryKey: "1024"},
-		expectedQuantity: *resource.NewQuantity(1024*units.MiB, resource.DecimalSI),
+		expectedQuantity: *resource.NewQuantity(1024, resource.DecimalSI),
 		expectedError:    false,
 	}, {
 		description:      "quantity with unit type (Mi)",
 		annotations:      map[string]string{memoryKey: "456Mi"},
-		expectedQuantity: zeroQuantity.DeepCopy(),
-		expectedError:    true,
+		expectedError:    false,
+		expectedQuantity: *resource.NewQuantity(456*units.MiB, resource.DecimalSI),
 	}, {
 		description:      "quantity with unit type (Gi)",
 		annotations:      map[string]string{memoryKey: "8Gi"},
-		expectedQuantity: zeroQuantity.DeepCopy(),
-		expectedError:    true,
+		expectedError:    false,
+		expectedQuantity: *resource.NewQuantity(8*units.GiB, resource.DecimalSI),
 	}} {
 		t.Run(tc.description, func(t *testing.T) {
 			got, err := parseMemoryCapacity(tc.annotations)
@@ -849,6 +851,80 @@ func Test_getKeyHelpers(t *testing.T) {
 			observed := tc.testfunc()
 			if observed != tc.expected {
 				t.Errorf("%s, mismatch, expected=%s, observed=%s", tc.name, observed, tc.expected)
+			}
+		})
+	}
+}
+
+func TestSystemArchitectureFromString(t *testing.T) {
+	tcs := []struct {
+		name     string
+		archName string
+		wantArch SystemArchitecture
+	}{
+		{
+			name:     "valid architecture is converted",
+			archName: "amd64",
+			wantArch: Amd64,
+		},
+		{
+			name:     "invalid architecture results in UnknownArchitecture",
+			archName: "some-arch",
+			wantArch: UnknownArch,
+		},
+	}
+	for _, tc := range tcs {
+		t.Run(tc.name, func(t *testing.T) {
+			gotArch := SystemArchitectureFromString(tc.archName)
+			if diff := cmp.Diff(tc.wantArch, gotArch); diff != "" {
+				t.Errorf("ToSystemArchitecture diff (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestGetSystemArchitectureFromEnvOrDefault(t *testing.T) {
+	amd64 := Amd64.Name()
+	arm64 := Arm64.Name()
+	wrongValue := "wrong"
+
+	tcs := []struct {
+		name     string
+		envValue *string
+		want     SystemArchitecture
+	}{
+		{
+			name:     fmt.Sprintf("%s is set to arm64", scaleUpFromZeroDefaultArchEnvVar),
+			envValue: &arm64,
+			want:     Arm64,
+		},
+		{
+			name:     fmt.Sprintf("%s is set to amd64", scaleUpFromZeroDefaultArchEnvVar),
+			envValue: &amd64,
+			want:     Amd64,
+		},
+		{
+			name:     fmt.Sprintf("%s is not set", scaleUpFromZeroDefaultArchEnvVar),
+			envValue: nil,
+			want:     DefaultArch,
+		},
+		{
+			name:     fmt.Sprintf("%s is set to a wrong value", scaleUpFromZeroDefaultArchEnvVar),
+			envValue: &wrongValue,
+			want:     DefaultArch,
+		},
+	}
+	for _, tc := range tcs {
+		t.Run(tc.name, func(t *testing.T) {
+			// Reset the systemArchitecture variable to nil before each test due to the lazy initialization of the variable.
+			systemArchitecture = nil
+			// Reset the once variable to its initial state before each test.
+			once = sync.Once{}
+			if tc.envValue != nil {
+				t.Setenv(scaleUpFromZeroDefaultArchEnvVar, *tc.envValue)
+			}
+			if got := GetDefaultScaleFromZeroArchitecture(); got != tc.want {
+				t.Errorf("GetDefaultScaleFromZeroArchitecture() = %v, want %v", got, tc.want)
 			}
 		})
 	}
