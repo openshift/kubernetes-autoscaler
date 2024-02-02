@@ -214,7 +214,7 @@ func (r unstructuredScalableResource) Taints() []apiv1.Taint {
 			if t := unstructuredToTaint(t); t != nil {
 				taints = append(taints, *t)
 			} else {
-				klog.Warning("Unable to convert of type %T data to taint: %+v", t, t)
+				klog.Warningf("Unable to convert of type %T data to taint: %+v", t, t)
 				continue
 			}
 		}
