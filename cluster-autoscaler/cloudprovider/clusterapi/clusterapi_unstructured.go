@@ -203,7 +203,10 @@ func unstructuredToTaint(unstructuredTaintInterface interface{}) *corev1.Taint {
 
 	taint := &corev1.Taint{}
 	taint.Key = unstructuredTaint["key"].(string)
-	taint.Value = unstructuredTaint["value"].(string)
+	// value is optional and could be nil if not present
+	if unstructuredTaint["value"] != nil {
+		taint.Value = unstructuredTaint["value"].(string)
+	}
 	taint.Effect = corev1.TaintEffect(unstructuredTaint["effect"].(string))
 	return taint
 }

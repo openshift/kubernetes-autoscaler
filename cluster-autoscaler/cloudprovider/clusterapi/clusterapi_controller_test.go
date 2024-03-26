@@ -345,6 +345,10 @@ func createTestConfigs(specs ...testSpec) []*testConfig {
 									"value":  "test",
 									"effect": "NoSchedule",
 								},
+								map[string]interface{}{
+									"key":    "test-no-value",
+									"effect": "NoSchedule",
+								},
 							},
 						},
 					},
@@ -388,6 +392,10 @@ func createTestConfigs(specs ...testSpec) []*testConfig {
 									map[string]interface{}{
 										"key":    "test",
 										"value":  "test",
+										"effect": "NoSchedule",
+									},
+									map[string]interface{}{
+										"key":    "test-no-value",
 										"effect": "NoSchedule",
 									},
 								},
