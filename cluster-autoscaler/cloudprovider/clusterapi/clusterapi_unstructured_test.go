@@ -226,8 +226,16 @@ func TestReplicas(t *testing.T) {
 func TestTaints(t *testing.T) {
 	initialReplicas := 1
 
-	expectedTaints := []v1.Taint{{Key: "test", Effect: v1.TaintEffectNoSchedule, Value: "test"}}
-	expectedTaintsWithAnnotations := []v1.Taint{{Key: "test", Effect: v1.TaintEffectNoSchedule, Value: "test"}, {Key: "key1", Effect: v1.TaintEffectNoSchedule, Value: "value1"}, {Key: "key2", Effect: v1.TaintEffectNoExecute, Value: "value2"}}
+	expectedTaints := []v1.Taint{
+		{Key: "test", Effect: v1.TaintEffectNoSchedule, Value: "test"},
+		{Key: "test-no-value", Effect: v1.TaintEffectNoSchedule},
+	}
+	expectedTaintsWithAnnotations := []v1.Taint{
+		{Key: "test", Effect: v1.TaintEffectNoSchedule, Value: "test"},
+		{Key: "test-no-value", Effect: v1.TaintEffectNoSchedule},
+		{Key: "key1", Effect: v1.TaintEffectNoSchedule, Value: "value1"},
+		{Key: "key2", Effect: v1.TaintEffectNoExecute, Value: "value2"},
+	}
 	taintAnnotation := "key1=value1:NoSchedule,key2=value2:NoExecute"
 
 	test := func(t *testing.T, testConfig *testConfig) {
@@ -350,8 +358,14 @@ func TestAnnotations(t *testing.T) {
 	gpuQuantity := resource.MustParse("1")
 	maxPodsQuantity := resource.MustParse("42")
 
-	// Note, the first taint comes from the spec of the machine template, the rest from the annotations.
-	expectedTaints := []v1.Taint{{Key: "test", Effect: v1.TaintEffectNoSchedule, Value: "test"}, {Key: "key1", Effect: v1.TaintEffectNoSchedule, Value: "value1"}, {Key: "key2", Effect: v1.TaintEffectNoExecute, Value: "value2"}}
+	// Note, the first two taints comes from the spec of the machine template, the rest from the annotations.
+	expectedTaints := []v1.Taint{
+		{Key: "test", Effect: v1.TaintEffectNoSchedule, Value: "test"},
+		{Key: "test-no-value", Effect: v1.TaintEffectNoSchedule},
+		{Key: "key1", Effect: v1.TaintEffectNoSchedule, Value: "value1"},
+		{Key: "key2", Effect: v1.TaintEffectNoExecute, Value: "value2"},
+	}
+
 	annotations := map[string]string{
 		cpuKey:          cpuQuantity.String(),
 		memoryKey:       memQuantity.String(),
