@@ -19,9 +19,12 @@ package clusterapi
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -282,11 +285,53 @@ func TestSetSizeAndReplicas(t *testing.T) {
 	})
 }
 
+func TestTaints(t *testing.T) {
+	initialReplicas := 1
+
+	expectedTaints := []v1.Taint{
+		{Key: "test", Effect: v1.TaintEffectNoSchedule, Value: "test"},
+		{Key: "test-no-value", Effect: v1.TaintEffectNoSchedule},
+	}
+
+	test := func(t *testing.T, testConfig *testConfig) {
+		controller, stop := mustCreateTestController(t, testConfig)
+		defer stop()
+
+		testResource := testConfig.machineSet
+		if testConfig.machineDeployment != nil {
+			testResource = testConfig.machineDeployment
+		}
+
+		sr, err := newUnstructuredScalableResource(controller, testResource)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		taints := sr.Taints()
+
+		if !reflect.DeepEqual(taints, expectedTaints) {
+			t.Errorf("expected %v, got: %v", expectedTaints, taints)
+		}
+	}
+
+	t.Run("MachineSet", func(t *testing.T) {
+		test(t, createMachineSetTestConfig(RandomString(6), RandomString(6), RandomString(6), initialReplicas, nil, nil))
+	})
+
+	t.Run("MachineDeployment", func(t *testing.T) {
+		test(t, createMachineDeploymentTestConfig(RandomString(6), RandomString(6), RandomString(6), initialReplicas, nil, nil))
+	})
+}
+
 func TestAnnotations(t *testing.T) {
 	cpuQuantity := resource.MustParse("2")
 	memQuantity := resource.MustParse("1024")
 	gpuQuantity := resource.MustParse("1")
 	maxPodsQuantity := resource.MustParse("42")
+	expectedTaints := []v1.Taint{
+		{Key: "test", Effect: v1.TaintEffectNoSchedule, Value: "test"},
+		{Key: "test-no-value", Effect: v1.TaintEffectNoSchedule},
+	}
 	annotations := map[string]string{
 		cpuKey:      cpuQuantity.String(),
 		memoryKey:   memQuantity.String(),
@@ -331,6 +376,9 @@ func TestAnnotations(t *testing.T) {
 		} else if maxPodsQuantity.Cmp(maxPods) != 0 {
 			t.Errorf("expected %v, got %v", maxPodsQuantity, maxPods)
 		}
+
+		taints := sr.Taints()
+		assert.Equal(t, expectedTaints, taints)
 	}
 
 	t.Run("MachineSet", func(t *testing.T) {

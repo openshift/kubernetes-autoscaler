@@ -184,16 +184,31 @@ func (r unstructuredScalableResource) Taints() []apiv1.Taint {
 	if !found || err != nil {
 		return nil
 	}
-	ret := make([]apiv1.Taint, len(taints))
-	for i, t := range taints {
-		if v, ok := t.(apiv1.Taint); ok {
-			ret[i] = v
+	ret := make([]apiv1.Taint, 0)
+	for _, t := range taints {
+		if t := unstructuredToTaint(t); t != nil {
+			ret = append(ret, *t)
 		} else {
-			// if we cannot convert the interface to a Taint, return early with zero value
-			return nil
+			klog.Warning("Unable to convert of type %T data to taint: %+v", t, t)
 		}
 	}
 	return ret
+}
+
+func unstructuredToTaint(unstructuredTaintInterface interface{}) *corev1.Taint {
+	unstructuredTaint := unstructuredTaintInterface.(map[string]interface{})
+	if unstructuredTaint == nil {
+		return nil
+	}
+
+	taint := &corev1.Taint{}
+	taint.Key = unstructuredTaint["key"].(string)
+	// value is optional and could be nil if not present
+	if unstructuredTaint["value"] != nil {
+		taint.Value = unstructuredTaint["value"].(string)
+	}
+	taint.Effect = corev1.TaintEffect(unstructuredTaint["effect"].(string))
+	return taint
 }
 
 // A node group can scale from zero if it can inform about the CPU and memory
