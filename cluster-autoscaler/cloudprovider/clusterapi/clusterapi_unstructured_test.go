@@ -288,7 +288,10 @@ func TestSetSizeAndReplicas(t *testing.T) {
 func TestTaints(t *testing.T) {
 	initialReplicas := 1
 
-	expectedTaints := []v1.Taint{{Key: "test", Effect: v1.TaintEffectNoSchedule, Value: "test"}}
+	expectedTaints := []v1.Taint{
+		{Key: "test", Effect: v1.TaintEffectNoSchedule, Value: "test"},
+		{Key: "test-no-value", Effect: v1.TaintEffectNoSchedule},
+	}
 
 	test := func(t *testing.T, testConfig *testConfig) {
 		controller, stop := mustCreateTestController(t, testConfig)
@@ -325,7 +328,11 @@ func TestAnnotations(t *testing.T) {
 	memQuantity := resource.MustParse("1024")
 	gpuQuantity := resource.MustParse("1")
 	maxPodsQuantity := resource.MustParse("42")
-	expectedTaints := []v1.Taint{{Key: "test", Effect: v1.TaintEffectNoSchedule, Value: "test"}}
+	expectedTaints := []v1.Taint{
+		{Key: "test", Effect: v1.TaintEffectNoSchedule, Value: "test"},
+		{Key: "test-no-value", Effect: v1.TaintEffectNoSchedule},
+	}
+
 	annotations := map[string]string{
 		cpuKey:      cpuQuantity.String(),
 		memoryKey:   memQuantity.String(),
