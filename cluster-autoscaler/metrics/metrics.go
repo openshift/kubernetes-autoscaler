@@ -398,6 +398,14 @@ var (
 		},
 		[]string{"type"},
 	)
+
+	providerNodeGroupsDuration = k8smetrics.NewGauge(
+		&k8smetrics.GaugeOpts{
+			Namespace: caNamespace,
+			Name:      "provider_node_groups_duration",
+			Help:      "The duration of the NodeGroups call in seconds.",
+		},
+	)
 )
 
 // RegisterAll registers all metrics.
@@ -433,6 +441,7 @@ func RegisterAll(emitPerNodeGroupMetrics bool) {
 	legacyregistry.MustRegister(nodeGroupDeletionCount)
 	legacyregistry.MustRegister(pendingNodeDeletions)
 	legacyregistry.MustRegister(nodeTaintsCount)
+	legacyregistry.MustRegister(providerNodeGroupsDuration)
 
 	if emitPerNodeGroupMetrics {
 		legacyregistry.MustRegister(nodesGroupMinNodes)
@@ -659,4 +668,9 @@ func ObservePendingNodeDeletions(value int) {
 // ObserveNodeTaintsCount records the node taints count of given type.
 func ObserveNodeTaintsCount(taintType string, count float64) {
 	nodeTaintsCount.WithLabelValues(taintType).Set(count)
+}
+
+// RegisterProviderNodeGroupsDuration records the duration of a single NodeGroups provider interface call.
+func RegisterProviderNodeGroupsDuration(duration float64) {
+	providerNodeGroupsDuration.Set(duration)
 }
