@@ -36,13 +36,13 @@ import (
 	vpa_types "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/apis/autoscaling.k8s.io/v1"
 	vpa_api "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/client/clientset/versioned/typed/autoscaling.k8s.io/v1"
 	vpa_lister "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/client/listers/autoscaling.k8s.io/v1"
-	controllerfetcher "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/recommender/input/controller_fetcher"
 	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/recommender/input/history"
 	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/recommender/input/metrics"
 	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/recommender/input/oom"
 	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/recommender/input/spec"
 	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/recommender/model"
 	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/target"
+	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/target/controller_fetcher"
 	metrics_recommender "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/metrics/recommender"
 )
 
@@ -218,10 +218,6 @@ func (feeder *clusterStateFeeder) InitFromHistoryProvider(historyProvider histor
 						ContainerUsageSample: sample,
 						Container:            containerID,
 					}); err != nil {
-					// Ignore missing "POD" containers returned by prometheus adapter
-					if _, isKeyError := err.(model.KeyError); isKeyError && containerName == "POD" {
-						continue
-					}
 					klog.Warningf("Error adding metric sample for container %v: %v", containerID, err)
 				}
 			}
@@ -431,8 +427,7 @@ func (feeder *clusterStateFeeder) LoadRealTimeMetrics() {
 		for _, sample := range newContainerUsageSamplesWithKey(containerMetrics) {
 			if err := feeder.clusterState.AddSample(sample); err != nil {
 				// Not all pod states are tracked in memory saver mode
-				// Also ignore missing containers named "POD" which prometheus adapter returns
-				if _, isKeyError := err.(model.KeyError); isKeyError && (feeder.memorySaveMode || sample.Container.ContainerName == "POD") {
+				if _, isKeyError := err.(model.KeyError); isKeyError && feeder.memorySaveMode {
 					continue
 				}
 				klog.Warningf("Error adding metric sample for container %v: %v", sample.Container, err)

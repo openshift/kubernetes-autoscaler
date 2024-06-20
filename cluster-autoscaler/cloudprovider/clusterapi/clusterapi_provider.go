@@ -58,12 +58,17 @@ func (p *provider) GetResourceLimiter() (*cloudprovider.ResourceLimiter, error) 
 }
 
 func (p *provider) NodeGroups() []cloudprovider.NodeGroup {
+	var result []cloudprovider.NodeGroup
 	nodegroups, err := p.controller.nodeGroups()
 	if err != nil {
 		klog.Errorf("error getting node groups: %v", err)
 		return nil
 	}
-	return nodegroups
+	for _, ng := range nodegroups {
+		klog.V(4).Infof("discovered node group: %s", ng.Debug())
+		result = append(result, ng)
+	}
+	return result
 }
 
 func (p *provider) NodeGroupForNode(node *corev1.Node) (cloudprovider.NodeGroup, error) {
@@ -153,6 +158,8 @@ func BuildClusterAPI(opts config.AutoscalingOptions, do cloudprovider.NodeGroupD
 	if err != nil {
 		klog.Fatalf("cannot build management cluster config: %v", err)
 	}
+	managementConfig.QPS = opts.KubeClientOpts.KubeClientQPS
+	managementConfig.Burst = opts.KubeClientOpts.KubeClientBurst
 
 	workloadKubeconfig := opts.KubeClientOpts.KubeConfigPath
 
@@ -160,6 +167,8 @@ func BuildClusterAPI(opts config.AutoscalingOptions, do cloudprovider.NodeGroupD
 	if err != nil {
 		klog.Fatalf("cannot build workload cluster config: %v", err)
 	}
+	workloadConfig.QPS = opts.KubeClientOpts.KubeClientQPS
+	workloadConfig.Burst = opts.KubeClientOpts.KubeClientBurst
 
 	// Grab a dynamic interface that we can create informers from
 	managementClient, err := dynamic.NewForConfig(managementConfig)

@@ -29,7 +29,11 @@ import (
 	"time"
 
 	"k8s.io/autoscaler/cluster-autoscaler/core/scaledown/actuation"
+	"k8s.io/autoscaler/cluster-autoscaler/core/scaleup/orchestrator"
 	"k8s.io/autoscaler/cluster-autoscaler/debuggingsnapshot"
+	"k8s.io/autoscaler/cluster-autoscaler/loop"
+	"k8s.io/autoscaler/cluster-autoscaler/provisioningrequest/checkcapacity"
+	"k8s.io/autoscaler/cluster-autoscaler/provisioningrequest/provreqclient"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator/predicatechecker"
 	kubelet_config "k8s.io/kubernetes/pkg/kubelet/apis/config"
 
@@ -42,22 +46,25 @@ import (
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	cloudBuilder "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/builder"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce/localssdsize"
 	"k8s.io/autoscaler/cluster-autoscaler/config"
 	"k8s.io/autoscaler/cluster-autoscaler/core"
 	"k8s.io/autoscaler/cluster-autoscaler/core/podlistprocessor"
 	"k8s.io/autoscaler/cluster-autoscaler/estimator"
 	"k8s.io/autoscaler/cluster-autoscaler/expander"
 	"k8s.io/autoscaler/cluster-autoscaler/metrics"
+	"k8s.io/autoscaler/cluster-autoscaler/observers/loopstart"
 	ca_processors "k8s.io/autoscaler/cluster-autoscaler/processors"
 	"k8s.io/autoscaler/cluster-autoscaler/processors/nodegroupset"
 	"k8s.io/autoscaler/cluster-autoscaler/processors/nodeinfosprovider"
+	"k8s.io/autoscaler/cluster-autoscaler/processors/provreq"
 	"k8s.io/autoscaler/cluster-autoscaler/processors/scaledowncandidates"
 	"k8s.io/autoscaler/cluster-autoscaler/processors/scaledowncandidates/emptycandidates"
 	"k8s.io/autoscaler/cluster-autoscaler/processors/scaledowncandidates/previouscandidates"
+	provreqorchestrator "k8s.io/autoscaler/cluster-autoscaler/provisioningrequest/orchestrator"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator/clustersnapshot"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator/drainability/rules"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator/options"
-	"k8s.io/autoscaler/cluster-autoscaler/utils/errors"
 	kube_util "k8s.io/autoscaler/cluster-autoscaler/utils/kubernetes"
 	scheduler_util "k8s.io/autoscaler/cluster-autoscaler/utils/scheduler"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/units"
@@ -103,8 +110,8 @@ var (
 	kubernetes              = flag.String("kubernetes", "", "Kubernetes master location. Leave blank for default")
 	kubeConfigFile          = flag.String("kubeconfig", "", "Path to kubeconfig file with authorization and master location information.")
 	kubeAPIContentType      = flag.String("kube-api-content-type", "application/vnd.kubernetes.protobuf", "Content type of requests sent to apiserver.")
-	_                       = flag.Int("kube-client-burst", rest.DefaultBurst, "Burst value for kubernetes client. (Deprecated, relay on APF for rate limiting)")
-	_                       = flag.Float64("kube-client-qps", float64(rest.DefaultQPS), "QPS value for kubernetes client. (Deprecated, relay on APF for rate limiting)")
+	kubeClientBurst         = flag.Int("kube-client-burst", rest.DefaultBurst, "Burst value for kubernetes client.")
+	kubeClientQPS           = flag.Float64("kube-client-qps", float64(rest.DefaultQPS), "QPS value for kubernetes client.")
 	cloudConfig             = flag.String("cloud-config", "", "The path to the cloud provider configuration file.  Empty string for no configuration file.")
 	namespace               = flag.String("namespace", "kube-system", "Namespace in which cluster-autoscaler run.")
 	enforceNodeGroupMinSize = flag.Bool("enforce-node-group-min-size", false, "Should CA scale up the node group to the configured min size if needed.")
@@ -112,16 +119,18 @@ var (
 	scaleDownUnreadyEnabled = flag.Bool("scale-down-unready-enabled", true, "Should CA scale down unready nodes of the cluster")
 	scaleDownDelayAfterAdd  = flag.Duration("scale-down-delay-after-add", 10*time.Minute,
 		"How long after scale up that scale down evaluation resumes")
+	scaleDownDelayTypeLocal = flag.Bool("scale-down-delay-type-local", false,
+		"Should --scale-down-delay-after-* flags be applied locally per nodegroup or globally across all nodegroups")
 	scaleDownDelayAfterDelete = flag.Duration("scale-down-delay-after-delete", 0,
 		"How long after node deletion that scale down evaluation resumes, defaults to scanInterval")
-	scaleDownDelayAfterFailure = flag.Duration("scale-down-delay-after-failure", 3*time.Minute,
+	scaleDownDelayAfterFailure = flag.Duration("scale-down-delay-after-failure", config.DefaultScaleDownDelayAfterFailure,
 		"How long after scale down failure that scale down evaluation resumes")
 	scaleDownUnneededTime = flag.Duration("scale-down-unneeded-time", config.DefaultScaleDownUnneededTime,
 		"How long a node should be unneeded before it is eligible for scale down")
 	scaleDownUnreadyTime = flag.Duration("scale-down-unready-time", config.DefaultScaleDownUnreadyTime,
 		"How long an unready node should be unneeded before it is eligible for scale down")
 	scaleDownUtilizationThreshold = flag.Float64("scale-down-utilization-threshold", config.DefaultScaleDownUtilizationThreshold,
-		"Sum of cpu or memory of all pods running on the node divided by node's corresponding allocatable resource, below which a node can be considered for scale down")
+		"The maximum value between the sum of cpu requests and sum of memory requests of all pods running on the node divided by node's corresponding allocatable resource, below which a node can be considered for scale down")
 	scaleDownGpuUtilizationThreshold = flag.Float64("scale-down-gpu-utilization-threshold", config.DefaultScaleDownGpuUtilizationThreshold,
 		"Sum of gpu requests of all pods running on the node divided by node's allocatable resource, below which a node can be considered for scale down."+
 			"Utilization calculation only cares about gpu resource for accelerator node. cpu and memory utilization will be ignored.")
@@ -144,7 +153,7 @@ var (
 	schedulerConfigFile         = flag.String(config.SchedulerConfigFileFlag, "", "scheduler-config allows changing configuration of in-tree scheduler plugins acting on PreFilter and Filter extension points")
 	nodeDeletionDelayTimeout    = flag.Duration("node-deletion-delay-timeout", 2*time.Minute, "Maximum time CA waits for removing delay-deletion.cluster-autoscaler.kubernetes.io/ annotations before deleting the node.")
 	nodeDeletionBatcherInterval = flag.Duration("node-deletion-batcher-interval", 0*time.Second, "How long CA ScaleDown gather nodes to delete them in batch.")
-	scanInterval                = flag.Duration("scan-interval", 10*time.Second, "How often cluster is reevaluated for scale up or down")
+	scanInterval                = flag.Duration("scan-interval", config.DefaultScanInterval, "How often cluster is reevaluated for scale up or down")
 	maxNodesTotal               = flag.Int("max-nodes-total", 0, "Maximum number of nodes in all node groups. Cluster autoscaler will not grow the cluster beyond this number.")
 	coresTotal                  = flag.String("cores-total", minMaxFlagString(0, config.DefaultMaxClusterCores), "Minimum and maximum number of cores in cluster, in the format <min>:<max>. Cluster autoscaler will not scale the cluster beyond these numbers.")
 	memoryTotal                 = flag.String("memory-total", minMaxFlagString(0, config.DefaultMaxClusterMemory), "Minimum and maximum number of gigabytes of memory in cluster, in the format <min>:<max>. Cluster autoscaler will not scale the cluster beyond these numbers.")
@@ -250,15 +259,8 @@ var (
 			"--max-graceful-termination-sec flag should not be set when this flag is set. Not setting this flag will use unordered evictor by default."+
 			"Priority evictor reuses the concepts of drain logic in kubelet(https://github.com/kubernetes/enhancements/tree/master/keps/sig-node/2712-pod-priority-based-graceful-node-shutdown#migration-from-the-node-graceful-shutdown-feature)."+
 			"Eg. flag usage:  '10000:20,1000:100,0:60'")
-
-	// The following flag is a temporary workaround to allow a smoother transition from the downstream changes in
-	// https://github.com/openshift/kubernetes-autoscaler/pull/261 to the upstream ones in
-	// https://github.com/kubernetes/autoscaler/pull/6066/. It can be removed after the cluster-autoscaler-operator
-	// is updated not to set this flag anymore. See https://github.com/openshift/cluster-autoscaler-operator/pull/311
-	// for more details.
-	// Note that the flag is a no-op because the upstream behavior is guaranteed by setting up the expected
-	// CAPI environment variable, as implemented in https://github.com/openshift/cluster-autoscaler-operator/pull/297
-	_ = flag.String("scale-up-from-zero-default-arch", "", "")
+	provisioningRequestsEnabled = flag.Bool("enable-provisioning-requests", false, "Whether the clusterautoscaler will be handling the ProvisioningRequest CRs.")
+	frequentLoopsEnabled        = flag.Bool("frequent-loops-enabled", false, "Whether clusterautoscaler triggers new iterations more frequently when it's needed")
 )
 
 func isFlagPassed(name string) bool {
@@ -366,6 +368,7 @@ func createAutoscalingOptions() config.AutoscalingOptions {
 		NodeGroups:                       *nodeGroupsFlag,
 		EnforceNodeGroupMinSize:          *enforceNodeGroupMinSize,
 		ScaleDownDelayAfterAdd:           *scaleDownDelayAfterAdd,
+		ScaleDownDelayTypeLocal:          *scaleDownDelayTypeLocal,
 		ScaleDownDelayAfterDelete:        *scaleDownDelayAfterDelete,
 		ScaleDownDelayAfterFailure:       *scaleDownDelayAfterFailure,
 		ScaleDownEnabled:                 *scaleDownEnabled,
@@ -400,6 +403,7 @@ func createAutoscalingOptions() config.AutoscalingOptions {
 		GCEOptions: config.GCEOptions{
 			ConcurrentRefreshes:            *concurrentGceRefreshes,
 			MigInstancesMinRefreshWaitTime: *gceMigInstancesMinRefreshWaitTime,
+			LocalSSDDiskSizeProvider:       localssdsize.NewSimpleLocalSSDProvider(),
 		},
 		ClusterAPICloudConfigAuthoritative: *clusterAPICloudConfigAuthoritative,
 		CordonNodeBeforeTerminate:          *cordonNodeBeforeTerminate,
@@ -429,6 +433,7 @@ func createAutoscalingOptions() config.AutoscalingOptions {
 		},
 		DynamicNodeDeleteDelayAfterTaintEnabled: *dynamicNodeDeleteDelayAfterTaintEnabled,
 		BypassedSchedulers:                      scheduler_util.GetBypassedSchedulersMap(*bypassedSchedulers),
+		ProvisioningRequestEnabled:              *provisioningRequestsEnabled,
 	}
 }
 
@@ -451,6 +456,8 @@ func buildAutoscaler(debuggingSnapshotter debuggingsnapshot.DebuggingSnapshotter
 	// Create basic config from flags.
 	autoscalingOptions := createAutoscalingOptions()
 
+	autoscalingOptions.KubeClientOpts.KubeClientBurst = int(*kubeClientBurst)
+	autoscalingOptions.KubeClientOpts.KubeClientQPS = float32(*kubeClientQPS)
 	kubeClient := kube_util.CreateKubeClient(autoscalingOptions.KubeClientOpts)
 
 	// Informer transform to trim ManagedFields for memory efficiency.
@@ -478,11 +485,40 @@ func buildAutoscaler(debuggingSnapshotter debuggingsnapshot.DebuggingSnapshotter
 		PredicateChecker:     predicateChecker,
 		DeleteOptions:        deleteOptions,
 		DrainabilityRules:    drainabilityRules,
+		ScaleUpOrchestrator:  orchestrator.New(),
 	}
 
 	opts.Processors = ca_processors.DefaultProcessors(autoscalingOptions)
 	opts.Processors.TemplateNodeInfoProvider = nodeinfosprovider.NewDefaultTemplateNodeInfoProvider(nodeInfoCacheExpireTime, *forceDaemonSets)
-	opts.Processors.PodListProcessor = podlistprocessor.NewDefaultPodListProcessor(opts.PredicateChecker)
+	podListProcessor := podlistprocessor.NewDefaultPodListProcessor(opts.PredicateChecker)
+
+	if autoscalingOptions.ProvisioningRequestEnabled {
+		podListProcessor.AddProcessor(provreq.NewProvisioningRequestPodsFilter(provreq.NewDefautlEventManager()))
+
+		restConfig := kube_util.GetKubeConfig(autoscalingOptions.KubeClientOpts)
+		provreqOrchestrator, err := provreqorchestrator.New(restConfig)
+		if err != nil {
+			return nil, err
+		}
+		scaleUpOrchestrator := provreqorchestrator.NewWrapperOrchestrator(provreqOrchestrator)
+
+		opts.ScaleUpOrchestrator = scaleUpOrchestrator
+		client, err := provreqclient.NewProvisioningRequestClient(restConfig)
+		if err != nil {
+			return nil, err
+		}
+		provreqProcesor := provreq.NewCombinedProvReqProcessor(client, []provreq.ProvisioningRequestProcessor{checkcapacity.NewCheckCapacityProcessor(client)})
+		if err != nil {
+			return nil, err
+		}
+		opts.LoopStartNotifier = loopstart.NewObserversList([]loopstart.Observer{provreqProcesor})
+		injector, err := provreq.NewProvisioningRequestPodsInjector(restConfig)
+		if err != nil {
+			return nil, err
+		}
+		podListProcessor.AddProcessor(injector)
+	}
+	opts.Processors.PodListProcessor = podListProcessor
 	scaleDownCandidatesComparers := []scaledowncandidates.CandidatesComparer{}
 	if autoscalingOptions.ParallelDrain {
 		sdCandidatesSorting := previouscandidates.NewPreviousCandidates()
@@ -492,8 +528,17 @@ func buildAutoscaler(debuggingSnapshotter debuggingsnapshot.DebuggingSnapshotter
 		}
 		opts.Processors.ScaleDownCandidatesNotifier.Register(sdCandidatesSorting)
 	}
-	sdProcessor := scaledowncandidates.NewScaleDownCandidatesSortingProcessor(scaleDownCandidatesComparers)
-	opts.Processors.ScaleDownNodeProcessor = sdProcessor
+
+	cp := scaledowncandidates.NewCombinedScaleDownCandidatesProcessor()
+	cp.Register(scaledowncandidates.NewScaleDownCandidatesSortingProcessor(scaleDownCandidatesComparers))
+
+	if autoscalingOptions.ScaleDownDelayTypeLocal {
+		sdp := scaledowncandidates.NewScaleDownCandidatesDelayProcessor()
+		cp.Register(sdp)
+		opts.Processors.ScaleStateNotifier.Register(sdp)
+
+	}
+	opts.Processors.ScaleDownNodeProcessor = cp
 
 	var nodeInfoComparator nodegroupset.NodeInfoComparator
 	if len(autoscalingOptions.BalancingLabels) > 0 {
@@ -555,23 +600,21 @@ func run(healthCheck *metrics.HealthCheck, debuggingSnapshotter debuggingsnapsho
 	}
 
 	// Autoscale ad infinitum.
-	for {
-		select {
-		case <-time.After(*scanInterval):
-			{
-				loopStart := time.Now()
-				metrics.UpdateLastTime(metrics.Main, loopStart)
-				healthCheck.UpdateLastActivity(loopStart)
-
-				err := autoscaler.RunOnce(loopStart)
-				if err != nil && err.Type() != errors.TransientError {
-					metrics.RegisterError(err)
-				} else {
-					healthCheck.UpdateLastSuccessfulRun(time.Now())
-				}
-
-				metrics.UpdateDurationFromStart(metrics.Main, loopStart)
-			}
+	context, cancel := ctx.WithCancel(ctx.Background())
+	defer cancel()
+	if *frequentLoopsEnabled {
+		podObserver := loop.StartPodObserver(context, kube_util.CreateKubeClient(createAutoscalingOptions().KubeClientOpts))
+		trigger := loop.NewLoopTrigger(podObserver, autoscaler, *scanInterval)
+		lastRun := time.Now()
+		for {
+			trigger.Wait(lastRun)
+			lastRun = time.Now()
+			loop.RunAutoscalerOnce(autoscaler, healthCheck, lastRun)
+		}
+	} else {
+		for {
+			time.Sleep(*scanInterval)
+			loop.RunAutoscalerOnce(autoscaler, healthCheck, time.Now())
 		}
 	}
 }

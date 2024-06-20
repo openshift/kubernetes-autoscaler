@@ -18,12 +18,11 @@ package clusterapi
 
 import (
 	"fmt"
+	"github.com/google/go-cmp/cmp"
 	"reflect"
 	"strings"
 	"sync"
 	"testing"
-
-	"github.com/google/go-cmp/cmp"
 
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -423,6 +422,14 @@ func TestUtilNormalizedProviderID(t *testing.T) {
 		description: "id with / characters",
 		providerID:  "aws:////i-12345678",
 		expectedID:  "i-12345678",
+	}, {
+		description: "azure standard vm",
+		providerID:  "azure:///subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/resourceGroupName/providers/Microsoft.Compute/virtualMachines/control-plane-1cbe5-d4dx7",
+		expectedID:  "control-plane-1cbe5-d4dx7",
+	}, {
+		description: "azure vmss",
+		providerID:  "azure:///subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/resourceGroupName/providers/Microsoft.Compute/virtualMachineScaleSets/vmssName/virtualMachines/0",
+		expectedID:  "azure:///subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/resourceGroupName/providers/Microsoft.Compute/virtualMachineScaleSets/vmssName/virtualMachines/0",
 	}} {
 		t.Run(tc.description, func(t *testing.T) {
 			actualID := normalizedProviderString(tc.providerID)
@@ -504,18 +511,18 @@ func TestParseMemoryCapacity(t *testing.T) {
 	}, {
 		description:      "quantity as with no unit type",
 		annotations:      map[string]string{memoryKey: "1024"},
-		expectedQuantity: *resource.NewQuantity(1024*units.MiB, resource.DecimalSI),
+		expectedQuantity: *resource.NewQuantity(1024, resource.DecimalSI),
 		expectedError:    false,
 	}, {
 		description:      "quantity with unit type (Mi)",
 		annotations:      map[string]string{memoryKey: "456Mi"},
-		expectedQuantity: zeroQuantity.DeepCopy(),
-		expectedError:    true,
+		expectedError:    false,
+		expectedQuantity: *resource.NewQuantity(456*units.MiB, resource.DecimalSI),
 	}, {
 		description:      "quantity with unit type (Gi)",
 		annotations:      map[string]string{memoryKey: "8Gi"},
-		expectedQuantity: zeroQuantity.DeepCopy(),
-		expectedError:    true,
+		expectedError:    false,
+		expectedQuantity: *resource.NewQuantity(8*units.GiB, resource.DecimalSI),
 	}} {
 		t.Run(tc.description, func(t *testing.T) {
 			got, err := parseMemoryCapacity(tc.annotations)
