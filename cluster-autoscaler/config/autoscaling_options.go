@@ -19,6 +19,7 @@ package config
 import (
 	"time"
 
+	gce_localssdsize "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce/localssdsize"
 	kubelet_config "k8s.io/kubernetes/pkg/kubelet/apis/config"
 	scheduler_config "k8s.io/kubernetes/pkg/scheduler/apis/config"
 )
@@ -63,6 +64,8 @@ type GCEOptions struct {
 	MigInstancesMinRefreshWaitTime time.Duration
 	// DomainUrl is the GCE url used to make calls to GCE API.
 	DomainUrl string
+	// LocalSSDDiskSizeProvider provides local ssd disk size based on machine type
+	LocalSSDDiskSizeProvider gce_localssdsize.LocalSSDSizeProvider
 }
 
 const (
@@ -158,6 +161,9 @@ type AutoscalingOptions struct {
 	ScaleDownDelayAfterDelete time.Duration
 	// ScaleDownDelayAfterFailure sets the duration before the next scale down attempt if scale down results in an error
 	ScaleDownDelayAfterFailure time.Duration
+	// ScaleDownDelayTypeLocal sets if the --scale-down-delay-after-* flags should be applied locally per nodegroup
+	// or globally across all nodegroups
+	ScaleDownDelayTypeLocal bool
 	// ScaleDownNonEmptyCandidatesCount is the maximum number of non empty nodes
 	// considered at once as candidates for scale down.
 	ScaleDownNonEmptyCandidatesCount int
@@ -281,6 +287,8 @@ type AutoscalingOptions struct {
 	DynamicNodeDeleteDelayAfterTaintEnabled bool
 	// BypassedSchedulers are used to specify which schedulers to bypass their processing
 	BypassedSchedulers map[string]bool
+	// ProvisioningRequestEnabled tells if CA processes ProvisioningRequest.
+	ProvisioningRequestEnabled bool
 }
 
 // KubeClientOptions specify options for kube client
@@ -291,4 +299,8 @@ type KubeClientOptions struct {
 	KubeConfigPath string
 	// APIContentType specifies type of requests sent to APIServer.
 	APIContentType string
+	// Burst setting for kubernetes client
+	KubeClientBurst int
+	// QPS setting for kubernetes client
+	KubeClientQPS float32
 }

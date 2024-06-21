@@ -474,7 +474,9 @@ func newMachineController(
 			Resource: resourceNameMachinePool,
 		}
 		machinePoolInformer = managementInformerFactory.ForResource(gvrMachinePool)
-		machinePoolInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{})
+		if _, err := machinePoolInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{}); err != nil {
+			return nil, fmt.Errorf("failed to add event handler for resource %q: %w", resourceNameMachinePool, err)
+		}
 
 		if err := machinePoolInformer.Informer().GetIndexer().AddIndexers(cache.Indexers{
 			machinePoolProviderIDIndex: indexMachinePoolByProviderID,
@@ -670,13 +672,13 @@ func (c *machineController) findScalableResourceProviderIDs(scalableResource *un
 	return providerIDs, nil
 }
 
-func (c *machineController) nodeGroups() ([]cloudprovider.NodeGroup, error) {
+func (c *machineController) nodeGroups() ([]*nodegroup, error) {
 	scalableResources, err := c.listScalableResources()
 	if err != nil {
 		return nil, err
 	}
 
-	nodegroups := make([]cloudprovider.NodeGroup, 0, len(scalableResources))
+	nodegroups := make([]*nodegroup, 0, len(scalableResources))
 
 	for _, r := range scalableResources {
 		ng, err := newNodeGroupFromScalableResource(c, r)
@@ -686,7 +688,6 @@ func (c *machineController) nodeGroups() ([]cloudprovider.NodeGroup, error) {
 
 		if ng != nil {
 			nodegroups = append(nodegroups, ng)
-			klog.V(4).Infof("discovered node group: %s", ng.Debug())
 		}
 	}
 	return nodegroups, nil

@@ -109,6 +109,18 @@ func TestNodeGroupNewNodeGroupConstructor(t *testing.T) {
 		nodeCount: 5,
 		errors:    false,
 		expectNil: true,
+	}, {
+		description: "no error and expect notNil: min=max=2",
+		annotations: map[string]string{
+			nodeGroupMinSizeAnnotationKey: "2",
+			nodeGroupMaxSizeAnnotationKey: "2",
+		},
+		nodeCount: 1,
+		minSize:   2,
+		maxSize:   2,
+		replicas:  1,
+		errors:    false,
+		expectNil: false,
 	}}
 
 	newNodeGroup := func(controller *machineController, testConfig *testConfig) (*nodegroup, error) {
@@ -249,7 +261,7 @@ func TestNodeGroupIncreaseSizeErrors(t *testing.T) {
 			t.Fatalf("expected 1 nodegroup, got %d", l)
 		}
 
-		ng := nodegroups[0].(*nodegroup)
+		ng := nodegroups[0]
 		currReplicas, err := ng.TargetSize()
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -336,7 +348,7 @@ func TestNodeGroupIncreaseSize(t *testing.T) {
 			t.Fatalf("expected 1 nodegroup, got %d", l)
 		}
 
-		ng := nodegroups[0].(*nodegroup)
+		ng := nodegroups[0]
 		currReplicas, err := ng.TargetSize()
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -415,7 +427,7 @@ func TestNodeGroupDecreaseTargetSize(t *testing.T) {
 			t.Fatalf("expected 1 nodegroup, got %d", l)
 		}
 
-		ng := nodegroups[0].(*nodegroup)
+		ng := nodegroups[0]
 
 		gvr, err := ng.scalableResource.GroupVersionResource()
 		if err != nil {
@@ -584,7 +596,7 @@ func TestNodeGroupDecreaseSizeErrors(t *testing.T) {
 			t.Fatalf("expected 1 nodegroup, got %d", l)
 		}
 
-		ng := nodegroups[0].(*nodegroup)
+		ng := nodegroups[0]
 		currReplicas, err := ng.TargetSize()
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -664,7 +676,7 @@ func TestNodeGroupDeleteNodes(t *testing.T) {
 			t.Fatalf("expected 1 nodegroup, got %d", l)
 		}
 
-		ng := nodegroups[0].(*nodegroup)
+		ng := nodegroups[0]
 		nodeNames, err := ng.Nodes()
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -877,7 +889,7 @@ func TestNodeGroupDeleteNodesTwice(t *testing.T) {
 			t.Fatalf("expected 1 nodegroup, got %d", l)
 		}
 
-		ng := nodegroups[0].(*nodegroup)
+		ng := nodegroups[0]
 		nodeNames, err := ng.Nodes()
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -949,7 +961,7 @@ func TestNodeGroupDeleteNodesTwice(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		ng = nodegroups[0].(*nodegroup)
+		ng = nodegroups[0]
 
 		// Check the nodegroup is at the expected size
 		actualSize, err := ng.TargetSize()
@@ -1054,7 +1066,7 @@ func TestNodeGroupDeleteNodesSequential(t *testing.T) {
 			t.Fatalf("expected 1 nodegroup, got %d", l)
 		}
 
-		ng := nodegroups[0].(*nodegroup)
+		ng := nodegroups[0]
 		nodeNames, err := ng.Nodes()
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -1120,7 +1132,7 @@ func TestNodeGroupDeleteNodesSequential(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		ng = nodegroups[0].(*nodegroup)
+		ng = nodegroups[0]
 
 		// Check the nodegroup is at the expected size
 		actualSize, err := ng.scalableResource.Replicas()
