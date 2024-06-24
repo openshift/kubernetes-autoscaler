@@ -173,6 +173,13 @@ const (
 	// to a chunking list request.
 	RemainingItemCount featuregate.Feature = "RemainingItemCount"
 
+	// owner: @wojtek-t
+	// beta: v1.31
+	//
+	// Enables resilient watchcache initialization to avoid controlplane
+	// overload.
+	ResilientWatchCacheInitialization featuregate.Feature = "ResilientWatchCacheInitialization"
+
 	// owner: @serathius
 	// beta: v1.30
 	//
@@ -219,6 +226,24 @@ const (
 	// Resource create requests using generateName are retried automatically by the apiserver
 	// if the generated name conflicts with an existing resource name, up to a maximum number of 7 retries.
 	RetryGenerateName featuregate.Feature = "RetryGenerateName"
+
+	// owner: @cici37
+	// alpha: v1.30
+	//
+	// StrictCostEnforcementForVAP is used to apply strict CEL cost validation for ValidatingAdmissionPolicy.
+	// It will be set to off by default for certain time of period to prevent the impact on the existing users.
+	// It is strongly recommended to enable this feature gate as early as possible.
+	// The strict cost is specific for the extended libraries whose cost defined under k8s/apiserver/pkg/cel/library.
+	StrictCostEnforcementForVAP featuregate.Feature = "StrictCostEnforcementForVAP"
+
+	// owner: @cici37
+	// alpha: v1.30
+	//
+	// StrictCostEnforcementForWebhooks is used to apply strict CEL cost validation for matchConditions in Webhooks.
+	// It will be set to off by default for certain time of period to prevent the impact on the existing users.
+	// It is strongly recommended to enable this feature gate as early as possible.
+	// The strict cost is specific for the extended libraries whose cost defined under k8s/apiserver/pkg/cel/library.
+	StrictCostEnforcementForWebhooks featuregate.Feature = "StrictCostEnforcementForWebhooks"
 
 	// owner: @caesarxuchao @roycaihw
 	// alpha: v1.20
@@ -335,7 +360,9 @@ var defaultKubernetesFeatureGates = map[featuregate.Feature]featuregate.FeatureS
 
 	RemainingItemCount: {Default: true, PreRelease: featuregate.GA, LockToDefault: true}, // remove in 1.32
 
-	RetryGenerateName: {Default: false, PreRelease: featuregate.Alpha},
+	ResilientWatchCacheInitialization: {Default: true, PreRelease: featuregate.Beta},
+
+	RetryGenerateName: {Default: true, PreRelease: featuregate.Beta},
 
 	SeparateCacheWatchRPC: {Default: true, PreRelease: featuregate.Beta},
 
@@ -346,6 +373,10 @@ var defaultKubernetesFeatureGates = map[featuregate.Feature]featuregate.FeatureS
 	StorageVersionAPI: {Default: false, PreRelease: featuregate.Alpha},
 
 	StorageVersionHash: {Default: true, PreRelease: featuregate.Beta},
+
+	StrictCostEnforcementForVAP: {Default: false, PreRelease: featuregate.Beta},
+
+	StrictCostEnforcementForWebhooks: {Default: false, PreRelease: featuregate.Beta},
 
 	StructuredAuthenticationConfiguration: {Default: true, PreRelease: featuregate.Beta},
 

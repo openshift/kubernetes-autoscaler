@@ -614,13 +614,13 @@ func (c *machineController) findScalableResourceProviderIDs(scalableResource *un
 
 		klog.Warningf("Machine %q has no providerID", machine.GetName())
 
-		errorMessage, found, err := unstructured.NestedString(machine.UnstructuredContent(), "status", "errorMessage")
+		failureMessage, found, err := unstructured.NestedString(machine.UnstructuredContent(), "status", "failureMessage")
 		if err != nil {
 			return nil, err
 		}
 
 		if found {
-			klog.V(4).Infof("Status.ErrorMessage of machine %q is %q", machine.GetName(), errorMessage)
+			klog.V(4).Infof("Status.FailureMessage of machine %q is %q", machine.GetName(), failureMessage)
 			// Provide a fake ID to allow the autoscaler to track machines that will never
 			// become nodes and mark the nodegroup unhealthy after maxNodeProvisionTime.
 			// Fake ID needs to be recognised later and converted into a machine key.
@@ -672,13 +672,13 @@ func (c *machineController) findScalableResourceProviderIDs(scalableResource *un
 	return providerIDs, nil
 }
 
-func (c *machineController) nodeGroups() ([]*nodegroup, error) {
+func (c *machineController) nodeGroups() ([]cloudprovider.NodeGroup, error) {
 	scalableResources, err := c.listScalableResources()
 	if err != nil {
 		return nil, err
 	}
 
-	nodegroups := make([]*nodegroup, 0, len(scalableResources))
+	nodegroups := make([]cloudprovider.NodeGroup, 0, len(scalableResources))
 
 	for _, r := range scalableResources {
 		ng, err := newNodeGroupFromScalableResource(c, r)
@@ -688,6 +688,7 @@ func (c *machineController) nodeGroups() ([]*nodegroup, error) {
 
 		if ng != nil {
 			nodegroups = append(nodegroups, ng)
+			klog.V(4).Infof("discovered node group: %s", ng.Debug())
 		}
 	}
 	return nodegroups, nil

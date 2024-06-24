@@ -1007,27 +1007,45 @@ func (p *PriorityQueue) Update(logger klog.Logger, oldPod, newPod *v1.Pod) error
 	if usPodInfo := p.unschedulablePods.get(newPod); usPodInfo != nil {
 		pInfo := updatePod(usPodInfo, newPod)
 		p.updateNominatedPodUnlocked(logger, oldPod, pInfo.PodInfo)
+		gated := usPodInfo.Gated
+		if p.isSchedulingQueueHintEnabled {
+			// When unscheduled Pods are updated, we check with QueueingHint
+			// whether the update may make the pods schedulable.
+			// Plugins have to implement a QueueingHint for Pod/Update event
+			// if the rejection from them could be resolved by updating unscheduled Pods itself.
+			hint := p.isPodWorthRequeuing(logger, pInfo, UnscheduledPodUpdate, oldPod, newPod)
+			queue := p.requeuePodViaQueueingHint(logger, pInfo, hint, UnscheduledPodUpdate.Label)
+			if queue != unschedulablePods {
+				logger.V(5).Info("Pod moved to an internal scheduling queue because the Pod is updated", "pod", klog.KObj(newPod), "event", PodUpdate, "queue", queue)
+				p.unschedulablePods.delete(usPodInfo.Pod, gated)
+			}
+			if queue == activeQ {
+				p.cond.Broadcast()
+			}
+			return nil
+		}
 		if isPodUpdated(oldPod, newPod) {
-			gated := usPodInfo.Gated
+
 			if p.isPodBackingoff(usPodInfo) {
 				if err := p.podBackoffQ.Add(pInfo); err != nil {
 					return err
 				}
 				p.unschedulablePods.delete(usPodInfo.Pod, gated)
 				logger.V(5).Info("Pod moved to an internal scheduling queue", "pod", klog.KObj(pInfo.Pod), "event", PodUpdate, "queue", backoffQ)
-			} else {
-				if added, err := p.addToActiveQ(logger, pInfo); !added {
-					return err
-				}
-				p.unschedulablePods.delete(usPodInfo.Pod, gated)
-				logger.V(5).Info("Pod moved to an internal scheduling queue", "pod", klog.KObj(pInfo.Pod), "event", BackoffComplete, "queue", activeQ)
-				p.cond.Broadcast()
+				return nil
 			}
-		} else {
-			// Pod update didn't make it schedulable, keep it in the unschedulable queue.
-			p.unschedulablePods.addOrUpdate(pInfo)
+
+			if added, err := p.addToActiveQ(logger, pInfo); !added {
+				return err
+			}
+			p.unschedulablePods.delete(usPodInfo.Pod, gated)
+			logger.V(5).Info("Pod moved to an internal scheduling queue", "pod", klog.KObj(pInfo.Pod), "event", BackoffComplete, "queue", activeQ)
+			p.cond.Broadcast()
+			return nil
 		}
 
+		// Pod update didn't make it schedulable, keep it in the unschedulable queue.
+		p.unschedulablePods.addOrUpdate(pInfo)
 		return nil
 	}
 	// If pod is not in any of the queues, we put it in the active queue.
@@ -1175,6 +1193,11 @@ func (p *PriorityQueue) movePodsToActiveOrBackoffQueue(logger klog.Logger, podIn
 
 	activated := false
 	for _, pInfo := range podInfoList {
+		// Since there may be many gated pods and they will not move from the
+		// unschedulable pool, we skip calling the expensive isPodWorthRequeueing.
+		if pInfo.Gated {
+			continue
+		}
 		schedulingHint := p.isPodWorthRequeuing(logger, pInfo, event, oldObj, newObj)
 		if schedulingHint == queueSkip {
 			// QueueingHintFn determined that this Pod isn't worth putting to activeQ or backoffQ by this event.
