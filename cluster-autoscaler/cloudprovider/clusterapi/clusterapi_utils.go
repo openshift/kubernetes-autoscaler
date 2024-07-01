@@ -110,6 +110,8 @@ var (
 	nodeGroupMaxSizeAnnotationKey = getNodeGroupMaxSizeAnnotationKey()
 	zeroQuantity                  = resource.MustParse("0")
 
+	nodeGroupAutoscalingOptionsKeyPrefix = getNodeGroupAutoscalingOptionsKeyPrefix()
+
 	systemArchitecture *SystemArchitecture
 	once               sync.Once
 )
@@ -142,6 +144,21 @@ func minSize(annotations map[string]string) (int, error) {
 		return 0, errors.Wrapf(err, "%s", errInvalidMinAnnotation)
 	}
 	return i, nil
+}
+
+func autoscalingOptions(annotations map[string]string) map[string]string {
+	options := map[string]string{}
+	for k, v := range annotations {
+		if !strings.HasPrefix(k, nodeGroupAutoscalingOptionsKeyPrefix) {
+			continue
+		}
+		resourceName := strings.Split(k, nodeGroupAutoscalingOptionsKeyPrefix)
+		if len(resourceName) < 2 || resourceName[1] == "" || v == "" {
+			continue
+		}
+		options[resourceName[1]] = strings.ToLower(v)
+	}
+	return options
 }
 
 // maxSize returns the maximum value encoded in the annotations keyed
@@ -312,6 +329,13 @@ func getNodeGroupMinSizeAnnotationKey() string {
 // change the default group name by using the CAPI_GROUP environment variable.
 func getNodeGroupMaxSizeAnnotationKey() string {
 	key := fmt.Sprintf("%s/cluster-api-autoscaler-node-group-max-size", getCAPIGroup())
+	return key
+}
+
+// getNodeGroupAutoscalingOptionsKeyPrefix returns the key that is used for autoscaling options
+// per node group which override autoscaler default options.
+func getNodeGroupAutoscalingOptionsKeyPrefix() string {
+	key := fmt.Sprintf("%s/autoscaling-options-", getCAPIGroup())
 	return key
 }
 
