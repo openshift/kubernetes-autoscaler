@@ -25,15 +25,15 @@ import (
 	"testing"
 	"time"
 
-	"k8s.io/client-go/tools/cache"
-
+	"github.com/stretchr/testify/assert"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/util/wait"
-
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
+	"k8s.io/autoscaler/cluster-autoscaler/config"
 	gpuapis "k8s.io/autoscaler/cluster-autoscaler/utils/gpu"
+	"k8s.io/client-go/tools/cache"
 )
 
 const (
@@ -261,7 +261,7 @@ func TestNodeGroupIncreaseSizeErrors(t *testing.T) {
 			t.Fatalf("expected 1 nodegroup, got %d", l)
 		}
 
-		ng := nodegroups[0]
+		ng := nodegroups[0].(*nodegroup)
 		currReplicas, err := ng.TargetSize()
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -348,7 +348,7 @@ func TestNodeGroupIncreaseSize(t *testing.T) {
 			t.Fatalf("expected 1 nodegroup, got %d", l)
 		}
 
-		ng := nodegroups[0]
+		ng := nodegroups[0].(*nodegroup)
 		currReplicas, err := ng.TargetSize()
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -427,7 +427,7 @@ func TestNodeGroupDecreaseTargetSize(t *testing.T) {
 			t.Fatalf("expected 1 nodegroup, got %d", l)
 		}
 
-		ng := nodegroups[0]
+		ng := nodegroups[0].(*nodegroup)
 
 		gvr, err := ng.scalableResource.GroupVersionResource()
 		if err != nil {
@@ -596,7 +596,7 @@ func TestNodeGroupDecreaseSizeErrors(t *testing.T) {
 			t.Fatalf("expected 1 nodegroup, got %d", l)
 		}
 
-		ng := nodegroups[0]
+		ng := nodegroups[0].(*nodegroup)
 		currReplicas, err := ng.TargetSize()
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -676,7 +676,7 @@ func TestNodeGroupDeleteNodes(t *testing.T) {
 			t.Fatalf("expected 1 nodegroup, got %d", l)
 		}
 
-		ng := nodegroups[0]
+		ng := nodegroups[0].(*nodegroup)
 		nodeNames, err := ng.Nodes()
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -889,7 +889,7 @@ func TestNodeGroupDeleteNodesTwice(t *testing.T) {
 			t.Fatalf("expected 1 nodegroup, got %d", l)
 		}
 
-		ng := nodegroups[0]
+		ng := nodegroups[0].(*nodegroup)
 		nodeNames, err := ng.Nodes()
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -961,7 +961,7 @@ func TestNodeGroupDeleteNodesTwice(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		ng = nodegroups[0]
+		ng = nodegroups[0].(*nodegroup)
 
 		// Check the nodegroup is at the expected size
 		actualSize, err := ng.TargetSize()
@@ -1066,7 +1066,7 @@ func TestNodeGroupDeleteNodesSequential(t *testing.T) {
 			t.Fatalf("expected 1 nodegroup, got %d", l)
 		}
 
-		ng := nodegroups[0]
+		ng := nodegroups[0].(*nodegroup)
 		nodeNames, err := ng.Nodes()
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -1132,7 +1132,7 @@ func TestNodeGroupDeleteNodesSequential(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		ng = nodegroups[0]
+		ng = nodegroups[0].(*nodegroup)
 
 		// Check the nodegroup is at the expected size
 		actualSize, err := ng.scalableResource.Replicas()
@@ -1209,7 +1209,9 @@ func TestNodeGroupWithFailedMachine(t *testing.T) {
 		machine := testConfig.machines[3].DeepCopy()
 
 		unstructured.RemoveNestedField(machine.Object, "spec", "providerID")
-		unstructured.SetNestedField(machine.Object, "ErrorMessage", "status", "errorMessage")
+		if err := unstructured.SetNestedField(machine.Object, "FailureMessage", "status", "failureMessage"); err != nil {
+			t.Fatalf("unexpected error setting nested field: %v", err)
+		}
 
 		if err := updateResource(controller.managementClient, controller.machineInformer, controller.machineResource, machine); err != nil {
 			t.Fatalf("unexpected error updating machine, got %v", err)
@@ -1309,7 +1311,6 @@ func TestNodeGroupTemplateNodeInfo(t *testing.T) {
 
 	type testCaseConfig struct {
 		nodeLabels         map[string]string
-		nodegroupLabels    map[string]string
 		includeNodes       bool
 		expectedErr        error
 		expectedCapacity   map[corev1.ResourceName]int64
@@ -1330,7 +1331,7 @@ func TestNodeGroupTemplateNodeInfo(t *testing.T) {
 		{
 			name: "When the NodeGroup can scale from zero",
 			nodeGroupAnnotations: map[string]string{
-				memoryKey:   "2048",
+				memoryKey:   "2048Mi",
 				cpuKey:      "2",
 				gpuTypeKey:  gpuapis.ResourceNvidiaGPU,
 				gpuCountKey: "1",
@@ -1355,35 +1356,9 @@ func TestNodeGroupTemplateNodeInfo(t *testing.T) {
 			},
 		},
 		{
-			name: "When the NodeGroup can scale from zero and the nodegroup adds labels to the Node",
-			nodeGroupAnnotations: map[string]string{
-				memoryKey: "2048",
-				cpuKey:    "2",
-			},
-			config: testCaseConfig{
-				expectedErr: nil,
-				nodegroupLabels: map[string]string{
-					"nodeGroupLabel": "value",
-					"anotherLabel":   "anotherValue",
-				},
-				expectedCapacity: map[corev1.ResourceName]int64{
-					corev1.ResourceCPU:    2,
-					corev1.ResourceMemory: 2048 * 1024 * 1024,
-					corev1.ResourcePods:   110,
-				},
-				expectedNodeLabels: map[string]string{
-					"kubernetes.io/os":       "linux",
-					"kubernetes.io/arch":     "amd64",
-					"kubernetes.io/hostname": "random value",
-					"nodeGroupLabel":         "value",
-					"anotherLabel":           "anotherValue",
-				},
-			},
-		},
-		{
 			name: "When the NodeGroup can scale from zero, the label capacity annotations merge with the pre-built node labels and take precedence if the same key is defined in both",
 			nodeGroupAnnotations: map[string]string{
-				memoryKey:   "2048",
+				memoryKey:   "2048Mi",
 				cpuKey:      "2",
 				gpuTypeKey:  gpuapis.ResourceNvidiaGPU,
 				gpuCountKey: "1",
@@ -1391,11 +1366,6 @@ func TestNodeGroupTemplateNodeInfo(t *testing.T) {
 			},
 			config: testCaseConfig{
 				expectedErr: nil,
-				nodegroupLabels: map[string]string{
-					"nodeGroupLabel":  "value",
-					"anotherLabel":    "anotherValue",
-					"my-custom-label": "not-what-i-want",
-				},
 				expectedCapacity: map[corev1.ResourceName]int64{
 					corev1.ResourceCPU:        2,
 					corev1.ResourceMemory:     2048 * 1024 * 1024,
@@ -1403,11 +1373,9 @@ func TestNodeGroupTemplateNodeInfo(t *testing.T) {
 					gpuapis.ResourceNvidiaGPU: 1,
 				},
 				expectedNodeLabels: map[string]string{
-					"kubernetes.io/hostname": "random value",
 					"kubernetes.io/os":       "linux",
 					"kubernetes.io/arch":     "arm64",
-					"nodeGroupLabel":         "value",
-					"anotherLabel":           "anotherValue",
+					"kubernetes.io/hostname": "random value",
 					"my-custom-label":        "custom-value",
 				},
 			},
@@ -1415,7 +1383,7 @@ func TestNodeGroupTemplateNodeInfo(t *testing.T) {
 		{
 			name: "When the NodeGroup can scale from zero and the Node still exists, it includes the known node labels",
 			nodeGroupAnnotations: map[string]string{
-				memoryKey: "2048",
+				memoryKey: "2048Mi",
 				cpuKey:    "2",
 			},
 			config: testCaseConfig{
@@ -1442,12 +1410,6 @@ func TestNodeGroupTemplateNodeInfo(t *testing.T) {
 	}
 
 	test := func(t *testing.T, testConfig *testConfig, config testCaseConfig) {
-		if testConfig.machineDeployment != nil {
-			unstructured.SetNestedStringMap(testConfig.machineDeployment.Object, config.nodegroupLabels, "spec", "template", "spec", "metadata", "labels")
-		} else {
-			unstructured.SetNestedStringMap(testConfig.machineSet.Object, config.nodegroupLabels, "spec", "template", "spec", "metadata", "labels")
-		}
-
 		if config.includeNodes {
 			for i := range testConfig.nodes {
 				testConfig.nodes[i].SetLabels(config.nodeLabels)
@@ -1475,9 +1437,6 @@ func TestNodeGroupTemplateNodeInfo(t *testing.T) {
 				t.Fatalf("expected error: %v, but got: %v", config.expectedErr, err)
 			}
 			return
-		}
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
 		}
 
 		nodeAllocatable := nodeInfo.Node().Status.Allocatable
@@ -1547,4 +1506,128 @@ func TestNodeGroupTemplateNodeInfo(t *testing.T) {
 		})
 	}
 
+}
+
+func TestNodeGroupGetOptions(t *testing.T) {
+	enableScaleAnnotations := map[string]string{
+		nodeGroupMinSizeAnnotationKey: "1",
+		nodeGroupMaxSizeAnnotationKey: "10",
+	}
+
+	defaultOptions := config.NodeGroupAutoscalingOptions{
+		ScaleDownUtilizationThreshold:    0.1,
+		ScaleDownGpuUtilizationThreshold: 0.2,
+		ScaleDownUnneededTime:            time.Second,
+		ScaleDownUnreadyTime:             time.Minute,
+		MaxNodeProvisionTime:             15 * time.Minute,
+	}
+
+	cases := []struct {
+		desc     string
+		opts     map[string]string
+		expected *config.NodeGroupAutoscalingOptions
+	}{
+		{
+			desc:     "return provided defaults on empty metadata",
+			opts:     map[string]string{},
+			expected: &defaultOptions,
+		},
+		{
+			desc: "return specified options",
+			opts: map[string]string{
+				config.DefaultScaleDownGpuUtilizationThresholdKey: "0.6",
+				config.DefaultScaleDownUtilizationThresholdKey:    "0.7",
+				config.DefaultScaleDownUnneededTimeKey:            "1h",
+				config.DefaultScaleDownUnreadyTimeKey:             "30m",
+				config.DefaultMaxNodeProvisionTimeKey:             "60m",
+			},
+			expected: &config.NodeGroupAutoscalingOptions{
+				ScaleDownGpuUtilizationThreshold: 0.6,
+				ScaleDownUtilizationThreshold:    0.7,
+				ScaleDownUnneededTime:            time.Hour,
+				ScaleDownUnreadyTime:             30 * time.Minute,
+				MaxNodeProvisionTime:             60 * time.Minute,
+			},
+		},
+		{
+			desc: "complete partial options specs with defaults",
+			opts: map[string]string{
+				config.DefaultScaleDownGpuUtilizationThresholdKey: "0.1",
+				config.DefaultScaleDownUnneededTimeKey:            "1m",
+			},
+			expected: &config.NodeGroupAutoscalingOptions{
+				ScaleDownGpuUtilizationThreshold: 0.1,
+				ScaleDownUtilizationThreshold:    defaultOptions.ScaleDownUtilizationThreshold,
+				ScaleDownUnneededTime:            time.Minute,
+				ScaleDownUnreadyTime:             defaultOptions.ScaleDownUnreadyTime,
+				MaxNodeProvisionTime:             15 * time.Minute,
+			},
+		},
+		{
+			desc: "keep defaults on unparsable options values",
+			opts: map[string]string{
+				config.DefaultScaleDownGpuUtilizationThresholdKey: "foo",
+				config.DefaultScaleDownUnneededTimeKey:            "bar",
+			},
+			expected: &defaultOptions,
+		},
+	}
+
+	test := func(t *testing.T, testConfig *testConfig, expectedOptions *config.NodeGroupAutoscalingOptions) {
+		controller, stop := mustCreateTestController(t, testConfig)
+		defer stop()
+
+		nodegroups, err := controller.nodeGroups()
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if l := len(nodegroups); l != 1 {
+			t.Fatalf("expected 1 nodegroup, got %d", l)
+		}
+
+		ng := nodegroups[0]
+		opts, err := ng.GetOptions(defaultOptions)
+		assert.NoError(t, err)
+		assert.Equal(t, expectedOptions, opts)
+	}
+
+	for _, c := range cases {
+		t.Run(c.desc, func(t *testing.T) {
+			annotations := map[string]string{}
+			for k, v := range c.opts {
+				annotations[nodeGroupAutoscalingOptionsKeyPrefix+k] = v
+			}
+
+			t.Run("MachineSet", func(t *testing.T) {
+				test(
+					t,
+					createMachineSetTestConfig(
+						testNamespace,
+						RandomString(6),
+						RandomString(6),
+						10,
+						cloudprovider.JoinStringMaps(enableScaleAnnotations, annotations),
+						nil,
+					),
+					c.expected,
+				)
+			})
+
+			t.Run("MachineDeployment", func(t *testing.T) {
+				test(
+					t,
+					createMachineDeploymentTestConfig(
+						testNamespace,
+						RandomString(6),
+						RandomString(6),
+						10,
+						cloudprovider.JoinStringMaps(enableScaleAnnotations, annotations),
+						nil,
+					),
+					c.expected,
+				)
+			})
+		})
+	}
 }
