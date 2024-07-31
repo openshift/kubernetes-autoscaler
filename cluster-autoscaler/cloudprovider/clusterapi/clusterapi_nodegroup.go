@@ -176,6 +176,7 @@ func (ng *nodegroup) DeleteNodes(nodes []*corev1.Node) error {
 // nodegroup will not delete the existing nodes when there is an option
 // to just decrease the target. Implementation required.
 func (ng *nodegroup) DecreaseTargetSize(delta int) error {
+	klog.V(4).Infof("%s: DecreaseTargetSize called", ng.scalableResource.Name())
 	if delta >= 0 {
 		return fmt.Errorf("size decrease must be negative")
 	}
@@ -191,10 +192,11 @@ func (ng *nodegroup) DecreaseTargetSize(delta int) error {
 	}
 
 	if size+delta < len(nodes) {
-		return fmt.Errorf("attempt to delete existing nodes targetSize:%d delta:%d existingNodes: %d",
-			size, delta, len(nodes))
+		klog.V(4).Infof("%s: DecreaseTargetSize: attempt to delete existing nodes targetSize: %d, delta: %d, existingNodes: %d, skipping", ng.scalableResource.Name(), size, delta, len(nodes))
+		return nil
 	}
 
+	klog.V(4).Infof("%s: DecreaseTargetSize: scaling down: targetSize: %d, delta: %d, existingNodes: %d", ng.scalableResource.Name(), size, delta, len(nodes))
 	return ng.scalableResource.SetSize(size + delta)
 }
 
