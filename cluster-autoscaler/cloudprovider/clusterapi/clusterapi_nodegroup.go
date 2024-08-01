@@ -197,7 +197,7 @@ func (ng *nodegroup) DecreaseTargetSize(delta int) error {
 	}
 
 	if size+delta < len(nodes) {
-		klog.V(4).Infof("%s: DecreaseTargetSize: attempt to delete existing nodes targetSize: %d, delta: %d, existingNodes: %d, skipping", ng.scalableResource.Name(), size, delta, len(nodes))
+		klog.V(4).Infof("%s: DecreaseTargetSize: attempt to delete existing nodes, current replicas: %d, delta: %d, existing nodes: %d, skipping", ng.scalableResource.Name(), size, delta, len(nodes))
 		return nil
 	}
 
