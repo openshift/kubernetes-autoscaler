@@ -36,6 +36,8 @@ import (
 )
 
 const (
+	azurePrefix = "azure://"
+
 	vmTypeVMSS     = "vmss"
 	vmTypeStandard = "standard"
 
@@ -50,8 +52,19 @@ type AzureManager struct {
 	azClient *azClient
 	env      azure.Environment
 
-	azureCache           *azureCache
-	lastRefresh          time.Time
+	// azureCache is used for caching Azure resources.
+	// It keeps track of nodegroups and instances
+	// (and of which nodegroup instances belong to)
+	azureCache *azureCache
+	// lastRefresh is the time azureCache was last refreshed.
+	// Together with azureCache.refreshInterval is it used to decide whether
+	// it is time to refresh the cache from Azure resources.
+	//
+	// Cache invalidation can also be requested via invalidateCache()
+	// (used by both AzureManager and ScaleSet), which manipulates
+	// lastRefresh to force refresh on the next check.
+	lastRefresh time.Time
+
 	autoDiscoverySpecs   []labelAutoDiscoveryConfig
 	explicitlyConfigured map[string]bool
 }
@@ -93,7 +106,7 @@ func createAzureManagerInternal(configReader io.Reader, discoveryOpts cloudprovi
 	if cfg.VmssCacheTTL != 0 {
 		cacheTTL = time.Duration(cfg.VmssCacheTTL) * time.Second
 	}
-	cache, err := newAzureCache(azClient, cacheTTL, cfg.ResourceGroup, cfg.VMType, cfg.EnableDynamicInstanceList, cfg.Location)
+	cache, err := newAzureCache(azClient, cacheTTL, *cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -160,12 +173,16 @@ func (m *AzureManager) buildNodeGroupFromSpec(spec string) (cloudprovider.NodeGr
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse node group spec: %v", err)
 	}
+	vmsPoolSet := m.azureCache.getVMsPoolSet()
+	if _, ok := vmsPoolSet[s.Name]; ok {
+		return NewVMsPool(s, m), nil
+	}
 
 	switch m.config.VMType {
 	case vmTypeStandard:
 		return NewAgentPool(s, m)
 	case vmTypeVMSS:
-		return NewScaleSet(s, m, -1)
+		return NewScaleSet(s, m, -1, false)
 	default:
 		return nil, fmt.Errorf("vmtype %s not supported", m.config.VMType)
 	}
@@ -193,6 +210,8 @@ func (m *AzureManager) forceRefresh() error {
 	return nil
 }
 
+// invalidateCache forces cache reload on the next check
+// by manipulating lastRefresh timestamp
 func (m *AzureManager) invalidateCache() {
 	m.lastRefresh = time.Now().Add(-1 * m.azureCache.refreshInterval)
 	klog.V(2).Infof("Invalidated Azure cache")
@@ -304,12 +323,13 @@ func (m *AzureManager) getFilteredScaleSets(filter []labelAutoDiscoveryConfig) (
 
 	var nodeGroups []cloudprovider.NodeGroup
 	for _, scaleSet := range vmssList {
+		var cfgSizes *autoDiscoveryConfigSizes
 		if len(filter) > 0 {
 			if scaleSet.Tags == nil || len(scaleSet.Tags) == 0 {
 				continue
 			}
 
-			if !matchDiscoveryConfig(scaleSet.Tags, filter) {
+			if cfgSizes = matchDiscoveryConfig(scaleSet.Tags, filter); cfgSizes == nil {
 				continue
 			}
 		}
@@ -327,6 +347,8 @@ func (m *AzureManager) getFilteredScaleSets(filter []labelAutoDiscoveryConfig) (
 				klog.Warningf("ignoring vmss %q because of invalid minimum size specified for vmss: %s", *scaleSet.Name, err)
 				continue
 			}
+		} else if cfgSizes.Min >= 0 {
+			spec.MinSize = cfgSizes.Min
 		} else {
 			klog.Warningf("ignoring vmss %q because of no minimum size specified for vmss", *scaleSet.Name)
 			continue
@@ -342,12 +364,14 @@ func (m *AzureManager) getFilteredScaleSets(filter []labelAutoDiscoveryConfig) (
 				klog.Warningf("ignoring vmss %q because of invalid maximum size specified for vmss: %s", *scaleSet.Name, err)
 				continue
 			}
+		} else if cfgSizes.Max >= 0 {
+			spec.MaxSize = cfgSizes.Max
 		} else {
 			klog.Warningf("ignoring vmss %q because of no maximum size specified for vmss", *scaleSet.Name)
 			continue
 		}
 		if spec.MaxSize < spec.MinSize {
-			klog.Warningf("ignoring vmss %q because of maximum size must be greater than minimum size: max=%d < min=%d", *scaleSet.Name, spec.MaxSize, spec.MinSize)
+			klog.Warningf("ignoring vmss %q because of maximum size must be greater than or equal to minimum size: max=%d < min=%d", *scaleSet.Name, spec.MaxSize, spec.MinSize)
 			continue
 		}
 
@@ -356,7 +380,9 @@ func (m *AzureManager) getFilteredScaleSets(filter []labelAutoDiscoveryConfig) (
 			curSize = *scaleSet.Sku.Capacity
 		}
 
-		vmss, err := NewScaleSet(spec, m, curSize)
+		dedicatedHost := scaleSet.VirtualMachineScaleSetProperties != nil && scaleSet.VirtualMachineScaleSetProperties.HostGroup != nil
+
+		vmss, err := NewScaleSet(spec, m, curSize, dedicatedHost)
 		if err != nil {
 			klog.Warningf("ignoring vmss %q %s", *scaleSet.Name, err)
 			continue
