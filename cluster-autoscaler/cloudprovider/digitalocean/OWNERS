@@ -1,0 +1,9 @@
+approvers:
+- andrewsykim
+- MorrisLaw
+reviewers:
+- andrewsykim
+- MorrisLaw
+
+labels:
+- area/provider/digitalocean

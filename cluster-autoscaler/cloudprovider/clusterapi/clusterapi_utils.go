@@ -29,25 +29,17 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/autoscaler/cluster-autoscaler/utils/units"
 )
 
 const (
-	// the following constants are used for scaling from zero
-	// they are split into two sections to represent the values which have been historically used
-	// by openshift, and the values which have been added in the upstream.
-	// we are keeping the historical prefixes "machine.openshift.io" while we develop a solution
-	// which will allow the usage of either prefix, while preferring the upstream prefix "capacity.clsuter-autoscaler.kuberenetes.io".
-	cpuKey      = "machine.openshift.io/vCPU"
-	memoryKey   = "machine.openshift.io/memoryMb"
-	gpuCountKey = "machine.openshift.io/GPU"
-	maxPodsKey  = "machine.openshift.io/maxPods"
-	// the following constants keep the upstream prefix so that we do not introduce separate values into the openshift api
+	cpuKey          = "capacity.cluster-autoscaler.kubernetes.io/cpu"
+	memoryKey       = "capacity.cluster-autoscaler.kubernetes.io/memory"
 	diskCapacityKey = "capacity.cluster-autoscaler.kubernetes.io/ephemeral-disk"
+	gpuTypeKey      = "capacity.cluster-autoscaler.kubernetes.io/gpu-type"
+	gpuCountKey     = "capacity.cluster-autoscaler.kubernetes.io/gpu-count"
+	maxPodsKey      = "capacity.cluster-autoscaler.kubernetes.io/maxPods"
+	taintsKey       = "capacity.cluster-autoscaler.kubernetes.io/taints"
 	labelsKey       = "capacity.cluster-autoscaler.kubernetes.io/labels"
-	gpuTypeKey      = "capacity.cluster-autoscaler.kubernetes.io/gpu-type" // not currently used on OpenShift
-	taintsKey       = "capacity.cluster-autoscaler.kubernetes.io/taints"   // not currently used on OpenShift
-
 	// UnknownArch is used if the Architecture is Unknown
 	UnknownArch SystemArchitecture = ""
 	// Amd64 is used if the Architecture is x86_64
@@ -62,10 +54,6 @@ const (
 	DefaultArch = Amd64
 	// scaleUpFromZeroDefaultEnvVar is the name of the env var for the default architecture
 	scaleUpFromZeroDefaultArchEnvVar = "CAPI_SCALE_ZERO_DEFAULT_ARCH"
-
-	// TODO: update machine API operator to match CAPI annotation so this can be inferred dynamically by getMachineDeleteAnnotationKey i.e ${apigroup}/delete-machine
-	// https://github.com/openshift/machine-api-operator/blob/128c5c90918c009172c6d24d5715888e0e1d59e4/pkg/controller/machineset/delete_policy.go#L34
-	oldMachineDeleteAnnotationKey = "machine.openshift.io/cluster-api-delete-machine"
 )
 
 var (
@@ -102,6 +90,14 @@ var (
 	// by the CAPI_GROUP env variable, it is initialized here.
 	machineAnnotationKey = getMachineAnnotationKey()
 
+	// clusterNameAnnotationKey is the annotation used by cluster-api for annotating nodes
+	// with their cluster name.
+	clusterNameAnnotationKey = getClusterNameAnnotationKey()
+
+	// clusterNamespaceAnnotationKey is the annotation used by cluster-api for annotating nodes
+	// with their cluster namespace.
+	clusterNamespaceAnnotationKey = getClusterNamespaceAnnotationKey()
+
 	// nodeGroupMinSizeAnnotationKey and nodeGroupMaxSizeAnnotationKey are the keys
 	// used in MachineSet and MachineDeployment annotations to specify the limits
 	// for the node group. Because the keys can be affected by the CAPI_GROUP env
@@ -109,6 +105,8 @@ var (
 	nodeGroupMinSizeAnnotationKey = getNodeGroupMinSizeAnnotationKey()
 	nodeGroupMaxSizeAnnotationKey = getNodeGroupMaxSizeAnnotationKey()
 	zeroQuantity                  = resource.MustParse("0")
+
+	nodeGroupAutoscalingOptionsKeyPrefix = getNodeGroupAutoscalingOptionsKeyPrefix()
 
 	systemArchitecture *SystemArchitecture
 	once               sync.Once
@@ -142,6 +140,21 @@ func minSize(annotations map[string]string) (int, error) {
 		return 0, errors.Wrapf(err, "%s", errInvalidMinAnnotation)
 	}
 	return i, nil
+}
+
+func autoscalingOptions(annotations map[string]string) map[string]string {
+	options := map[string]string{}
+	for k, v := range annotations {
+		if !strings.HasPrefix(k, nodeGroupAutoscalingOptionsKeyPrefix) {
+			continue
+		}
+		resourceName := strings.Split(k, nodeGroupAutoscalingOptionsKeyPrefix)
+		if len(resourceName) < 2 || resourceName[1] == "" || v == "" {
+			continue
+		}
+		options[resourceName[1]] = strings.ToLower(v)
+	}
+	return options
 }
 
 // maxSize returns the maximum value encoded in the annotations keyed
@@ -243,18 +256,7 @@ func parseCPUCapacity(annotations map[string]string) (resource.Quantity, error) 
 }
 
 func parseMemoryCapacity(annotations map[string]string) (resource.Quantity, error) {
-	// The value for the memoryKey is expected to be an integer representing Mebibytes. e.g. "1024".
-	// https://www.iec.ch/si/binary.htm
-	val, exists := annotations[memoryKey]
-	if exists && val != "" {
-		valInt, err := strconv.ParseInt(val, 10, 0)
-		if err != nil {
-			return zeroQuantity.DeepCopy(), fmt.Errorf("value %q from annotation %q expected to be an integer: %v", val, memoryKey, err)
-		}
-		// Convert from Mebibytes to bytes
-		return *resource.NewQuantity(valInt*units.MiB, resource.DecimalSI), nil
-	}
-	return zeroQuantity.DeepCopy(), nil
+	return parseKey(annotations, memoryKey)
 }
 
 func parseEphemeralDiskCapacity(annotations map[string]string) (resource.Quantity, error) {
@@ -315,6 +317,13 @@ func getNodeGroupMaxSizeAnnotationKey() string {
 	return key
 }
 
+// getNodeGroupAutoscalingOptionsKeyPrefix returns the key that is used for autoscaling options
+// per node group which override autoscaler default options.
+func getNodeGroupAutoscalingOptionsKeyPrefix() string {
+	key := fmt.Sprintf("%s/autoscaling-options-", getCAPIGroup())
+	return key
+}
+
 // getMachineDeleteAnnotationKey returns the key that is used by cluster-api for marking
 // machines to be deleted. This function is needed because the user can change the default
 // group name by using the CAPI_GROUP environment variable.
@@ -328,6 +337,20 @@ func getMachineDeleteAnnotationKey() string {
 // the default group name by using the CAPI_GROUP environment variable.
 func getMachineAnnotationKey() string {
 	key := fmt.Sprintf("%s/machine", getCAPIGroup())
+	return key
+}
+
+// getClusterNameAnnotationKey returns the key that is used by cluster-api for annotating nodes
+// with their cluster name.
+func getClusterNameAnnotationKey() string {
+	key := fmt.Sprintf("%s/cluster-name", getCAPIGroup())
+	return key
+}
+
+// getClusterNamespaceAnnotationKey returns the key that is used by cluster-api for annotating nodes
+// with their cluster namespace.
+func getClusterNamespaceAnnotationKey() string {
+	key := fmt.Sprintf("%s/cluster-namespace", getCAPIGroup())
 	return key
 }
 
