@@ -54,7 +54,7 @@ type patchRecord struct {
 func patchVpaStatus(vpaClient vpa_api.VerticalPodAutoscalerInterface, vpaName string, patches []patchRecord) (result *vpa_types.VerticalPodAutoscaler, err error) {
 	bytes, err := json.Marshal(patches)
 	if err != nil {
-		klog.Errorf("Cannot marshal VPA status patches %+v. Reason: %+v", patches, err)
+		klog.ErrorS(err, "Cannot marshal VPA status patches", "patches", patches)
 		return
 	}
 
@@ -89,9 +89,9 @@ func NewVpasLister(vpaClient *vpa_clientset.Clientset, stopChannel <-chan struct
 	vpaLister := vpa_lister.NewVerticalPodAutoscalerLister(indexer)
 	go controller.Run(stopChannel)
 	if !cache.WaitForCacheSync(make(chan struct{}), controller.HasSynced) {
-		klog.Fatalf("Failed to sync VPA cache during initialization")
+		klog.ErrorS(nil, "Failed to sync VPA cache during initialization")
 	} else {
-		klog.Info("Initial VPA synced successfully")
+		klog.InfoS("Initial VPA synced successfully")
 	}
 	return vpaLister
 }
@@ -127,7 +127,7 @@ func stronger(a, b *vpa_types.VerticalPodAutoscaler) bool {
 }
 
 // GetControllingVPAForPod chooses the earliest created VPA from the input list that matches the given Pod.
-func GetControllingVPAForPod(pod *core.Pod, vpas []*VpaWithSelector, ctrlFetcher controllerfetcher.ControllerFetcher) *VpaWithSelector {
+func GetControllingVPAForPod(ctx context.Context, pod *core.Pod, vpas []*VpaWithSelector, ctrlFetcher controllerfetcher.ControllerFetcher) *VpaWithSelector {
 
 	var ownerRefrence *meta.OwnerReference
 	for i := range pod.OwnerReferences {
@@ -148,9 +148,9 @@ func GetControllingVPAForPod(pod *core.Pod, vpas []*VpaWithSelector, ctrlFetcher
 		},
 		ApiVersion: ownerRefrence.APIVersion,
 	}
-	parentController, err := ctrlFetcher.FindTopMostWellKnownOrScalable(k)
+	parentController, err := ctrlFetcher.FindTopMostWellKnownOrScalable(ctx, k)
 	if err != nil {
-		klog.Errorf("fail to get pod controller: pod=%s err=%s", klog.KObj(pod), err.Error())
+		klog.ErrorS(err, "Failed to get pod controller", "pod", klog.KObj(pod))
 		return nil
 	}
 	if parentController == nil {

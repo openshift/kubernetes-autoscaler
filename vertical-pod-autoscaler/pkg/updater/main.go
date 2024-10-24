@@ -45,6 +45,7 @@ import (
 	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/limitrange"
 	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/metrics"
 	metrics_updater "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/metrics/updater"
+	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/server"
 	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/status"
 	vpa_api_util "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/vpa"
 )
@@ -65,10 +66,11 @@ var (
 
 	evictionRateBurst = flag.Int("eviction-rate-burst", 1, `Burst of pods that can be evicted.`)
 
-	address      = flag.String("address", ":8943", "The address to expose Prometheus metrics.")
-	kubeconfig   = flag.String("kubeconfig", "", "Path to a kubeconfig. Only required if out-of-cluster.")
-	kubeApiQps   = flag.Float64("kube-api-qps", 5.0, `QPS limit when making requests to Kubernetes apiserver`)
-	kubeApiBurst = flag.Float64("kube-api-burst", 10.0, `QPS burst limit when making requests to Kubernetes apiserver`)
+	address         = flag.String("address", ":8943", "The address to expose Prometheus metrics.")
+	kubeconfig      = flag.String("kubeconfig", "", "Path to a kubeconfig. Only required if out-of-cluster.")
+	kubeApiQps      = flag.Float64("kube-api-qps", 5.0, `QPS limit when making requests to Kubernetes apiserver`)
+	kubeApiBurst    = flag.Float64("kube-api-burst", 10.0, `QPS burst limit when making requests to Kubernetes apiserver`)
+	enableProfiling = flag.Bool("profiling", false, "Is debug/pprof endpoint enabled")
 
 	useAdmissionControllerStatus = flag.Bool("use-admission-controller-status", true,
 		"If true, updater will only evict pods when admission controller status is valid.")
@@ -92,14 +94,15 @@ func main() {
 	componentbaseoptions.BindLeaderElectionFlags(&leaderElection, pflag.CommandLine)
 
 	kube_flag.InitFlags()
-	klog.V(1).Infof("Vertical Pod Autoscaler %s Updater", common.VerticalPodAutoscalerVersion)
+	klog.V(1).InfoS("Vertical Pod Autoscaler Updater", "version", common.VerticalPodAutoscalerVersion)
 
 	if len(*vpaObjectNamespace) > 0 && len(*ignoredVpaObjectNamespaces) > 0 {
 		klog.Fatalf("--vpa-object-namespace and --ignored-vpa-object-namespaces are mutually exclusive and can't be set together.")
 	}
 
 	healthCheck := metrics.NewHealthCheck(*updaterInterval * 5)
-	metrics.Initialize(*address, healthCheck)
+	server.Initialize(enableProfiling, healthCheck, address)
+
 	metrics_updater.Register()
 
 	if !leaderElection.LeaderElect {
@@ -174,7 +177,7 @@ func run(healthCheck *metrics.HealthCheck) {
 	var limitRangeCalculator limitrange.LimitRangeCalculator
 	limitRangeCalculator, err := limitrange.NewLimitsRangeCalculator(factory)
 	if err != nil {
-		klog.Errorf("Failed to create limitRangeCalculator, falling back to not checking limits. Error message: %s", err)
+		klog.ErrorS(err, "Failed to create limitRangeCalculator, falling back to not checking limits")
 		limitRangeCalculator = limitrange.NewNoopLimitsCalculator()
 	}
 	admissionControllerStatusNamespace := status.AdmissionControllerStatusNamespace

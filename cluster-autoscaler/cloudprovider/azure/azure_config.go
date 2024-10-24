@@ -86,7 +86,7 @@ type Config struct {
 	// EnableForceDelete defines whether to enable force deletion on the APIs
 	EnableForceDelete bool `json:"enableForceDelete,omitempty" yaml:"enableForceDelete,omitempty"`
 
-	// EnableDynamicInstanceList defines whether to enable dynamic instance workflow for instance information check
+	// (DEPRECATED, DO NOT USE) EnableDynamicInstanceList defines whether to enable dynamic instance workflow for instance information check
 	EnableDynamicInstanceList bool `json:"enableDynamicInstanceList,omitempty" yaml:"enableDynamicInstanceList,omitempty"`
 
 	// (DEPRECATED, DO NOT USE) EnableDetailedCSEMessage defines whether to emit error messages in the CSE error body info
@@ -248,6 +248,9 @@ func BuildAzureConfig(configReader io.Reader) (*Config, error) {
 		return nil, err
 	}
 	if _, err = assignBoolFromEnvIfExists(&cfg.EnableDynamicInstanceList, "AZURE_ENABLE_DYNAMIC_INSTANCE_LIST"); err != nil {
+		return nil, err
+	}
+	if _, err = assignBoolFromEnvIfExists(&cfg.EnableDetailedCSEMessage, "AZURE_ENABLE_DETAILED_CSE_MESSAGE"); err != nil {
 		return nil, err
 	}
 	if _, err = assignBoolFromEnvIfExists(&cfg.EnableVmssFlexNodes, "AZURE_ENABLE_VMSS_FLEX_NODES"); err != nil {

@@ -284,8 +284,6 @@ type AutoscalingOptions struct {
 	MinReplicaCount int
 	// NodeDeleteDelayAfterTaint is the duration to wait before deleting a node after tainting it
 	NodeDeleteDelayAfterTaint time.Duration
-	// ParallelDrain is whether CA can drain nodes in parallel.
-	ParallelDrain bool
 	// NodeGroupSetRatio is a collection of ratios used by CA used to make scaling decisions.
 	NodeGroupSetRatios NodeGroupDifferenceRatios
 	// dynamicNodeDeleteDelayAfterTaintEnabled is used to enable/disable dynamic adjustment of NodeDeleteDelayAfterTaint
@@ -297,6 +295,12 @@ type AutoscalingOptions struct {
 	ProvisioningRequestEnabled bool
 	// AsyncNodeGroupsEnabled tells if CA creates/deletes node groups asynchronously.
 	AsyncNodeGroupsEnabled bool
+	// ProvisioningRequestInitialBackoffTime is the initial time for ProvisioningRequest be considered by CA after failed ScaleUp request.
+	ProvisioningRequestInitialBackoffTime time.Duration
+	// ProvisioningRequestMaxBackoffTime is the max time for ProvisioningRequest be considered by CA after failed ScaleUp request.
+	ProvisioningRequestMaxBackoffTime time.Duration
+	// ProvisioningRequestMaxCacheSize is the max size for ProvisioningRequest cache that is stored for retry backoff.
+	ProvisioningRequestMaxBackoffCacheSize int
 }
 
 // KubeClientOptions specify options for kube client
