@@ -20,6 +20,8 @@ import (
 	"fmt"
 	"math/rand"
 
+	"k8s.io/klog/v2"
+
 	"github.com/pkg/errors"
 
 	corev1 "k8s.io/api/core/v1"
