@@ -456,23 +456,43 @@ func TestParseCPUCapacity(t *testing.T) {
 		expectedQuantity: zeroQuantity.DeepCopy(),
 		expectedError:    false,
 	}, {
-		description:      "bad quantity",
+		description:      "upstream bad quantity",
 		annotations:      map[string]string{cpuKey: "not-a-quantity"},
 		expectedQuantity: zeroQuantity.DeepCopy(),
 		expectedError:    true,
 	}, {
-		description:      "valid quantity with units",
+		description:      "upstream valid quantity with units",
 		annotations:      map[string]string{cpuKey: "123m"},
 		expectedError:    false,
 		expectedQuantity: resource.MustParse("123m"),
 	}, {
-		description:      "valid quantity without units",
+		description:      "upstream valid quantity without units",
 		annotations:      map[string]string{cpuKey: "1"},
 		expectedError:    false,
 		expectedQuantity: resource.MustParse("1"),
 	}, {
-		description:      "valid fractional quantity without units",
+		description:      "upstream valid fractional quantity without units",
 		annotations:      map[string]string{cpuKey: "0.1"},
+		expectedError:    false,
+		expectedQuantity: resource.MustParse("0.1"),
+	}, {
+		description:      "downstream bad quantity",
+		annotations:      map[string]string{deprecatedCpuKey: "not-a-quantity"},
+		expectedQuantity: zeroQuantity.DeepCopy(),
+		expectedError:    true,
+	}, {
+		description:      "downstream valid quantity with units",
+		annotations:      map[string]string{deprecatedCpuKey: "123m"},
+		expectedError:    false,
+		expectedQuantity: resource.MustParse("123m"),
+	}, {
+		description:      "downstream valid quantity without units",
+		annotations:      map[string]string{deprecatedCpuKey: "1"},
+		expectedError:    false,
+		expectedQuantity: resource.MustParse("1"),
+	}, {
+		description:      "downstream valid fractional quantity without units",
+		annotations:      map[string]string{deprecatedCpuKey: "0.1"},
 		expectedError:    false,
 		expectedQuantity: resource.MustParse("0.1"),
 	}} {
@@ -504,23 +524,43 @@ func TestParseMemoryCapacity(t *testing.T) {
 		expectedQuantity: zeroQuantity.DeepCopy(),
 		expectedError:    false,
 	}, {
-		description:      "bad quantity",
+		description:      "upstream bad quantity",
 		annotations:      map[string]string{memoryKey: "not-a-quantity"},
 		expectedQuantity: zeroQuantity.DeepCopy(),
 		expectedError:    true,
 	}, {
-		description:      "quantity as with no unit type",
+		description:      "upstream quantity as with no unit type",
 		annotations:      map[string]string{memoryKey: "1024"},
-		expectedQuantity: *resource.NewQuantity(1024*units.MiB, resource.DecimalSI),
+		expectedQuantity: resource.MustParse("1024"),
 		expectedError:    false,
 	}, {
-		description:      "quantity with unit type (Mi)",
+		description:      "upstream quantity with unit type (Mi)",
 		annotations:      map[string]string{memoryKey: "456Mi"},
+		expectedQuantity: resource.MustParse("456Mi"),
+		expectedError:    false,
+	}, {
+		description:      "upstream quantity with unit type (Gi)",
+		annotations:      map[string]string{memoryKey: "8Gi"},
+		expectedQuantity: resource.MustParse("8Gi"),
+		expectedError:    false,
+	}, {
+		description:      "downstream bad quantity",
+		annotations:      map[string]string{deprecatedMemoryKey: "not-a-quantity"},
 		expectedQuantity: zeroQuantity.DeepCopy(),
 		expectedError:    true,
 	}, {
-		description:      "quantity with unit type (Gi)",
-		annotations:      map[string]string{memoryKey: "8Gi"},
+		description:      "downstream quantity as with no unit type",
+		annotations:      map[string]string{deprecatedMemoryKey: "1024"},
+		expectedQuantity: *resource.NewQuantity(1024*units.MiB, resource.DecimalSI),
+		expectedError:    false,
+	}, {
+		description:      "downstream quantity with unit type (Mi)",
+		annotations:      map[string]string{deprecatedMemoryKey: "456Mi"},
+		expectedQuantity: zeroQuantity.DeepCopy(),
+		expectedError:    true,
+	}, {
+		description:      "downstream quantity with unit type (Gi)",
+		annotations:      map[string]string{deprecatedMemoryKey: "8Gi"},
 		expectedQuantity: zeroQuantity.DeepCopy(),
 		expectedError:    true,
 	}} {
@@ -552,18 +592,33 @@ func TestParseGPUCapacity(t *testing.T) {
 		expectedQuantity: zeroQuantity.DeepCopy(),
 		expectedError:    false,
 	}, {
-		description:      "bad quantity",
+		description:      "upstream bad quantity",
 		annotations:      map[string]string{gpuCountKey: "not-a-quantity"},
 		expectedQuantity: zeroQuantity.DeepCopy(),
 		expectedError:    true,
 	}, {
-		description:      "valid quantity",
+		description:      "upstream valid quantity",
 		annotations:      map[string]string{gpuCountKey: "13"},
 		expectedError:    false,
 		expectedQuantity: resource.MustParse("13"),
 	}, {
-		description:      "valid quantity, bad unit type",
+		description:      "upstream valid quantity, bad unit type",
 		annotations:      map[string]string{gpuCountKey: "13Mi"},
+		expectedQuantity: zeroQuantity.DeepCopy(),
+		expectedError:    true,
+	}, {
+		description:      "downstream bad quantity",
+		annotations:      map[string]string{deprecatedGpuCountKey: "not-a-quantity"},
+		expectedQuantity: zeroQuantity.DeepCopy(),
+		expectedError:    true,
+	}, {
+		description:      "downstream valid quantity",
+		annotations:      map[string]string{deprecatedGpuCountKey: "13"},
+		expectedError:    false,
+		expectedQuantity: resource.MustParse("13"),
+	}, {
+		description:      "downstream valid quantity, bad unit type",
+		annotations:      map[string]string{deprecatedGpuCountKey: "13Mi"},
 		expectedQuantity: zeroQuantity.DeepCopy(),
 		expectedError:    true,
 	}} {
@@ -595,18 +650,33 @@ func TestParseMaxPodsCapacity(t *testing.T) {
 		expectedQuantity: zeroQuantity.DeepCopy(),
 		expectedError:    false,
 	}, {
-		description:      "bad quantity",
+		description:      "upstream bad quantity",
 		annotations:      map[string]string{maxPodsKey: "not-a-quantity"},
 		expectedQuantity: zeroQuantity.DeepCopy(),
 		expectedError:    true,
 	}, {
-		description:      "valid quantity",
+		description:      "upstream valid quantity",
 		annotations:      map[string]string{maxPodsKey: "13"},
 		expectedError:    false,
 		expectedQuantity: resource.MustParse("13"),
 	}, {
-		description:      "valid quantity, bad unit type",
+		description:      "upstream valid quantity, bad unit type",
 		annotations:      map[string]string{maxPodsKey: "13Mi"},
+		expectedQuantity: zeroQuantity.DeepCopy(),
+		expectedError:    true,
+	}, {
+		description:      "downstream bad quantity",
+		annotations:      map[string]string{deprecatedMaxPodsKey: "not-a-quantity"},
+		expectedQuantity: zeroQuantity.DeepCopy(),
+		expectedError:    true,
+	}, {
+		description:      "downstream valid quantity",
+		annotations:      map[string]string{deprecatedMaxPodsKey: "13"},
+		expectedError:    false,
+		expectedQuantity: resource.MustParse("13"),
+	}, {
+		description:      "downstream valid quantity, bad unit type",
+		annotations:      map[string]string{deprecatedMaxPodsKey: "13Mi"},
 		expectedQuantity: zeroQuantity.DeepCopy(),
 		expectedError:    true,
 	}} {
