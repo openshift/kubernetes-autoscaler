@@ -385,6 +385,7 @@ func TestSetSizeAndReplicas(t *testing.T) {
 	})
 }
 
+// This test now tests both the upstream and downstream annotation values while we support them both.
 func TestAnnotations(t *testing.T) {
 	cpuQuantity := resource.MustParse("2")
 	memQuantity := resource.MustParse("1024Mi")
