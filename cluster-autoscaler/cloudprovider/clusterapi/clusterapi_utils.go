@@ -38,16 +38,21 @@ const (
 	// by openshift, and the values which have been added in the upstream.
 	// we are keeping the historical prefixes "machine.openshift.io" while we develop a solution
 	// which will allow the usage of either prefix, while preferring the upstream prefix "capacity.clsuter-autoscaler.kuberenetes.io".
-	cpuKey      = "machine.openshift.io/vCPU"
-	memoryKey   = "machine.openshift.io/memoryMb"
-	gpuCountKey = "machine.openshift.io/GPU"
-	maxPodsKey  = "machine.openshift.io/maxPods"
+	deprecatedCpuKey      = "machine.openshift.io/vCPU"
+	deprecatedMemoryKey   = "machine.openshift.io/memoryMb"
+	deprecatedGpuCountKey = "machine.openshift.io/GPU"
+	deprecatedMaxPodsKey  = "machine.openshift.io/maxPods"
+	// Upstream preferred annotations for scaling from zero.
+	cpuKey      = "capacity.cluster-autoscaler.kubernetes.io/cpu"
+	memoryKey   = "capacity.cluster-autoscaler.kubernetes.io/memory"
+	gpuCountKey = "capacity.cluster-autoscaler.kubernetes.io/gpu-count"
+	gpuTypeKey  = "capacity.cluster-autoscaler.kubernetes.io/gpu-type"
+	maxPodsKey  = "capacity.cluster-autoscaler.kubernetes.io/maxPods"
 	// the following constants keep the upstream prefix so that we do not introduce separate values into the openshift api
 	diskCapacityKey = "capacity.cluster-autoscaler.kubernetes.io/ephemeral-disk"
 	labelsKey       = "capacity.cluster-autoscaler.kubernetes.io/labels"
 	draDriverKey    = "capacity.cluster-autoscaler.kubernetes.io/dra-driver"
-	gpuTypeKey      = "capacity.cluster-autoscaler.kubernetes.io/gpu-type" // not currently used on OpenShift
-	taintsKey       = "capacity.cluster-autoscaler.kubernetes.io/taints"   // not currently used on OpenShift
+	taintsKey       = "capacity.cluster-autoscaler.kubernetes.io/taints" // not currently used on OpenShift
 
 	// UnknownArch is used if the Architecture is Unknown
 	UnknownArch SystemArchitecture = ""
@@ -252,6 +257,7 @@ func parseKey(annotations map[string]string, key string) (resource.Quantity, err
 	if val, exists := annotations[key]; exists && val != "" {
 		return resource.ParseQuantity(val)
 	}
+
 	return zeroQuantity.DeepCopy(), nil
 }
 
@@ -267,21 +273,38 @@ func parseIntKey(annotations map[string]string, key string) (resource.Quantity, 
 }
 
 func parseCPUCapacity(annotations map[string]string) (resource.Quantity, error) {
-	return parseKey(annotations, cpuKey)
+	// Checking both sets of annotations. If the upstream annotation doesn't exist,
+	// get the value of the deprecated one. If neither exist, return nil.
+	if val, err := parseKey(annotations, cpuKey); val != zeroQuantity && err == nil {
+		return val, nil
+	} else if err != nil {
+		return zeroQuantity.DeepCopy(), fmt.Errorf("value %v from annotation %q is unexpected: %v", val, cpuKey, err)
+	}
+	// If we don't find the old annotation, parseKey returns zeroQuantity.
+	return parseKey(annotations, deprecatedCpuKey)
 }
 
 func parseMemoryCapacity(annotations map[string]string) (resource.Quantity, error) {
-	// The value for the memoryKey is expected to be an integer representing Mebibytes. e.g. "1024".
+	// The value for the deprecatedMemoryKey is expected to be an integer representing Mebibytes. e.g. "1024".
 	// https://www.iec.ch/si/binary.htm
-	val, exists := annotations[memoryKey]
-	if exists && val != "" {
+	//
+	// Checking both sets of annotations. If the upstream annotation doesn't exist,
+	// get the value of the deprecated one. If neither exist, return nil.
+	if val, err := parseKey(annotations, memoryKey); val != zeroQuantity && err == nil {
+		return val, nil
+	} else if err != nil {
+		return zeroQuantity.DeepCopy(), fmt.Errorf("value %v from annotation %q expected to be an integer: %v", val, memoryKey, err)
+	}
+
+	if val, found := annotations[deprecatedMemoryKey]; found && val != "" {
 		valInt, err := strconv.ParseInt(val, 10, 0)
 		if err != nil {
-			return zeroQuantity.DeepCopy(), fmt.Errorf("value %q from annotation %q expected to be an integer: %v", val, memoryKey, err)
+			return zeroQuantity.DeepCopy(), fmt.Errorf("value %q from annotation %q expected to be an integer: %v", val, deprecatedMemoryKey, err)
 		}
 		// Convert from Mebibytes to bytes
 		return *resource.NewQuantity(valInt*units.MiB, resource.DecimalSI), nil
 	}
+
 	return zeroQuantity.DeepCopy(), nil
 }
 
@@ -290,7 +313,16 @@ func parseEphemeralDiskCapacity(annotations map[string]string) (resource.Quantit
 }
 
 func parseGPUCount(annotations map[string]string) (resource.Quantity, error) {
-	return parseIntKey(annotations, gpuCountKey)
+	// Checking both sets of annotations. If the upstream annotation doesn't exist,
+	// get the value of the deprecated one. If neither exist, return nil.
+	if val, err := parseIntKey(annotations, gpuCountKey); val != zeroQuantity && err == nil {
+		return val, nil
+	} else if err != nil {
+		return zeroQuantity.DeepCopy(), fmt.Errorf("value %v from annotation %q is unexpected: %v", val, gpuCountKey, err)
+	}
+
+	// If we don't find the old annotation, parseIntKey returns zeroQuantity.
+	return parseIntKey(annotations, deprecatedGpuCountKey)
 }
 
 // The GPU type is not currently considered by the autoscaler when planning
@@ -305,7 +337,16 @@ func parseGPUType(annotations map[string]string) string {
 }
 
 func parseMaxPodsCapacity(annotations map[string]string) (resource.Quantity, error) {
-	return parseIntKey(annotations, maxPodsKey)
+	// Checking both sets of annotations. If the upstream annotation doesn't exist,
+	// get the value of the deprecated one. If neither exist, return nil.
+	if val, err := parseIntKey(annotations, maxPodsKey); val != zeroQuantity && err == nil {
+		return val, nil
+	} else if err != nil {
+		return zeroQuantity.DeepCopy(), fmt.Errorf("value %v from annotation %q expected to be an integer: %v", val, maxPodsKey, err)
+	}
+
+	// If we don't find the old annotation, parseIntKey returns zeroQuantity.
+	return parseIntKey(annotations, deprecatedMaxPodsKey)
 }
 
 func parseDRADriver(annotations map[string]string) string {
