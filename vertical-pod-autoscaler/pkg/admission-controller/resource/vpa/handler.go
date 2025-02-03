@@ -17,6 +17,7 @@ limitations under the License.
 package vpa
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 
@@ -25,10 +26,11 @@ import (
 	apires "k8s.io/apimachinery/pkg/api/resource"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/klog/v2"
+
 	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/admission-controller/resource"
 	vpa_types "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/apis/autoscaling.k8s.io/v1"
 	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/metrics/admission"
-	"k8s.io/klog/v2"
 )
 
 var (
@@ -71,7 +73,7 @@ func (h *resourceHandler) DisallowIncorrectObjects() bool {
 }
 
 // GetPatches builds patches for VPA in given admission request.
-func (h *resourceHandler) GetPatches(ar *v1.AdmissionRequest) ([]resource.PatchRecord, error) {
+func (h *resourceHandler) GetPatches(_ context.Context, ar *v1.AdmissionRequest) ([]resource.PatchRecord, error) {
 	raw, isCreate := ar.Object.Raw, ar.Operation == v1.Create
 	vpa, err := parseVPA(raw)
 	if err != nil {
@@ -88,7 +90,7 @@ func (h *resourceHandler) GetPatches(ar *v1.AdmissionRequest) ([]resource.PatchR
 		return nil, err
 	}
 
-	klog.V(4).Infof("Processing vpa: %v", vpa)
+	klog.V(4).InfoS("Processing vpa", "vpa", vpa)
 	patches := []resource.PatchRecord{}
 	if vpa.Spec.UpdatePolicy == nil {
 		// Sets the default updatePolicy.

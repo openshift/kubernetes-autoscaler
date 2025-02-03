@@ -21,8 +21,9 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
-	metrics_quality "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/metrics/quality"
 	"k8s.io/klog/v2"
+
+	metrics_quality "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/metrics/quality"
 )
 
 // ContainerUsageSample is a measure of resource usage of a container over some
@@ -115,7 +116,7 @@ func (container *ContainerState) observeQualityMetrics(usage ResourceAmount, isO
 	case corev1.ResourceMemory:
 		recommendationValue = float64(recommendation.Value())
 	default:
-		klog.Warningf("Unknown resource: %v", resource)
+		klog.V(0).InfoS("Unknown resource", "resource", resource)
 		return
 	}
 	metrics_quality.ObserveQualityMetrics(usageValue, recommendationValue, isOOM, resource, updateMode)

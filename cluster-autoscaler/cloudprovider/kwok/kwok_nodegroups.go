@@ -25,8 +25,8 @@ import (
 	"k8s.io/apimachinery/pkg/util/rand"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	"k8s.io/autoscaler/cluster-autoscaler/config"
+	"k8s.io/autoscaler/cluster-autoscaler/simulator/framework"
 	klog "k8s.io/klog/v2"
-	schedulerframework "k8s.io/kubernetes/pkg/scheduler/framework"
 )
 
 var (
@@ -76,6 +76,10 @@ func (nodeGroup *NodeGroup) IncreaseSize(delta int) error {
 	for i := 0; i < delta; i++ {
 		node := schedNode.Node()
 		node.Name = fmt.Sprintf("%s-%s", nodeGroup.name, rand.String(5))
+		if node.Annotations == nil {
+			node.Annotations = map[string]string{}
+		}
+		node.Annotations["metrics.k8s.io/resource-metrics-path"] = fmt.Sprintf("/metrics/nodes/%s/metrics/resource", node.Name)
 		node.Spec.ProviderID = getProviderID(node.Name)
 		_, err := nodeGroup.kubeClient.CoreV1().Nodes().Create(context.Background(), node, v1.CreateOptions{})
 		if err != nil {
@@ -118,6 +122,11 @@ func (nodeGroup *NodeGroup) DeleteNodes(nodes []*apiv1.Node) error {
 		nodeGroup.targetSize -= 1
 	}
 	return nil
+}
+
+// ForceDeleteNodes deletes nodes from the group regardless of constraints.
+func (nodeGroup *NodeGroup) ForceDeleteNodes(nodes []*apiv1.Node) error {
+	return cloudprovider.ErrNotImplemented
 }
 
 // DecreaseTargetSize decreases the target size of the node group. This function
@@ -186,10 +195,8 @@ func (nodeGroup *NodeGroup) Nodes() ([]cloudprovider.Instance, error) {
 }
 
 // TemplateNodeInfo returns a node template for this node group.
-func (nodeGroup *NodeGroup) TemplateNodeInfo() (*schedulerframework.NodeInfo, error) {
-	nodeInfo := schedulerframework.NewNodeInfo(cloudprovider.BuildKubeProxy(nodeGroup.Id()))
-	nodeInfo.SetNode(nodeGroup.nodeTemplate)
-
+func (nodeGroup *NodeGroup) TemplateNodeInfo() (*framework.NodeInfo, error) {
+	nodeInfo := framework.NewNodeInfo(nodeGroup.nodeTemplate, nil, &framework.PodInfo{Pod: cloudprovider.BuildKubeProxy(nodeGroup.Id())})
 	return nodeInfo, nil
 }
 

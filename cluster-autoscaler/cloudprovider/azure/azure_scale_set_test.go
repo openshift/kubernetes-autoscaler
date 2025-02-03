@@ -62,6 +62,19 @@ func newTestScaleSetMinSizeZero(manager *AzureManager, name string) *ScaleSet {
 	}
 }
 
+func newTestScaleSetWithFastDelete(manager *AzureManager, name string) *ScaleSet {
+	return &ScaleSet{
+		azureRef: azureRef{
+			Name: name,
+		},
+		manager:                              manager,
+		minSize:                              1,
+		maxSize:                              5,
+		enableForceDelete:                    manager.config.EnableForceDelete,
+		enableFastDeleteOnFailedProvisioning: true,
+	}
+}
+
 func newTestVMSSList(cap int64, name, loc string, orchmode compute.OrchestrationMode) []compute.VirtualMachineScaleSet {
 	return []compute.VirtualMachineScaleSet{
 		{
@@ -360,6 +373,95 @@ func TestIncreaseSizeOnVMProvisioningFailed(t *testing.T) {
 		expectErrorInfoPopulated bool
 	}{
 		"out of resources when no power state exists": {
+			expectErrorInfoPopulated: false,
+		},
+		"out of resources when VM is stopped": {
+			statuses:                 []compute.InstanceViewStatus{{Code: to.StringPtr(vmPowerStateStopped)}},
+			expectErrorInfoPopulated: false,
+		},
+		"out of resources when VM reports invalid power state": {
+			statuses:                 []compute.InstanceViewStatus{{Code: to.StringPtr("PowerState/invalid")}},
+			expectErrorInfoPopulated: false,
+		},
+		"instance running when power state is running": {
+			expectInstanceRunning:    true,
+			statuses:                 []compute.InstanceViewStatus{{Code: to.StringPtr(vmPowerStateRunning)}},
+			expectErrorInfoPopulated: false,
+		},
+		"instance running if instance view cannot be retrieved": {
+			expectInstanceRunning:    true,
+			isMissingInstanceView:    true,
+			expectErrorInfoPopulated: false,
+		},
+	}
+	for testName, testCase := range testCases {
+		t.Run(testName, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			manager := newTestAzureManager(t)
+			vmssName := "vmss-failed-upscale"
+
+			expectedScaleSets := newTestVMSSList(3, "vmss-failed-upscale", "eastus", compute.Uniform)
+			expectedVMSSVMs := newTestVMSSVMList(3)
+			// The failed state is important line of code here
+			expectedVMs := newTestVMList(3)
+			expectedVMSSVMs[2].ProvisioningState = to.StringPtr(provisioningStateFailed)
+			if !testCase.isMissingInstanceView {
+				expectedVMSSVMs[2].InstanceView = &compute.VirtualMachineScaleSetVMInstanceView{Statuses: &testCase.statuses}
+			}
+
+			mockVMSSClient := mockvmssclient.NewMockInterface(ctrl)
+			mockVMSSClient.EXPECT().List(gomock.Any(), manager.config.ResourceGroup).Return(expectedScaleSets, nil)
+			mockVMSSClient.EXPECT().CreateOrUpdateAsync(gomock.Any(), manager.config.ResourceGroup, vmssName, gomock.Any()).Return(nil, nil)
+			mockVMSSClient.EXPECT().WaitForCreateOrUpdateResult(gomock.Any(), gomock.Any(), manager.config.ResourceGroup).Return(&http.Response{StatusCode: http.StatusOK}, nil).AnyTimes()
+			manager.azClient.virtualMachineScaleSetsClient = mockVMSSClient
+			mockVMSSVMClient := mockvmssvmclient.NewMockInterface(ctrl)
+			mockVMSSVMClient.EXPECT().List(gomock.Any(), manager.config.ResourceGroup, "vmss-failed-upscale", gomock.Any()).Return(expectedVMSSVMs, nil).AnyTimes()
+			manager.azClient.virtualMachineScaleSetVMsClient = mockVMSSVMClient
+
+			mockVMClient := mockvmclient.NewMockInterface(ctrl)
+			mockVMClient.EXPECT().List(gomock.Any(), manager.config.ResourceGroup).Return(expectedVMs, nil).AnyTimes()
+			manager.azClient.virtualMachinesClient = mockVMClient
+
+			manager.explicitlyConfigured["vmss-failed-upscale"] = true
+			registered := manager.RegisterNodeGroup(newTestScaleSet(manager, vmssName))
+			assert.True(t, registered)
+			manager.Refresh()
+
+			provider, err := BuildAzureCloudProvider(manager, nil)
+			assert.NoError(t, err)
+
+			scaleSet, ok := provider.NodeGroups()[0].(*ScaleSet)
+			assert.True(t, ok)
+
+			// Increase size by one, but the new node fails provisioning
+			err = scaleSet.IncreaseSize(1)
+			assert.NoError(t, err)
+
+			nodes, err := scaleSet.Nodes()
+			assert.NoError(t, err)
+
+			assert.Equal(t, 3, len(nodes))
+
+			assert.Equal(t, testCase.expectErrorInfoPopulated, nodes[2].Status.ErrorInfo != nil)
+			if testCase.expectErrorInfoPopulated {
+				assert.Equal(t, cloudprovider.InstanceCreating, nodes[2].Status.State)
+			} else {
+				assert.Equal(t, cloudprovider.InstanceRunning, nodes[2].Status.State)
+			}
+		})
+	}
+}
+
+func TestIncreaseSizeOnVMProvisioningFailedWithFastDelete(t *testing.T) {
+	testCases := map[string]struct {
+		expectInstanceRunning    bool
+		isMissingInstanceView    bool
+		statuses                 []compute.InstanceViewStatus
+		expectErrorInfoPopulated bool
+	}{
+		"out of resources when no power state exists": {
 			expectErrorInfoPopulated: true,
 		},
 		"out of resources when VM is stopped": {
@@ -412,7 +514,7 @@ func TestIncreaseSizeOnVMProvisioningFailed(t *testing.T) {
 			manager.azClient.virtualMachinesClient = mockVMClient
 
 			manager.explicitlyConfigured["vmss-failed-upscale"] = true
-			registered := manager.RegisterNodeGroup(newTestScaleSet(manager, vmssName))
+			registered := manager.RegisterNodeGroup(newTestScaleSetWithFastDelete(manager, vmssName))
 			assert.True(t, registered)
 			manager.Refresh()
 
@@ -1114,13 +1216,17 @@ func TestTemplateNodeInfo(t *testing.T) {
 	}
 	asg.Name = "test-asg"
 
+	// The dynamic SKU list ("cache") in the test provider is empty
+	// (initialized with cfg.EnableDynamicInstanceList = false).
+	assert.False(t, provider.azureManager.azureCache.HasVMSKUs())
+
 	t.Run("Checking fallback to static because dynamic list is empty", func(t *testing.T) {
 		asg.enableDynamicInstanceList = true
 
 		nodeInfo, err := asg.TemplateNodeInfo()
 		assert.NoError(t, err)
 		assert.NotNil(t, nodeInfo)
-		assert.NotEmpty(t, nodeInfo.Pods)
+		assert.NotEmpty(t, nodeInfo.Pods())
 	})
 
 	// Properly testing dynamic SKU list through skewer is not possible,
@@ -1143,7 +1249,7 @@ func TestTemplateNodeInfo(t *testing.T) {
 		assert.Equal(t, *nodeInfo.Node().Status.Capacity.Memory(), *resource.NewQuantity(3*1024*1024, resource.DecimalSI))
 		assert.NoError(t, err)
 		assert.NotNil(t, nodeInfo)
-		assert.NotEmpty(t, nodeInfo.Pods)
+		assert.NotEmpty(t, nodeInfo.Pods())
 	})
 
 	t.Run("Checking static workflow if dynamic fails", func(t *testing.T) {
@@ -1164,7 +1270,7 @@ func TestTemplateNodeInfo(t *testing.T) {
 		assert.Equal(t, *nodeInfo.Node().Status.Capacity.Memory(), *resource.NewQuantity(3*1024*1024, resource.DecimalSI))
 		assert.NoError(t, err)
 		assert.NotNil(t, nodeInfo)
-		assert.NotEmpty(t, nodeInfo.Pods)
+		assert.NotEmpty(t, nodeInfo.Pods())
 	})
 
 	t.Run("Fails to find vmss instance information using static and dynamic workflow, instance not supported", func(t *testing.T) {
@@ -1198,7 +1304,7 @@ func TestTemplateNodeInfo(t *testing.T) {
 		assert.Equal(t, *nodeInfo.Node().Status.Capacity.Memory(), *resource.NewQuantity(3*1024*1024, resource.DecimalSI))
 		assert.NoError(t, err)
 		assert.NotNil(t, nodeInfo)
-		assert.NotEmpty(t, nodeInfo.Pods)
+		assert.NotEmpty(t, nodeInfo.Pods())
 	})
 
 	t.Run("Checking static-only workflow with built-in SKU list", func(t *testing.T) {
@@ -1207,7 +1313,7 @@ func TestTemplateNodeInfo(t *testing.T) {
 		nodeInfo, err := asg.TemplateNodeInfo()
 		assert.NoError(t, err)
 		assert.NotNil(t, nodeInfo)
-		assert.NotEmpty(t, nodeInfo.Pods)
+		assert.NotEmpty(t, nodeInfo.Pods())
 	})
 
 }
@@ -1257,5 +1363,115 @@ func TestCseErrors(t *testing.T) {
 		actualCSEErrorMessage, actualCSEFailureBool := scaleSet.cseErrors(vmssVMs.InstanceView.Extensions)
 		assert.False(t, actualCSEFailureBool)
 		assert.Equal(t, []string(nil), actualCSEErrorMessage)
+	})
+}
+
+func newVMObjectWithState(provisioningState string, powerState string) *compute.VirtualMachineScaleSetVM {
+	return &compute.VirtualMachineScaleSetVM{
+		ID: to.StringPtr("1"), // Beware; refactor if needed
+		VirtualMachineScaleSetVMProperties: &compute.VirtualMachineScaleSetVMProperties{
+			ProvisioningState: to.StringPtr(provisioningState),
+			InstanceView: &compute.VirtualMachineScaleSetVMInstanceView{
+				Statuses: &[]compute.InstanceViewStatus{
+					{Code: to.StringPtr(powerState)},
+				},
+			},
+		},
+	}
+}
+
+// Suggestion: could populate all combinations, should reunify with TestInstanceStatusFromVM
+func TestInstanceStatusFromProvisioningStateAndPowerState(t *testing.T) {
+	t.Run("fast delete enablement = false", func(t *testing.T) {
+		t.Run("provisioning state = failed, power state = starting", func(t *testing.T) {
+			status := instanceStatusFromProvisioningStateAndPowerState("1", to.StringPtr(string(compute.GalleryProvisioningStateFailed)), vmPowerStateStarting, false)
+
+			assert.NotNil(t, status)
+			assert.Equal(t, cloudprovider.InstanceRunning, status.State)
+		})
+
+		t.Run("provisioning state = failed, power state = running", func(t *testing.T) {
+			status := instanceStatusFromProvisioningStateAndPowerState("1", to.StringPtr(string(compute.GalleryProvisioningStateFailed)), vmPowerStateRunning, false)
+
+			assert.NotNil(t, status)
+			assert.Equal(t, cloudprovider.InstanceRunning, status.State)
+		})
+
+		t.Run("provisioning state = failed, power state = stopping", func(t *testing.T) {
+			status := instanceStatusFromProvisioningStateAndPowerState("1", to.StringPtr(string(compute.GalleryProvisioningStateFailed)), vmPowerStateStopping, false)
+
+			assert.NotNil(t, status)
+			assert.Equal(t, cloudprovider.InstanceRunning, status.State)
+		})
+
+		t.Run("provisioning state = failed, power state = stopped", func(t *testing.T) {
+
+			status := instanceStatusFromProvisioningStateAndPowerState("1", to.StringPtr(string(compute.GalleryProvisioningStateFailed)), vmPowerStateStopped, false)
+
+			assert.NotNil(t, status)
+			assert.Equal(t, cloudprovider.InstanceRunning, status.State)
+		})
+
+		t.Run("provisioning state = failed, power state = deallocated", func(t *testing.T) {
+			status := instanceStatusFromProvisioningStateAndPowerState("1", to.StringPtr(string(compute.GalleryProvisioningStateFailed)), vmPowerStateDeallocated, false)
+
+			assert.NotNil(t, status)
+			assert.Equal(t, cloudprovider.InstanceRunning, status.State)
+		})
+
+		t.Run("provisioning state = failed, power state = unknown", func(t *testing.T) {
+			status := instanceStatusFromProvisioningStateAndPowerState("1", to.StringPtr(string(compute.GalleryProvisioningStateFailed)), vmPowerStateUnknown, false)
+
+			assert.NotNil(t, status)
+			assert.Equal(t, cloudprovider.InstanceRunning, status.State)
+		})
+	})
+
+	t.Run("fast delete enablement = true", func(t *testing.T) {
+		t.Run("provisioning state = failed, power state = starting", func(t *testing.T) {
+			status := instanceStatusFromProvisioningStateAndPowerState("1", to.StringPtr(string(compute.GalleryProvisioningStateFailed)), vmPowerStateStarting, true)
+
+			assert.NotNil(t, status)
+			assert.Equal(t, cloudprovider.InstanceRunning, status.State)
+		})
+
+		t.Run("provisioning state = failed, power state = running", func(t *testing.T) {
+			status := instanceStatusFromProvisioningStateAndPowerState("1", to.StringPtr(string(compute.GalleryProvisioningStateFailed)), vmPowerStateRunning, true)
+
+			assert.NotNil(t, status)
+			assert.Equal(t, cloudprovider.InstanceRunning, status.State)
+		})
+
+		t.Run("provisioning state = failed, power state = stopping", func(t *testing.T) {
+			status := instanceStatusFromProvisioningStateAndPowerState("1", to.StringPtr(string(compute.GalleryProvisioningStateFailed)), vmPowerStateStopping, true)
+
+			assert.NotNil(t, status)
+			assert.Equal(t, cloudprovider.InstanceCreating, status.State)
+			assert.NotNil(t, status.ErrorInfo)
+		})
+
+		t.Run("provisioning state = failed, power state = stopped", func(t *testing.T) {
+			status := instanceStatusFromProvisioningStateAndPowerState("1", to.StringPtr(string(compute.GalleryProvisioningStateFailed)), vmPowerStateStopped, true)
+
+			assert.NotNil(t, status)
+			assert.Equal(t, cloudprovider.InstanceCreating, status.State)
+			assert.NotNil(t, status.ErrorInfo)
+		})
+
+		t.Run("provisioning state = failed, power state = deallocated", func(t *testing.T) {
+			status := instanceStatusFromProvisioningStateAndPowerState("1", to.StringPtr(string(compute.GalleryProvisioningStateFailed)), vmPowerStateDeallocated, true)
+
+			assert.NotNil(t, status)
+			assert.Equal(t, cloudprovider.InstanceCreating, status.State)
+			assert.NotNil(t, status.ErrorInfo)
+		})
+
+		t.Run("provisioning state = failed, power state = unknown", func(t *testing.T) {
+			status := instanceStatusFromProvisioningStateAndPowerState("1", to.StringPtr(string(compute.GalleryProvisioningStateFailed)), vmPowerStateUnknown, true)
+
+			assert.NotNil(t, status)
+			assert.Equal(t, cloudprovider.InstanceCreating, status.State)
+			assert.NotNil(t, status.ErrorInfo)
+		})
 	})
 }

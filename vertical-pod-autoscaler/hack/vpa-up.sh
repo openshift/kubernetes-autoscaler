@@ -19,11 +19,11 @@ set -o nounset
 set -o pipefail
 
 SCRIPT_ROOT=$(dirname ${BASH_SOURCE})/..
-DEFAULT_TAG="1.2.1"
+DEFAULT_TAG="1.3.0"
 TAG_TO_APPLY=${TAG-$DEFAULT_TAG}
 
 if [ "${TAG_TO_APPLY}" == "${DEFAULT_TAG}" ]; then
   git switch --detach vertical-pod-autoscaler-${DEFAULT_TAG}
 fi
 
-$SCRIPT_ROOT/hack/vpa-process-yamls.sh create $*
+$SCRIPT_ROOT/hack/vpa-process-yamls.sh apply $*
