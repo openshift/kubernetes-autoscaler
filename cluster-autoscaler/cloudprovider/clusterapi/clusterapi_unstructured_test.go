@@ -28,7 +28,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/autoscaler/cluster-autoscaler/utils/units"
 	"k8s.io/client-go/tools/cache"
 )
 
@@ -351,6 +350,7 @@ func TestSetSizeAndReplicas(t *testing.T) {
 	})
 }
 
+// This test now tests both the upstream and downstream annotation values while we support them both.
 func TestAnnotations(t *testing.T) {
 	cpuQuantity := resource.MustParse("2")
 	diskQuantity := resource.MustParse("100Gi")
@@ -376,11 +376,6 @@ func TestAnnotations(t *testing.T) {
 		labelsKey:       "key3=value3,key4=value4,key5=value5",
 	}
 
-	// convert the initial memory value from Mebibytes to bytes as this conversion happens internally
-	// when we use InstanceMemoryCapacity()
-	memVal, _ := memQuantity.AsInt64()
-	memQuantityAsBytes := resource.NewQuantity(memVal*units.MiB, resource.DecimalSI)
-
 	test := func(t *testing.T, testConfig *testConfig, testResource *unstructured.Unstructured) {
 		controller, stop := mustCreateTestController(t, testConfig)
 		defer stop()
@@ -398,7 +393,7 @@ func TestAnnotations(t *testing.T) {
 
 		if mem, err := sr.InstanceMemoryCapacityAnnotation(); err != nil {
 			t.Fatal(err)
-		} else if memQuantityAsBytes.Cmp(mem) != 0 {
+		} else if memQuantity.Cmp(mem) != 0 {
 			t.Errorf("expected %v, got %v", memQuantity, mem)
 		}
 
