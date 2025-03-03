@@ -17,162 +17,165 @@ limitations under the License.
 package plugin
 
 import (
+	"context"
 	"errors"
 	"fmt"
-	"strings"
+	"net"
+	"sync"
+	"time"
 
-	utilversion "k8s.io/apimachinery/pkg/util/version"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/connectivity"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
+
 	"k8s.io/klog/v2"
+	drapbv1alpha4 "k8s.io/kubelet/pkg/apis/dra/v1alpha4"
+	drapbv1beta1 "k8s.io/kubelet/pkg/apis/dra/v1beta1"
+	"k8s.io/kubernetes/pkg/kubelet/metrics"
 )
 
-const (
-	// DRAPluginName is the name of the in-tree DRA Plugin.
-	DRAPluginName = "kubernetes.io/dra"
-)
+// NewDRAPluginClient returns a wrapper around those gRPC methods of a DRA
+// driver kubelet plugin which need to be called by kubelet. The wrapper
+// handles gRPC connection management and logging. Connections are reused
+// across different NewDRAPluginClient calls.
+func NewDRAPluginClient(pluginName string) (*Plugin, error) {
+	if pluginName == "" {
+		return nil, fmt.Errorf("plugin name is empty")
+	}
 
-// draPlugins map keeps track of all registered DRA plugins on the node
-// and their corresponding sockets.
-var draPlugins = &PluginsStore{}
+	existingPlugin := draPlugins.get(pluginName)
+	if existingPlugin == nil {
+		return nil, fmt.Errorf("plugin name %s not found in the list of registered DRA plugins", pluginName)
+	}
 
-// RegistrationHandler is the handler which is fed to the pluginwatcher API.
-type RegistrationHandler struct{}
-
-// NewPluginHandler returns new registration handler.
-func NewRegistrationHandler() *RegistrationHandler {
-	return &RegistrationHandler{}
+	return existingPlugin, nil
 }
 
-// RegisterPlugin is called when a plugin can be registered.
-func (h *RegistrationHandler) RegisterPlugin(pluginName string, endpoint string, versions []string) error {
-	klog.InfoS("Register new DRA plugin", "name", pluginName, "endpoint", endpoint)
+type Plugin struct {
+	name          string
+	backgroundCtx context.Context
+	cancel        func(cause error)
 
-	highestSupportedVersion, err := h.validateVersions("RegisterPlugin", pluginName, versions)
+	mutex             sync.Mutex
+	conn              *grpc.ClientConn
+	endpoint          string
+	chosenService     string // e.g. drapbv1beta1.DRAPluginService
+	clientCallTimeout time.Duration
+}
+
+func (p *Plugin) getOrCreateGRPCConn() (*grpc.ClientConn, error) {
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+
+	if p.conn != nil {
+		return p.conn, nil
+	}
+
+	ctx := p.backgroundCtx
+	logger := klog.FromContext(ctx)
+
+	network := "unix"
+	logger.V(4).Info("Creating new gRPC connection", "protocol", network, "endpoint", p.endpoint)
+	// grpc.Dial is deprecated. grpc.NewClient should be used instead.
+	// For now this gets ignored because this function is meant to establish
+	// the connection, with the one second timeout below. Perhaps that
+	// approach should be reconsidered?
+	//nolint:staticcheck
+	conn, err := grpc.Dial(
+		p.endpoint,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithContextDialer(func(ctx context.Context, target string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, network, target)
+		}),
+		grpc.WithChainUnaryInterceptor(newMetricsInterceptor(p.name)),
+	)
 	if err != nil {
+		return nil, err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	if ok := conn.WaitForStateChange(ctx, connectivity.Connecting); !ok {
+		return nil, errors.New("timed out waiting for gRPC connection to be ready")
+	}
+
+	p.conn = conn
+	return p.conn, nil
+}
+
+func (p *Plugin) NodePrepareResources(
+	ctx context.Context,
+	req *drapbv1beta1.NodePrepareResourcesRequest,
+	opts ...grpc.CallOption,
+) (*drapbv1beta1.NodePrepareResourcesResponse, error) {
+	logger := klog.FromContext(ctx)
+	logger.V(4).Info("Calling NodePrepareResources rpc", "request", req)
+
+	conn, err := p.getOrCreateGRPCConn()
+	if err != nil {
+		return nil, err
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, p.clientCallTimeout)
+	defer cancel()
+
+	var response *drapbv1beta1.NodePrepareResourcesResponse
+	switch p.chosenService {
+	case drapbv1beta1.DRAPluginService:
+		nodeClient := drapbv1beta1.NewDRAPluginClient(conn)
+		response, err = nodeClient.NodePrepareResources(ctx, req)
+	case drapbv1alpha4.NodeService:
+		nodeClient := drapbv1alpha4.NewNodeClient(conn)
+		response, err = drapbv1alpha4.V1Alpha4ClientWrapper{NodeClient: nodeClient}.NodePrepareResources(ctx, req)
+	default:
+		// Shouldn't happen, validateSupportedServices should only
+		// return services we support here.
+		return nil, fmt.Errorf("internal error: unsupported chosen service: %q", p.chosenService)
+	}
+	logger.V(4).Info("Done calling NodePrepareResources rpc", "response", response, "err", err)
+	return response, err
+}
+
+func (p *Plugin) NodeUnprepareResources(
+	ctx context.Context,
+	req *drapbv1beta1.NodeUnprepareResourcesRequest,
+	opts ...grpc.CallOption,
+) (*drapbv1beta1.NodeUnprepareResourcesResponse, error) {
+	logger := klog.FromContext(ctx)
+	logger.V(4).Info("Calling NodeUnprepareResource rpc", "request", req)
+
+	conn, err := p.getOrCreateGRPCConn()
+	if err != nil {
+		return nil, err
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, p.clientCallTimeout)
+	defer cancel()
+
+	var response *drapbv1beta1.NodeUnprepareResourcesResponse
+	switch p.chosenService {
+	case drapbv1beta1.DRAPluginService:
+		nodeClient := drapbv1beta1.NewDRAPluginClient(conn)
+		response, err = nodeClient.NodeUnprepareResources(ctx, req)
+	case drapbv1alpha4.NodeService:
+		nodeClient := drapbv1alpha4.NewNodeClient(conn)
+		response, err = drapbv1alpha4.V1Alpha4ClientWrapper{NodeClient: nodeClient}.NodeUnprepareResources(ctx, req)
+	default:
+		// Shouldn't happen, validateSupportedServices should only
+		// return services we support here.
+		return nil, fmt.Errorf("internal error: unsupported chosen service: %q", p.chosenService)
+	}
+	logger.V(4).Info("Done calling NodeUnprepareResources rpc", "response", response, "err", err)
+	return response, err
+}
+
+func newMetricsInterceptor(pluginName string) grpc.UnaryClientInterceptor {
+	return func(ctx context.Context, method string, req, reply any, conn *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
+		start := time.Now()
+		err := invoker(ctx, method, req, reply, conn, opts...)
+		metrics.DRAGRPCOperationsDuration.WithLabelValues(pluginName, method, status.Code(err).String()).Observe(time.Since(start).Seconds())
 		return err
 	}
-
-	// Storing endpoint of newly registered DRA Plugin into the map, where plugin name will be the key
-	// all other DRA components will be able to get the actual socket of DRA plugins by its name.
-	draPlugins.Set(pluginName, &Plugin{
-		endpoint:                endpoint,
-		highestSupportedVersion: highestSupportedVersion,
-	})
-
-	return nil
-}
-
-// Return the highest supported version.
-func highestSupportedVersion(versions []string) (*utilversion.Version, error) {
-	if len(versions) == 0 {
-		return nil, errors.New(log("DRA plugin reporting empty array for supported versions"))
-	}
-
-	var highestSupportedVersion *utilversion.Version
-
-	var theErr error
-
-	for i := len(versions) - 1; i >= 0; i-- {
-		currentHighestVer, err := utilversion.ParseGeneric(versions[i])
-		if err != nil {
-			theErr = err
-
-			continue
-		}
-
-		if currentHighestVer.Major() > 1 {
-			// DRA currently only has version 1.x
-			continue
-		}
-
-		if highestSupportedVersion == nil || highestSupportedVersion.LessThan(currentHighestVer) {
-			highestSupportedVersion = currentHighestVer
-		}
-	}
-
-	if highestSupportedVersion == nil {
-		return nil, fmt.Errorf(
-			"could not find a highest supported version from versions (%v) reported by this plugin: %+v",
-			versions, theErr)
-	}
-
-	if highestSupportedVersion.Major() != 1 {
-		return nil, fmt.Errorf("highest supported version reported by plugin is %v, must be v1.x", highestSupportedVersion)
-	}
-
-	return highestSupportedVersion, nil
-}
-
-func (h *RegistrationHandler) validateVersions(
-	callerName string,
-	pluginName string,
-	versions []string,
-) (*utilversion.Version, error) {
-	if len(versions) == 0 {
-		return nil, errors.New(
-			log(
-				"%s for DRA plugin %q failed. Plugin returned an empty list for supported versions",
-				callerName,
-				pluginName,
-			),
-		)
-	}
-
-	// Validate version
-	newPluginHighestVersion, err := highestSupportedVersion(versions)
-	if err != nil {
-		return nil, errors.New(
-			log(
-				"%s for DRA plugin %q failed. None of the versions specified %q are supported. err=%v",
-				callerName,
-				pluginName,
-				versions,
-				err,
-			),
-		)
-	}
-
-	existingPlugin := draPlugins.Get(pluginName)
-	if existingPlugin != nil {
-		if !existingPlugin.highestSupportedVersion.LessThan(newPluginHighestVersion) {
-			return nil, errors.New(
-				log(
-					"%s for DRA plugin %q failed. Another plugin with the same name is already registered with a higher supported version: %q",
-					callerName,
-					pluginName,
-					existingPlugin.highestSupportedVersion,
-				),
-			)
-		}
-	}
-
-	return newPluginHighestVersion, nil
-}
-
-func unregisterPlugin(pluginName string) {
-	draPlugins.Delete(pluginName)
-}
-
-// DeRegisterPlugin is called when a plugin has removed its socket,
-// signaling it is no longer available.
-func (h *RegistrationHandler) DeRegisterPlugin(pluginName string) {
-	klog.InfoS("DeRegister DRA plugin", "name", pluginName)
-	unregisterPlugin(pluginName)
-}
-
-// ValidatePlugin is called by kubelet's plugin watcher upon detection
-// of a new registration socket opened by DRA plugin.
-func (h *RegistrationHandler) ValidatePlugin(pluginName string, endpoint string, versions []string) error {
-	klog.InfoS("Validate DRA plugin", "name", pluginName, "endpoint", endpoint, "versions", strings.Join(versions, ","))
-
-	_, err := h.validateVersions("ValidatePlugin", pluginName, versions)
-	if err != nil {
-		return fmt.Errorf("validation failed for DRA plugin %s at endpoint %s: %+v", pluginName, endpoint, err)
-	}
-
-	return err
-}
-
-// log prepends log string with `kubernetes.io/dra`.
-func log(msg string, parts ...interface{}) string {
-	return fmt.Sprintf(fmt.Sprintf("%s: %s", DRAPluginName, msg), parts...)
 }

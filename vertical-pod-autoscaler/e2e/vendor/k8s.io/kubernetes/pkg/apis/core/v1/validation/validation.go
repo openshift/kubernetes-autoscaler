@@ -24,6 +24,8 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/validation/field"
+
+	"k8s.io/kubernetes/pkg/apis/core"
 	"k8s.io/kubernetes/pkg/apis/core/helper"
 	v1helper "k8s.io/kubernetes/pkg/apis/core/v1/helper"
 	apivalidation "k8s.io/kubernetes/pkg/apis/core/validation"
@@ -42,18 +44,18 @@ func ValidateResourceRequirements(requirements *v1.ResourceRequirements, fldPath
 	for resourceName, quantity := range requirements.Limits {
 		fldPath := limPath.Key(string(resourceName))
 		// Validate resource name.
-		allErrs = append(allErrs, ValidateContainerResourceName(string(resourceName), fldPath)...)
+		allErrs = append(allErrs, ValidateContainerResourceName(core.ResourceName(resourceName), fldPath)...)
 
 		// Validate resource quantity.
-		allErrs = append(allErrs, ValidateResourceQuantityValue(string(resourceName), quantity, fldPath)...)
+		allErrs = append(allErrs, ValidateResourceQuantityValue(core.ResourceName(resourceName), quantity, fldPath)...)
 
 	}
 	for resourceName, quantity := range requirements.Requests {
 		fldPath := reqPath.Key(string(resourceName))
 		// Validate resource name.
-		allErrs = append(allErrs, ValidateContainerResourceName(string(resourceName), fldPath)...)
+		allErrs = append(allErrs, ValidateContainerResourceName(core.ResourceName(resourceName), fldPath)...)
 		// Validate resource quantity.
-		allErrs = append(allErrs, ValidateResourceQuantityValue(string(resourceName), quantity, fldPath)...)
+		allErrs = append(allErrs, ValidateResourceQuantityValue(core.ResourceName(resourceName), quantity, fldPath)...)
 
 		// Check that request <= limit.
 		limitQuantity, exists := requirements.Limits[resourceName]
@@ -71,9 +73,9 @@ func ValidateResourceRequirements(requirements *v1.ResourceRequirements, fldPath
 }
 
 // ValidateContainerResourceName checks the name of resource specified for a container
-func ValidateContainerResourceName(value string, fldPath *field.Path) field.ErrorList {
+func ValidateContainerResourceName(value core.ResourceName, fldPath *field.Path) field.ErrorList {
 	allErrs := validateResourceName(value, fldPath)
-	if len(strings.Split(value, "/")) == 1 {
+	if len(strings.Split(string(value), "/")) == 1 {
 		if !helper.IsStandardContainerResourceName(value) {
 			return append(allErrs, field.Invalid(fldPath, value, "must be a standard resource for containers"))
 		}
@@ -86,7 +88,7 @@ func ValidateContainerResourceName(value string, fldPath *field.Path) field.Erro
 }
 
 // ValidateResourceQuantityValue enforces that specified quantity is valid for specified resource
-func ValidateResourceQuantityValue(resource string, value resource.Quantity, fldPath *field.Path) field.ErrorList {
+func ValidateResourceQuantityValue(resource core.ResourceName, value resource.Quantity, fldPath *field.Path) field.ErrorList {
 	allErrs := field.ErrorList{}
 	allErrs = append(allErrs, ValidateNonnegativeQuantity(value, fldPath)...)
 	if helper.IsIntegerResourceName(resource) {
@@ -108,13 +110,13 @@ func ValidateNonnegativeQuantity(value resource.Quantity, fldPath *field.Path) f
 
 // Validate compute resource typename.
 // Refer to docs/design/resources.md for more details.
-func validateResourceName(value string, fldPath *field.Path) field.ErrorList {
-	allErrs := apivalidation.ValidateQualifiedName(value, fldPath)
+func validateResourceName(value core.ResourceName, fldPath *field.Path) field.ErrorList {
+	allErrs := apivalidation.ValidateQualifiedName(string(value), fldPath)
 	if len(allErrs) != 0 {
 		return allErrs
 	}
 
-	if len(strings.Split(value, "/")) == 1 {
+	if len(strings.Split(string(value), "/")) == 1 {
 		if !helper.IsStandardResourceName(value) {
 			return append(allErrs, field.Invalid(fldPath, value, "must be a standard resource type or fully qualified"))
 		}
@@ -122,6 +124,12 @@ func validateResourceName(value string, fldPath *field.Path) field.ErrorList {
 
 	return allErrs
 }
+
+var validLogStreams = sets.New[string](
+	v1.LogStreamStdout,
+	v1.LogStreamStderr,
+	v1.LogStreamAll,
+)
 
 // ValidatePodLogOptions checks if options that are set are at the correct
 // value. Any incorrect value will be returned to the ErrorList.
@@ -139,6 +147,15 @@ func ValidatePodLogOptions(opts *v1.PodLogOptions) field.ErrorList {
 	case opts.SinceSeconds != nil:
 		if *opts.SinceSeconds < 1 {
 			allErrs = append(allErrs, field.Invalid(field.NewPath("sinceSeconds"), *opts.SinceSeconds, "must be greater than 0"))
+		}
+	}
+	// opts.Stream can be nil because defaulting might not apply if no URL params are provided.
+	if opts.Stream != nil {
+		if !validLogStreams.Has(*opts.Stream) {
+			allErrs = append(allErrs, field.NotSupported(field.NewPath("stream"), *opts.Stream, validLogStreams.UnsortedList()))
+		}
+		if *opts.Stream != v1.LogStreamAll && opts.TailLines != nil {
+			allErrs = append(allErrs, field.Forbidden(field.NewPath(""), "`tailLines` and specific `stream` are mutually exclusive for now"))
 		}
 	}
 	return allErrs

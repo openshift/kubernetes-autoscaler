@@ -24,7 +24,6 @@ import (
 	podutil "k8s.io/kubernetes/pkg/api/v1/pod"
 	kubecontainer "k8s.io/kubernetes/pkg/kubelet/container"
 	runtimeutil "k8s.io/kubernetes/pkg/kubelet/kuberuntime/util"
-	kubetypes "k8s.io/kubernetes/pkg/kubelet/types"
 )
 
 const (
@@ -57,7 +56,7 @@ func GenerateContainersReadyCondition(spec *v1.PodSpec, containerStatuses []v1.C
 	unreadyContainers := []string{}
 
 	for _, container := range spec.InitContainers {
-		if !kubetypes.IsRestartableInitContainer(&container) {
+		if !podutil.IsRestartableInitContainer(&container) {
 			continue
 		}
 
@@ -159,7 +158,7 @@ func GeneratePodReadyCondition(spec *v1.PodSpec, conditions []v1.PodCondition, c
 }
 
 func isInitContainerInitialized(initContainer *v1.Container, containerStatus *v1.ContainerStatus) bool {
-	if kubetypes.IsRestartableInitContainer(initContainer) {
+	if podutil.IsRestartableInitContainer(initContainer) {
 		if containerStatus.Started == nil || !*containerStatus.Started {
 			return false
 		}
@@ -247,12 +246,12 @@ func GeneratePodReadyToStartContainersCondition(pod *v1.Pod, podStatus *kubecont
 	// fresh sandbox and configure networking for the sandbox.
 	if !newSandboxNeeded {
 		return v1.PodCondition{
-			Type:   kubetypes.PodReadyToStartContainers,
+			Type:   v1.PodReadyToStartContainers,
 			Status: v1.ConditionTrue,
 		}
 	}
 	return v1.PodCondition{
-		Type:   kubetypes.PodReadyToStartContainers,
+		Type:   v1.PodReadyToStartContainers,
 		Status: v1.ConditionFalse,
 	}
 }

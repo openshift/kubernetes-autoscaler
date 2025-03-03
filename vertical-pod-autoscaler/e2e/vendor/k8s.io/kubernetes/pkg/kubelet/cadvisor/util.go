@@ -17,18 +17,24 @@ limitations under the License.
 package cadvisor
 
 import (
+	"strings"
+
 	cadvisorapi "github.com/google/cadvisor/info/v1"
 	cadvisorapi2 "github.com/google/cadvisor/info/v2"
 	"k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	v1helper "k8s.io/kubernetes/pkg/apis/core/v1/helper"
+	"k8s.io/kubernetes/pkg/features"
 )
 
 const (
-	// CrioSocket is the path to the CRI-O socket.
+	// CrioSocketSuffix is the path to the CRI-O socket.
 	// Please keep this in sync with the one in:
 	// github.com/google/cadvisor/tree/master/container/crio/client.go
-	CrioSocket = "/var/run/crio/crio.sock"
+	// Note that however we only match on the suffix, as /var/run is often a
+	// symlink to /run, so the user can specify either path.
+	CrioSocketSuffix = "run/crio/crio.sock"
 )
 
 // CapacityFromMachineInfo returns the capacity of the resources from the machine info.
@@ -69,5 +75,11 @@ func EphemeralStorageCapacityFromFsInfo(info cadvisorapi2.FsInfo) v1.ResourceLis
 // be removed. Related issue:
 // https://github.com/kubernetes/kubernetes/issues/51798
 func UsingLegacyCadvisorStats(runtimeEndpoint string) bool {
-	return runtimeEndpoint == CrioSocket || runtimeEndpoint == "unix://"+CrioSocket
+	// If PodAndContainerStatsFromCRI feature is enabled, then assume the user
+	// wants to use CRI stats, as the aforementioned workaround isn't needed
+	// when this feature is enabled.
+	if utilfeature.DefaultFeatureGate.Enabled(features.PodAndContainerStatsFromCRI) {
+		return false
+	}
+	return strings.HasSuffix(runtimeEndpoint, CrioSocketSuffix)
 }
