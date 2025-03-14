@@ -46,6 +46,7 @@ const (
 	machinePoolProviderIDIndex = "machinePoolProviderIDIndex"
 	nodeProviderIDIndex        = "nodeProviderIDIndex"
 	defaultCAPIGroup           = "cluster.x-k8s.io"
+	openshiftMAPIGroup         = "machine.openshift.io"
 	// CAPIGroupEnvVar contains the environment variable name which allows overriding defaultCAPIGroup.
 	CAPIGroupEnvVar = "CAPI_GROUP"
 	// CAPIVersionEnvVar contains the environment variable name which allows overriding the Cluster API group version.
@@ -54,6 +55,7 @@ const (
 	resourceNameMachineSet        = "machinesets"
 	resourceNameMachineDeployment = "machinedeployments"
 	resourceNameMachinePool       = "machinepools"
+	deletingMachinePrefix         = "deleting-machine-"
 	failedMachinePrefix           = "failed-machine-"
 	pendingMachinePrefix          = "pending-machine-"
 	machineTemplateKind           = "MachineTemplate"
@@ -312,6 +314,9 @@ func (c *machineController) findMachineByProviderID(providerID normalizedProvide
 		return u.DeepCopy(), nil
 	}
 
+	if isDeletingMachineProviderID(providerID) {
+		return c.findMachine(machineKeyFromDeletingMachineProviderID(providerID))
+	}
 	if isFailedMachineProviderID(providerID) {
 		return c.findMachine(machineKeyFromFailedProviderID(providerID))
 	}
@@ -334,6 +339,15 @@ func (c *machineController) findMachineByProviderID(providerID normalizedProvide
 
 	machineID := node.Annotations[machineAnnotationKey]
 	return c.findMachine(machineID)
+}
+
+func isDeletingMachineProviderID(providerID normalizedProviderID) bool {
+	return strings.HasPrefix(string(providerID), deletingMachinePrefix)
+}
+
+func machineKeyFromDeletingMachineProviderID(providerID normalizedProviderID) string {
+	namespaceName := strings.TrimPrefix(string(providerID), deletingMachinePrefix)
+	return strings.Replace(namespaceName, "_", "/", 1)
 }
 
 func isPendingMachineProviderID(providerID normalizedProviderID) bool {
@@ -605,6 +619,12 @@ func (c *machineController) findScalableResourceProviderIDs(scalableResource *un
 
 		if found {
 			if providerID != "" {
+				// If the machine is deleting, prepend the deletion guard on the provider id
+				// so that it can be properly filtered when counting the number of nodes and instances.
+				if !machine.GetDeletionTimestamp().IsZero() {
+					klog.V(4).Infof("Machine %q has a non-zero deletion timestamp", machine.GetName())
+					providerID = fmt.Sprintf("%s%s_%s", deletingMachinePrefix, machine.GetNamespace(), machine.GetName())
+				}
 				providerIDs = append(providerIDs, providerID)
 				continue
 			}
