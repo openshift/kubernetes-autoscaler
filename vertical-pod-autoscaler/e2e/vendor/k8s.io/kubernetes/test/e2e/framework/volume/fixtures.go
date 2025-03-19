@@ -176,6 +176,24 @@ func NewNFSServerWithNodeName(ctx context.Context, cs clientset.Interface, names
 	return config, pod, host
 }
 
+// Restart the passed-in nfs-server by issuing a `rpc.nfsd 1` command in the
+// pod's (only) container. This command changes the number of nfs server threads from
+// (presumably) zero back to 1, and therefore allows nfs to open connections again.
+func RestartNFSServer(f *framework.Framework, serverPod *v1.Pod) {
+	const startcmd = "rpc.nfsd 1"
+	_, _, err := PodExec(f, serverPod, startcmd)
+	framework.ExpectNoError(err)
+}
+
+// Stop the passed-in nfs-server by issuing a `rpc.nfsd 0` command in the
+// pod's (only) container. This command changes the number of nfs server threads to 0,
+// thus closing all open nfs connections.
+func StopNFSServer(f *framework.Framework, serverPod *v1.Pod) {
+	const stopcmd = "rpc.nfsd 0 && for i in $(seq 200); do rpcinfo -p | grep -q nfs || break; sleep 1; done"
+	_, _, err := PodExec(f, serverPod, stopcmd)
+	framework.ExpectNoError(err)
+}
+
 // CreateStorageServer is a wrapper for startVolumeServer(). A storage server config is passed in, and a pod pointer
 // and ip address string are returned.
 // Note: Expect() is called so no error is returned.
@@ -238,7 +256,7 @@ func getVolumeHandle(ctx context.Context, cs clientset.Interface, claimName stri
 
 // WaitForVolumeAttachmentTerminated waits for the VolumeAttachment with the passed in attachmentName to be terminated.
 func WaitForVolumeAttachmentTerminated(ctx context.Context, attachmentName string, cs clientset.Interface, timeout time.Duration) error {
-	waitErr := wait.PollImmediateWithContext(ctx, 10*time.Second, timeout, func(ctx context.Context) (bool, error) {
+	waitErr := wait.PollUntilContextTimeout(ctx, 10*time.Second, timeout, true, func(ctx context.Context) (bool, error) {
 		_, err := cs.StorageV1().VolumeAttachments().Get(ctx, attachmentName, metav1.GetOptions{})
 		if err != nil {
 			// if the volumeattachment object is not found, it means it has been terminated.
@@ -697,7 +715,7 @@ func VerifyExecInPodFail(f *framework.Framework, pod *v1.Pod, shExec string, exi
 	if err != nil {
 		if exiterr, ok := err.(clientexec.ExitError); ok {
 			actualExitCode := exiterr.ExitStatus()
-			framework.ExpectEqual(actualExitCode, exitCode,
+			gomega.Expect(actualExitCode).To(gomega.Equal(exitCode),
 				"%q should fail with exit code %d, but failed with exit code %d and error message %q\nstdout: %s\nstderr: %s",
 				shExec, exitCode, actualExitCode, exiterr, stdout, stderr)
 		} else {
@@ -706,5 +724,5 @@ func VerifyExecInPodFail(f *framework.Framework, pod *v1.Pod, shExec string, exi
 				shExec, exitCode, err, stdout, stderr)
 		}
 	}
-	framework.ExpectError(err, "%q should fail with exit code %d, but exit without error", shExec, exitCode)
+	gomega.Expect(err).To(gomega.HaveOccurred(), "%q should fail with exit code %d, but exit without error", shExec, exitCode)
 }

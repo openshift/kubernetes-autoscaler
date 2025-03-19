@@ -20,17 +20,19 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"reflect"
+	"strconv"
 	"strings"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	v1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/wait"
 	clientset "k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/util/retry"
 	"k8s.io/kubectl/pkg/util/podutils"
 	"k8s.io/kubernetes/test/e2e/framework"
 	e2emanifest "k8s.io/kubernetes/test/e2e/framework/manifest"
@@ -50,11 +52,11 @@ func CreateStatefulSet(ctx context.Context, c clientset.Interface, manifestPath,
 	svc, err := e2emanifest.SvcFromManifest(mkpath("service.yaml"))
 	framework.ExpectNoError(err)
 
-	framework.Logf(fmt.Sprintf("creating " + ss.Name + " service"))
+	framework.Logf("creating %s service", ss.Name)
 	_, err = c.CoreV1().Services(ns).Create(ctx, svc, metav1.CreateOptions{})
 	framework.ExpectNoError(err)
 
-	framework.Logf(fmt.Sprintf("creating statefulset %v/%v with %d replicas and selector %+v", ss.Namespace, ss.Name, *(ss.Spec.Replicas), ss.Spec.Selector))
+	framework.Logf("creating statefulset %v/%v with %d replicas and selector %+v", ss.Namespace, ss.Name, *(ss.Spec.Replicas), ss.Spec.Selector)
 	_, err = c.AppsV1().StatefulSets(ns).Create(ctx, ss, metav1.CreateOptions{})
 	framework.ExpectNoError(err)
 	WaitForRunningAndReady(ctx, c, *ss.Spec.Replicas, ss)
@@ -96,7 +98,7 @@ func DeleteAllStatefulSets(ctx context.Context, c clientset.Interface, ns string
 	// pvs are global, so we need to wait for the exact ones bound to the statefulset pvcs.
 	pvNames := sets.NewString()
 	// TODO: Don't assume all pvcs in the ns belong to a statefulset
-	pvcPollErr := wait.PollImmediateWithContext(ctx, StatefulSetPoll, StatefulSetTimeout, func(ctx context.Context) (bool, error) {
+	pvcPollErr := wait.PollUntilContextTimeout(ctx, StatefulSetPoll, StatefulSetTimeout, true, func(ctx context.Context) (bool, error) {
 		pvcList, err := c.CoreV1().PersistentVolumeClaims(ns).List(ctx, metav1.ListOptions{LabelSelector: labels.Everything().String()})
 		if err != nil {
 			framework.Logf("WARNING: Failed to list pvcs, retrying %v", err)
@@ -116,7 +118,7 @@ func DeleteAllStatefulSets(ctx context.Context, c clientset.Interface, ns string
 		errList = append(errList, fmt.Sprintf("Timeout waiting for pvc deletion."))
 	}
 
-	pollErr := wait.PollImmediateWithContext(ctx, StatefulSetPoll, StatefulSetTimeout, func(ctx context.Context) (bool, error) {
+	pollErr := wait.PollUntilContextTimeout(ctx, StatefulSetPoll, StatefulSetTimeout, true, func(ctx context.Context) (bool, error) {
 		pvList, err := c.CoreV1().PersistentVolumes().List(ctx, metav1.ListOptions{LabelSelector: labels.Everything().String()})
 		if err != nil {
 			framework.Logf("WARNING: Failed to list pvs, retrying %v", err)
@@ -151,7 +153,7 @@ func Scale(ctx context.Context, c clientset.Interface, ss *appsv1.StatefulSet, c
 	ss = update(ctx, c, ns, name, count)
 
 	var statefulPodList *v1.PodList
-	pollErr := wait.PollImmediateWithContext(ctx, StatefulSetPoll, StatefulSetTimeout, func(ctx context.Context) (bool, error) {
+	pollErr := wait.PollUntilContextTimeout(ctx, StatefulSetPoll, StatefulSetTimeout, true, func(ctx context.Context) (bool, error) {
 		statefulPodList = GetPodList(ctx, c, ss)
 		if int32(len(statefulPodList.Items)) == count {
 			return true, nil
@@ -233,6 +235,26 @@ func CheckServiceName(ss *appsv1.StatefulSet, expectedServiceName string) error 
 	return nil
 }
 
+// CheckPodIndexLabel asserts that the pods for ss have expected index label and values.
+func CheckPodIndexLabel(ctx context.Context, c clientset.Interface, ss *appsv1.StatefulSet) error {
+	pods := GetPodList(ctx, c, ss)
+	labelIndices := sets.NewInt()
+	for _, pod := range pods.Items {
+		ix, err := strconv.Atoi(pod.Labels[appsv1.PodIndexLabel])
+		if err != nil {
+			return err
+		}
+		labelIndices.Insert(ix)
+	}
+	wantIndexes := []int{0, 1, 2}
+	gotIndexes := labelIndices.List()
+
+	if !reflect.DeepEqual(gotIndexes, wantIndexes) {
+		return fmt.Errorf("pod index labels are not as expected, got: %v, want: %v", gotIndexes, wantIndexes)
+	}
+	return nil
+}
+
 // ExecInStatefulPods executes cmd in all Pods in ss. If a error occurs it is returned and cmd is not execute in any subsequent Pods.
 func ExecInStatefulPods(ctx context.Context, c clientset.Interface, ss *appsv1.StatefulSet, cmd string) error {
 	podList := GetPodList(ctx, c, ss)
@@ -247,21 +269,23 @@ func ExecInStatefulPods(ctx context.Context, c clientset.Interface, ss *appsv1.S
 }
 
 // update updates a statefulset, and it is only used within rest.go
-func update(ctx context.Context, c clientset.Interface, ns, name string, replicas int32) *appsv1.StatefulSet {
-	for i := 0; i < 3; i++ {
-		ss, err := c.AppsV1().StatefulSets(ns).Get(ctx, name, metav1.GetOptions{})
+func update(ctx context.Context, c clientset.Interface, ns, name string, replicas int32) (ss *appsv1.StatefulSet) {
+	err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		var err error
+		ss, err = c.AppsV1().StatefulSets(ns).Get(ctx, name, metav1.GetOptions{})
 		if err != nil {
 			framework.Failf("failed to get statefulset %q: %v", name, err)
 		}
+		if *(ss.Spec.Replicas) == replicas {
+			return nil
+		}
 		*(ss.Spec.Replicas) = replicas
 		ss, err = c.AppsV1().StatefulSets(ns).Update(ctx, ss, metav1.UpdateOptions{})
-		if err == nil {
-			return ss
-		}
-		if !apierrors.IsConflict(err) && !apierrors.IsServerTimeout(err) {
-			framework.Failf("failed to update statefulset %q: %v", name, err)
-		}
+		return err
+	})
+	if err == nil {
+		return ss
 	}
-	framework.Failf("too many retries draining statefulset %q", name)
+	framework.Failf("failed to update statefulset  %q: %v", name, err)
 	return nil
 }

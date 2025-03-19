@@ -17,9 +17,9 @@ package manager
 import (
 	"flag"
 	"fmt"
-	"io/ioutil"
 	"math"
 	"math/rand"
+	"os"
 	"os/exec"
 	"path"
 	"regexp"
@@ -73,6 +73,7 @@ type containerData struct {
 	loadReader               cpuload.CpuLoadReader
 	summaryReader            *summary.StatsSummary
 	loadAvg                  float64 // smoothed load average seen so far.
+	loadDAvg                 float64 // smoothed load.d average seen so far.
 	housekeepingInterval     time.Duration
 	maxHousekeepingInterval  time.Duration
 	allowDynamicHousekeeping bool
@@ -243,7 +244,7 @@ func (cd *containerData) ReadFile(filepath string, inHostNamespace bool) ([]byte
 	for _, pid := range pids {
 		filePath := path.Join(rootfs, "/proc", pid, "/root", filepath)
 		klog.V(3).Infof("Trying path %q", filePath)
-		data, err := ioutil.ReadFile(filePath)
+		data, err := os.ReadFile(filePath)
 		if err == nil {
 			return data, err
 		}
@@ -323,7 +324,7 @@ func (cd *containerData) parseProcessList(cadvisorContainer string, inHostNamesp
 
 		var fdCount int
 		dirPath := path.Join(rootfs, "/proc", strconv.Itoa(processInfo.Pid), "fd")
-		fds, err := ioutil.ReadDir(dirPath)
+		fds, err := os.ReadDir(dirPath)
 		if err != nil {
 			klog.V(4).Infof("error while listing directory %q to measure fd count: %v", dirPath, err)
 			continue
@@ -441,6 +442,7 @@ func newContainerData(containerName string, memoryCache *memory.InMemoryCache, h
 		allowDynamicHousekeeping: allowDynamicHousekeeping,
 		logUsage:                 logUsage,
 		loadAvg:                  -1.0, // negative value indicates uninitialized.
+		loadDAvg:                 -1.0, // negative value indicates uninitialized.
 		stop:                     make(chan struct{}),
 		collectorManager:         collectorManager,
 		onDemandChan:             make(chan chan struct{}, 100),
@@ -482,7 +484,7 @@ func (cd *containerData) nextHousekeepingInterval() time.Duration {
 		stats, err := cd.memoryCache.RecentStats(cd.info.Name, empty, empty, 2)
 		if err != nil {
 			if cd.allowErrorLogging() {
-				klog.Warningf("Failed to get RecentStats(%q) while determining the next housekeeping: %v", cd.info.Name, err)
+				klog.V(4).Infof("Failed to get RecentStats(%q) while determining the next housekeeping: %v", cd.info.Name, err)
 			}
 		} else if len(stats) == 2 {
 			// TODO(vishnuk): Use no processes as a signal.
@@ -633,6 +635,14 @@ func (cd *containerData) updateLoad(newLoad uint64) {
 	}
 }
 
+func (cd *containerData) updateLoadD(newLoad uint64) {
+	if cd.loadDAvg < 0 {
+		cd.loadDAvg = float64(newLoad) // initialize to the first seen sample for faster stabilization.
+	} else {
+		cd.loadDAvg = cd.loadDAvg*cd.loadDecay + float64(newLoad)*(1.0-cd.loadDecay)
+	}
+}
+
 func (cd *containerData) updateStats() error {
 	stats, statsErr := cd.handler.GetStats()
 	if statsErr != nil {
@@ -659,6 +669,10 @@ func (cd *containerData) updateStats() error {
 			cd.updateLoad(loadStats.NrRunning)
 			// convert to 'milliLoad' to avoid floats and preserve precision.
 			stats.Cpu.LoadAverage = int32(cd.loadAvg * 1000)
+
+			cd.updateLoadD(loadStats.NrUninterruptible)
+			// convert to 'milliLoad' to avoid floats and preserve precision.
+			stats.Cpu.LoadDAverage = int32(cd.loadDAvg * 1000)
 		}
 	}
 	if cd.summaryReader != nil {
