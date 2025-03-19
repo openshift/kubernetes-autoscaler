@@ -46,6 +46,7 @@ const (
 	machinePoolProviderIDIndex = "machinePoolProviderIDIndex"
 	nodeProviderIDIndex        = "nodeProviderIDIndex"
 	defaultCAPIGroup           = "cluster.x-k8s.io"
+	openshiftMAPIGroup         = "machine.openshift.io"
 	// CAPIGroupEnvVar contains the environment variable name which allows overriding defaultCAPIGroup.
 	CAPIGroupEnvVar = "CAPI_GROUP"
 	// CAPIVersionEnvVar contains the environment variable name which allows overriding the Cluster API group version.
@@ -54,6 +55,7 @@ const (
 	resourceNameMachineSet        = "machinesets"
 	resourceNameMachineDeployment = "machinedeployments"
 	resourceNameMachinePool       = "machinepools"
+	deletingMachinePrefix         = "deleting-machine-"
 	failedMachinePrefix           = "failed-machine-"
 	pendingMachinePrefix          = "pending-machine-"
 	machineTemplateKind           = "MachineTemplate"
@@ -312,6 +314,9 @@ func (c *machineController) findMachineByProviderID(providerID normalizedProvide
 		return u.DeepCopy(), nil
 	}
 
+	if isDeletingMachineProviderID(providerID) {
+		return c.findMachine(machineKeyFromDeletingMachineProviderID(providerID))
+	}
 	if isFailedMachineProviderID(providerID) {
 		return c.findMachine(machineKeyFromFailedProviderID(providerID))
 	}
@@ -336,6 +341,15 @@ func (c *machineController) findMachineByProviderID(providerID normalizedProvide
 	return c.findMachine(machineID)
 }
 
+func isDeletingMachineProviderID(providerID normalizedProviderID) bool {
+	return strings.HasPrefix(string(providerID), deletingMachinePrefix)
+}
+
+func machineKeyFromDeletingMachineProviderID(providerID normalizedProviderID) string {
+	namespaceName := strings.TrimPrefix(string(providerID), deletingMachinePrefix)
+	return strings.Replace(namespaceName, "_", "/", 1)
+}
+
 func isPendingMachineProviderID(providerID normalizedProviderID) bool {
 	return strings.HasPrefix(string(providerID), pendingMachinePrefix)
 }
@@ -343,6 +357,10 @@ func isPendingMachineProviderID(providerID normalizedProviderID) bool {
 func machineKeyFromPendingMachineProviderID(providerID normalizedProviderID) string {
 	namespaceName := strings.TrimPrefix(string(providerID), pendingMachinePrefix)
 	return strings.Replace(namespaceName, "_", "/", 1)
+}
+
+func createFailedMachineNormalizedProviderID(namespace, name string) string {
+	return fmt.Sprintf("%s%s_%s", failedMachinePrefix, namespace, name)
 }
 
 func isFailedMachineProviderID(providerID normalizedProviderID) bool {
@@ -598,20 +616,10 @@ func (c *machineController) findScalableResourceProviderIDs(scalableResource *un
 	}
 
 	for _, machine := range machines {
-		providerID, found, err := unstructured.NestedString(machine.UnstructuredContent(), "spec", "providerID")
-		if err != nil {
-			return nil, err
-		}
-
-		if found {
-			if providerID != "" {
-				providerIDs = append(providerIDs, providerID)
-				continue
-			}
-		}
-
-		klog.Warningf("Machine %q has no providerID", machine.GetName())
-
+		// In some cases it is possible for a machine to have acquired a provider ID from the infrastructure and
+		// then become failed later. We want to ensure that a failed machine is not counted towards the total
+		// number of nodes in the cluster, for this reason we will detect a failed machine first, regardless
+		// of provider ID, and give it a normalized provider ID with failure message prepended.
 		errorMessage, found, err := unstructured.NestedString(machine.UnstructuredContent(), "status", "errorMessage")
 		if err != nil {
 			return nil, err
@@ -624,10 +632,36 @@ func (c *machineController) findScalableResourceProviderIDs(scalableResource *un
 			// Fake ID needs to be recognised later and converted into a machine key.
 			// Use an underscore as a separator between namespace and name as it is not a
 			// valid character within a namespace name.
-			providerIDs = append(providerIDs, fmt.Sprintf("%s%s_%s", failedMachinePrefix, machine.GetNamespace(), machine.GetName()))
+			providerIDs = append(providerIDs, createFailedMachineNormalizedProviderID(machine.GetNamespace(), machine.GetName()))
 			continue
 		}
 
+		// Next we check for the provider ID. Machines with a provider ID can fall into one of a few
+		// categories: creating, running, deleting, and sometimes failed (but we filtered those earlier).
+		// Depending on which category the machine is in, it might have a deleting or pending guard
+		// added to it's provider ID so that we can later properly filter machines.
+		providerID, found, err := unstructured.NestedString(machine.UnstructuredContent(), "spec", "providerID")
+		if err != nil {
+			return nil, err
+		}
+
+		if found {
+			if providerID != "" {
+				// If the machine is deleting, prepend the deletion guard on the provider id
+				// so that it can be properly filtered when counting the number of nodes and instances.
+				if !machine.GetDeletionTimestamp().IsZero() {
+					klog.V(4).Infof("Machine %q has a non-zero deletion timestamp", machine.GetName())
+					providerID = fmt.Sprintf("%s%s_%s", deletingMachinePrefix, machine.GetNamespace(), machine.GetName())
+				}
+				providerIDs = append(providerIDs, providerID)
+				continue
+			}
+		}
+
+		klog.Warningf("Machine %q has no providerID", machine.GetName())
+
+		// Look for a node reference in the status, a machine with a provider ID but no node reference has not
+		// yet become a node and should be marked as pending.
 		_, found, err = unstructured.NestedFieldCopy(machine.UnstructuredContent(), "status", "nodeRef")
 		if err != nil {
 			return nil, err
