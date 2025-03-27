@@ -112,6 +112,7 @@ func (nim *nodeInfoManager) InstallCSIDriver(driverName string, driverNodeID str
 	}
 
 	nodeUpdateFuncs := []nodeUpdateFunc{
+		removeMaxAttachLimit(driverName), // remove in 1.35 due to the version skew policy, we have to keep it for 3 releases
 		updateNodeIDInNode(driverName, driverNodeID),
 		updateTopologyLabels(topology),
 	}
@@ -140,7 +141,7 @@ func (nim *nodeInfoManager) UninstallCSIDriver(driverName string) error {
 	}
 
 	err = nim.updateNode(
-		removeMaxAttachLimit(driverName),
+		removeMaxAttachLimit(driverName), // remove it when this function is removed from nodeUpdateFuncs
 		removeNodeIDFromNode(driverName),
 	)
 	if err != nil {
@@ -474,16 +475,16 @@ func setMigrationAnnotation(migratedPlugins map[string](func() bool), nodeInfo *
 		nodeInfoAnnotations = map[string]string{}
 	}
 
-	var oldAnnotationSet sets.String
+	var oldAnnotationSet sets.Set[string]
 	mpa := nodeInfoAnnotations[v1.MigratedPluginsAnnotationKey]
 	tok := strings.Split(mpa, ",")
 	if len(mpa) == 0 {
-		oldAnnotationSet = sets.NewString()
+		oldAnnotationSet = sets.New[string]()
 	} else {
-		oldAnnotationSet = sets.NewString(tok...)
+		oldAnnotationSet = sets.New[string](tok...)
 	}
 
-	newAnnotationSet := sets.NewString()
+	newAnnotationSet := sets.New[string]()
 	for pluginName, migratedFunc := range migratedPlugins {
 		if migratedFunc() {
 			newAnnotationSet.Insert(pluginName)
@@ -494,7 +495,7 @@ func setMigrationAnnotation(migratedPlugins map[string](func() bool), nodeInfo *
 		return false
 	}
 
-	nas := strings.Join(newAnnotationSet.List(), ",")
+	nas := strings.Join(sets.List[string](newAnnotationSet), ",")
 	if len(nas) != 0 {
 		nodeInfoAnnotations[v1.MigratedPluginsAnnotationKey] = nas
 	} else {
@@ -526,7 +527,7 @@ func (nim *nodeInfoManager) installDriverToCSINode(
 		return fmt.Errorf("error getting CSI client")
 	}
 
-	topologyKeys := sets.StringKeySet(topology)
+	topologyKeys := sets.KeySet[string, string](topology)
 
 	specModified := true
 	// Clone driver list, omitting the driver that matches the given driverName
@@ -534,7 +535,7 @@ func (nim *nodeInfoManager) installDriverToCSINode(
 	for _, driverInfoSpec := range nodeInfo.Spec.Drivers {
 		if driverInfoSpec.Name == driverName {
 			if driverInfoSpec.NodeID == driverNodeID &&
-				sets.NewString(driverInfoSpec.TopologyKeys...).Equal(topologyKeys) &&
+				sets.New[string](driverInfoSpec.TopologyKeys...).Equal(topologyKeys) &&
 				keepAllocatableCount(driverInfoSpec, maxAttachLimit) {
 				specModified = false
 			}
@@ -554,7 +555,7 @@ func (nim *nodeInfoManager) installDriverToCSINode(
 	driverSpec := storagev1.CSINodeDriver{
 		Name:         driverName,
 		NodeID:       driverNodeID,
-		TopologyKeys: topologyKeys.List(),
+		TopologyKeys: sets.List[string](topologyKeys),
 	}
 
 	if maxAttachLimit > 0 {
