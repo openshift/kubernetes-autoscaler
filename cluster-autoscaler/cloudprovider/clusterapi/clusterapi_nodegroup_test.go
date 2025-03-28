@@ -408,7 +408,95 @@ func TestNodeGroupDecreaseTargetSize(t *testing.T) {
 		machinesDoNotHaveProviderIDs        bool
 	}
 
-	test := func(t *testing.T, tc *testCase, testConfig *testConfig) {
+	testCases := []testCase{
+		{
+			description:         "Same number of existing instances and node group target size should error",
+			initial:             3,
+			targetSizeIncrement: 0,
+			expected:            3,
+			delta:               -1,
+			expectedError:       true,
+		},
+		{
+			description:         "A node group with target size 4 but only 3 existing instances should decrease by 1",
+			initial:             3,
+			targetSizeIncrement: 1,
+			expected:            3,
+			delta:               -1,
+		},
+		{
+			description:            "A node group with 4 replicas with one machine in deleting state should decrease by 1",
+			initial:                4,
+			targetSizeIncrement:    0,
+			expected:               3,
+			delta:                  -1,
+			includeDeletingMachine: true,
+		},
+		{
+			description:          "A node group with 4 replicas with one failed machine should decrease by 1",
+			initial:              4,
+			targetSizeIncrement:  0,
+			expected:             3,
+			delta:                -1,
+			includeFailedMachine: true,
+		},
+		{
+			description:           "A node group with 4 replicas with one pending machine should decrease by 1",
+			initial:               4,
+			targetSizeIncrement:   0,
+			expected:              3,
+			delta:                 -1,
+			includePendingMachine: true,
+		},
+		{
+			description:           "A node group with 5 replicas with one pending and one failed machine should decrease by 2",
+			initial:               5,
+			targetSizeIncrement:   0,
+			expected:              3,
+			delta:                 -2,
+			includeFailedMachine:  true,
+			includePendingMachine: true,
+		},
+		{
+			description:            "A node group with 5 replicas with one pending, one failed, and one deleting machine should decrease by 3",
+			initial:                5,
+			targetSizeIncrement:    0,
+			expected:               2,
+			delta:                  -3,
+			includeFailedMachine:   true,
+			includePendingMachine:  true,
+			includeDeletingMachine: true,
+		},
+		{
+			description:                        "A node group with 4 replicas with one failed machine that has a provider ID should decrease by 1",
+			initial:                            4,
+			targetSizeIncrement:                0,
+			expected:                           3,
+			delta:                              -1,
+			includeFailedMachine:               true,
+			includeFailedMachineWithProviderID: true,
+		},
+		{
+			description:                         "A node group with 4 replicas with one pending machine that has a provider ID should decrease by 1",
+			initial:                             4,
+			targetSizeIncrement:                 0,
+			expected:                            3,
+			delta:                               -1,
+			includePendingMachine:               true,
+			includePendingMachineWithProviderID: true,
+		},
+		{
+			description:                  "A node group with target size 4 but only 3 existing instances without provider IDs should decrease by 1",
+			initial:                      3,
+			targetSizeIncrement:          1,
+			expected:                     3,
+			delta:                        -1,
+			machinesDoNotHaveProviderIDs: true,
+		},
+	}
+
+	test := func(t *testing.T, i int, testConfig *testConfig) {
+		tc := testCases[i]
 		controller, stop := mustCreateTestController(t, testConfig)
 		defer stop()
 
@@ -582,108 +670,20 @@ func TestNodeGroupDecreaseTargetSize(t *testing.T) {
 			}
 		}
 	}
-
-	testCases := []testCase{
-		{
-			description:         "Same number of existing instances and node group target size should error",
-			initial:             3,
-			targetSizeIncrement: 0,
-			expected:            3,
-			delta:               -1,
-			expectedError:       true,
-		},
-		{
-			description:         "A node group with target size 4 but only 3 existing instances should decrease by 1",
-			initial:             3,
-			targetSizeIncrement: 1,
-			expected:            3,
-			delta:               -1,
-		},
-		{
-			description:            "A node group with 4 replicas with one machine in deleting state should decrease by 1",
-			initial:                4,
-			targetSizeIncrement:    0,
-			expected:               3,
-			delta:                  -1,
-			includeDeletingMachine: true,
-		},
-		{
-			description:          "A node group with 4 replicas with one failed machine should decrease by 1",
-			initial:              4,
-			targetSizeIncrement:  0,
-			expected:             3,
-			delta:                -1,
-			includeFailedMachine: true,
-		},
-		{
-			description:           "A node group with 4 replicas with one pending machine should decrease by 1",
-			initial:               4,
-			targetSizeIncrement:   0,
-			expected:              3,
-			delta:                 -1,
-			includePendingMachine: true,
-		},
-		{
-			description:           "A node group with 5 replicas with one pending and one failed machine should decrease by 2",
-			initial:               5,
-			targetSizeIncrement:   0,
-			expected:              3,
-			delta:                 -2,
-			includeFailedMachine:  true,
-			includePendingMachine: true,
-		},
-		{
-			description:            "A node group with 5 replicas with one pending, one failed, and one deleting machine should decrease by 3",
-			initial:                5,
-			targetSizeIncrement:    0,
-			expected:               2,
-			delta:                  -3,
-			includeFailedMachine:   true,
-			includePendingMachine:  true,
-			includeDeletingMachine: true,
-		},
-		{
-			description:                        "A node group with 4 replicas with one failed machine that has a provider ID should decrease by 1",
-			initial:                            4,
-			targetSizeIncrement:                0,
-			expected:                           3,
-			delta:                              -1,
-			includeFailedMachine:               true,
-			includeFailedMachineWithProviderID: true,
-		},
-		{
-			description:                         "A node group with 4 replicas with one pending machine that has a provider ID should decrease by 1",
-			initial:                             4,
-			targetSizeIncrement:                 0,
-			expected:                            3,
-			delta:                               -1,
-			includePendingMachine:               true,
-			includePendingMachineWithProviderID: true,
-		},
-		{
-			description:                  "A node group with target size 4 but only 3 existing instances without provider IDs should decrease by 1",
-			initial:                      3,
-			targetSizeIncrement:          1,
-			expected:                     3,
-			delta:                        -1,
-			machinesDoNotHaveProviderIDs: true,
-		},
-	}
-
 	annotations := map[string]string{
 		nodeGroupMinSizeAnnotationKey: "1",
 		nodeGroupMaxSizeAnnotationKey: "10",
 	}
 
-	for _, tc := range testCases {
+	for i, tc := range testCases {
 		t.Run(tc.description, func(t *testing.T) {
-			test(t, &tc, createMachineSetTestConfig(RandomString(6), RandomString(6), RandomString(6), int(tc.initial), annotations, nil))
+			test(t, i, createMachineSetTestConfig(RandomString(6), RandomString(6), RandomString(6), int(tc.initial), annotations, nil))
 		})
 	}
 
-	for _, tc := range testCases {
+	for i, tc := range testCases {
 		t.Run(tc.description, func(t *testing.T) {
-			test(t, &tc, createMachineDeploymentTestConfig(RandomString(6), RandomString(6), RandomString(6), int(tc.initial), annotations, nil))
+			test(t, i, createMachineDeploymentTestConfig(RandomString(6), RandomString(6), RandomString(6), int(tc.initial), annotations, nil))
 		})
 	}
 }
