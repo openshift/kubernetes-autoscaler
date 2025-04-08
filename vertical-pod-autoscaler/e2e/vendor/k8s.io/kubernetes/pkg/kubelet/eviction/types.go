@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-//go:generate mockgen -source=types.go -destination=mock_threshold_notifier_test.go -package=eviction NotifierFactory,ThresholdNotifier
+//go:generate mockery
 package eviction
 
 import (
@@ -38,6 +38,8 @@ const (
 	fsStatsLogs fsStatsType = "logs"
 	// fsStatsRoot identifies stats for pod container writable layers.
 	fsStatsRoot fsStatsType = "root"
+	// fsStatsImages identifies stats for pod container read-only layers
+	fsStatsImages fsStatsType = "images"
 )
 
 // Config holds information about how eviction is configured.
@@ -73,6 +75,8 @@ type Manager interface {
 type DiskInfoProvider interface {
 	// HasDedicatedImageFs returns true if the imagefs is on a separate device from the rootfs.
 	HasDedicatedImageFs(ctx context.Context) (bool, error)
+	// HasDedicatedContainerFs returns true if the container fs is on a separate device from the rootfs.
+	HasDedicatedContainerFs(ctx context.Context) (bool, error)
 }
 
 // ImageGC is responsible for performing garbage collection of unused images.

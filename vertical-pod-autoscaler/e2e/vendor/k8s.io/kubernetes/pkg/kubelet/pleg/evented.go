@@ -17,6 +17,7 @@ limitations under the License.
 package pleg
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -71,7 +72,7 @@ type EventedPLEG struct {
 	// For testability.
 	clock clock.Clock
 	// GenericPLEG is used to force relist when required.
-	genericPleg PodLifecycleEventGenerator
+	genericPleg podLifecycleEventGeneratorHandler
 	// The maximum number of retries when getting container events from the runtime.
 	eventedPlegMaxStreamRetries int
 	// Indicates relisting related parameters
@@ -82,22 +83,29 @@ type EventedPLEG struct {
 	stopCacheUpdateCh chan struct{}
 	// Locks the start/stop operation of the Evented PLEG.
 	runningMu sync.Mutex
+	// logger is used for contextual logging
+	logger klog.Logger
 }
 
 // NewEventedPLEG instantiates a new EventedPLEG object and return it.
-func NewEventedPLEG(runtime kubecontainer.Runtime, runtimeService internalapi.RuntimeService, eventChannel chan *PodLifecycleEvent,
+func NewEventedPLEG(logger klog.Logger, runtime kubecontainer.Runtime, runtimeService internalapi.RuntimeService, eventChannel chan *PodLifecycleEvent,
 	cache kubecontainer.Cache, genericPleg PodLifecycleEventGenerator, eventedPlegMaxStreamRetries int,
-	relistDuration *RelistDuration, clock clock.Clock) PodLifecycleEventGenerator {
+	relistDuration *RelistDuration, clock clock.Clock) (PodLifecycleEventGenerator, error) {
+	handler, ok := genericPleg.(podLifecycleEventGeneratorHandler)
+	if !ok {
+		return nil, fmt.Errorf("%v doesn't implement podLifecycleEventGeneratorHandler interface", genericPleg)
+	}
 	return &EventedPLEG{
 		runtime:                     runtime,
 		runtimeService:              runtimeService,
 		eventChannel:                eventChannel,
 		cache:                       cache,
-		genericPleg:                 genericPleg,
+		genericPleg:                 handler,
 		eventedPlegMaxStreamRetries: eventedPlegMaxStreamRetries,
 		relistDuration:              relistDuration,
 		clock:                       clock,
-	}
+		logger:                      logger,
+	}, nil
 }
 
 // Watch returns a channel from which the subscriber can receive PodLifecycleEvent events.
@@ -179,7 +187,7 @@ func (e *EventedPLEG) watchEventsChannel() {
 			if numAttempts >= e.eventedPlegMaxStreamRetries {
 				if isEventedPLEGInUse() {
 					// Fall back to Generic PLEG relisting since Evented PLEG is not working.
-					klog.V(4).InfoS("Fall back to Generic PLEG relisting since Evented PLEG is not working")
+					e.logger.V(4).Info("Fall back to Generic PLEG relisting since Evented PLEG is not working")
 					e.Stop()
 					e.genericPleg.Stop()       // Stop the existing Generic PLEG which runs with longer relisting period when Evented PLEG is in use.
 					e.Update(e.relistDuration) // Update the relisting period to the default value for the Generic PLEG.
@@ -188,12 +196,14 @@ func (e *EventedPLEG) watchEventsChannel() {
 				}
 			}
 
-			err := e.runtimeService.GetContainerEvents(containerEventsResponseCh)
+			err := e.runtimeService.GetContainerEvents(context.Background(), containerEventsResponseCh, func(runtimeapi.RuntimeService_GetContainerEventsClient) {
+				metrics.EventedPLEGConn.Inc()
+			})
 			if err != nil {
 				metrics.EventedPLEGConnErr.Inc()
 				numAttempts++
 				e.Relist() // Force a relist to get the latest container and pods running metric.
-				klog.V(4).InfoS("Evented PLEG: Failed to get container events, retrying: ", "err", err)
+				e.logger.V(4).Info("Evented PLEG: Failed to get container events, retrying: ", "err", err)
 			}
 		}
 	}()
@@ -214,7 +224,7 @@ func (e *EventedPLEG) processCRIEvents(containerEventsResponseCh chan *runtimeap
 		// b) in worst case, a relist will eventually sync the pod status.
 		// TODO(#114371): Figure out a way to handle this case instead of ignoring.
 		if event.PodSandboxStatus == nil || event.PodSandboxStatus.Metadata == nil {
-			klog.ErrorS(nil, "Evented PLEG: received ContainerEventResponse with nil PodSandboxStatus or PodSandboxStatus.Metadata", "containerEventResponse", event)
+			e.logger.Error(nil, "Evented PLEG: received ContainerEventResponse with nil PodSandboxStatus or PodSandboxStatus.Metadata", "containerEventResponse", event)
 			continue
 		}
 
@@ -227,15 +237,15 @@ func (e *EventedPLEG) processCRIEvents(containerEventsResponseCh chan *runtimeap
 			// if branch is okay, we just use it to determine whether the
 			// additional "podStatus" key and its value should be added.
 			if klog.V(6).Enabled() {
-				klog.ErrorS(err, "Evented PLEG: error generating pod status from the received event", "podUID", podID, "podStatus", status)
+				e.logger.Error(err, "Evented PLEG: error generating pod status from the received event", "podUID", podID, "podStatus", status)
 			} else {
-				klog.ErrorS(err, "Evented PLEG: error generating pod status from the received event", "podUID", podID)
+				e.logger.Error(err, "Evented PLEG: error generating pod status from the received event", "podUID", podID)
 			}
 		} else {
-			if klogV := klog.V(6); klogV.Enabled() {
-				klogV.InfoS("Evented PLEG: Generated pod status from the received event", "podUID", podID, "podStatus", status)
+			if klogV := e.logger.V(6); klogV.Enabled() {
+				e.logger.Info("Evented PLEG: Generated pod status from the received event", "podUID", podID, "podStatus", status)
 			} else {
-				klog.V(4).InfoS("Evented PLEG: Generated pod status from the received event", "podUID", podID)
+				e.logger.V(4).Info("Evented PLEG: Generated pod status from the received event", "podUID", podID)
 			}
 			// Preserve the pod IP across cache updates if the new IP is empty.
 			// When a pod is torn down, kubelet may race with PLEG and retrieve
@@ -260,7 +270,7 @@ func (e *EventedPLEG) processCRIEvents(containerEventsResponseCh chan *runtimeap
 			}
 			shouldSendPLEGEvent = true
 		} else {
-			if e.cache.Set(podID, status, err, time.Unix(event.GetCreatedAt(), 0)) {
+			if e.cache.Set(podID, status, err, time.Unix(0, event.GetCreatedAt())) {
 				shouldSendPLEGEvent = true
 			}
 		}
@@ -275,23 +285,23 @@ func (e *EventedPLEG) processCRIEvent(event *runtimeapi.ContainerEventResponse) 
 	switch event.ContainerEventType {
 	case runtimeapi.ContainerEventType_CONTAINER_STOPPED_EVENT:
 		e.sendPodLifecycleEvent(&PodLifecycleEvent{ID: types.UID(event.PodSandboxStatus.Metadata.Uid), Type: ContainerDied, Data: event.ContainerId})
-		klog.V(4).InfoS("Received Container Stopped Event", "event", event.String())
+		e.logger.V(4).Info("Received Container Stopped Event", "event", event.String())
 	case runtimeapi.ContainerEventType_CONTAINER_CREATED_EVENT:
 		// We only need to update the pod status on container create.
 		// But we don't have to generate any PodLifeCycleEvent. Container creation related
 		// PodLifeCycleEvent is ignored by the existing Generic PLEG as well.
 		// https://github.com/kubernetes/kubernetes/blob/24753aa8a4df8d10bfd6330e0f29186000c018be/pkg/kubelet/pleg/generic.go#L88 and
 		// https://github.com/kubernetes/kubernetes/blob/24753aa8a4df8d10bfd6330e0f29186000c018be/pkg/kubelet/pleg/generic.go#L273
-		klog.V(4).InfoS("Received Container Created Event", "event", event.String())
+		e.logger.V(4).Info("Received Container Created Event", "event", event.String())
 	case runtimeapi.ContainerEventType_CONTAINER_STARTED_EVENT:
 		e.sendPodLifecycleEvent(&PodLifecycleEvent{ID: types.UID(event.PodSandboxStatus.Metadata.Uid), Type: ContainerStarted, Data: event.ContainerId})
-		klog.V(4).InfoS("Received Container Started Event", "event", event.String())
+		e.logger.V(4).Info("Received Container Started Event", "event", event.String())
 	case runtimeapi.ContainerEventType_CONTAINER_DELETED_EVENT:
 		// In case the pod is deleted it is safe to generate both ContainerDied and ContainerRemoved events, just like in the case of
 		// Generic PLEG. https://github.com/kubernetes/kubernetes/blob/24753aa8a4df8d10bfd6330e0f29186000c018be/pkg/kubelet/pleg/generic.go#L169
 		e.sendPodLifecycleEvent(&PodLifecycleEvent{ID: types.UID(event.PodSandboxStatus.Metadata.Uid), Type: ContainerDied, Data: event.ContainerId})
 		e.sendPodLifecycleEvent(&PodLifecycleEvent{ID: types.UID(event.PodSandboxStatus.Metadata.Uid), Type: ContainerRemoved, Data: event.ContainerId})
-		klog.V(4).InfoS("Received Container Deleted Event", "event", event)
+		e.logger.V(4).Info("Received Container Deleted Event", "event", event)
 	}
 }
 
@@ -323,7 +333,7 @@ func (e *EventedPLEG) sendPodLifecycleEvent(event *PodLifecycleEvent) {
 	default:
 		// record how many events were discarded due to channel out of capacity
 		metrics.PLEGDiscardEvents.Inc()
-		klog.ErrorS(nil, "Evented PLEG: Event channel is full, discarded pod lifecycle event")
+		e.logger.Error(nil, "Evented PLEG: Event channel is full, discarded pod lifecycle event")
 	}
 }
 
@@ -349,7 +359,7 @@ func getPodSandboxState(podStatus *kubecontainer.PodStatus) kubecontainer.State 
 func (e *EventedPLEG) updateRunningPodMetric(podStatus *kubecontainer.PodStatus) {
 	cachedPodStatus, err := e.cache.Get(podStatus.ID)
 	if err != nil {
-		klog.ErrorS(err, "Evented PLEG: Get cache", "podID", podStatus.ID)
+		e.logger.Error(err, "Evented PLEG: Get cache", "podID", podStatus.ID)
 	}
 	// cache miss condition: The pod status object will have empty state if missed in cache
 	if len(cachedPodStatus.SandboxStatuses) < 1 {
@@ -380,7 +390,7 @@ func getContainerStateCount(podStatus *kubecontainer.PodStatus) map[kubecontaine
 func (e *EventedPLEG) updateRunningContainerMetric(podStatus *kubecontainer.PodStatus) {
 	cachedPodStatus, err := e.cache.Get(podStatus.ID)
 	if err != nil {
-		klog.ErrorS(err, "Evented PLEG: Get cache", "podID", podStatus.ID)
+		e.logger.Error(err, "Evented PLEG: Get cache", "podID", podStatus.ID)
 	}
 
 	// cache miss condition: The pod status object will have empty state if missed in cache
@@ -417,6 +427,6 @@ func (e *EventedPLEG) updateLatencyMetric(event *runtimeapi.ContainerEventRespon
 	metrics.EventedPLEGConnLatency.Observe(duration.Seconds())
 }
 
-func (e *EventedPLEG) UpdateCache(pod *kubecontainer.Pod, pid types.UID) (error, bool) {
-	return fmt.Errorf("not implemented"), false
+func (e *EventedPLEG) SetPodWatchCondition(podUID types.UID, conditionKey string, condition WatchCondition) {
+	e.genericPleg.SetPodWatchCondition(podUID, conditionKey, condition)
 }

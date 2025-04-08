@@ -47,6 +47,8 @@ const (
 	PodSync PodLifeCycleEventType = "PodSync"
 	// ContainerChanged - event type when the new state of container is unknown.
 	ContainerChanged PodLifeCycleEventType = "ContainerChanged"
+	// ConditionMet - event type triggered when any number of watch conditions are met.
+	ConditionMet PodLifeCycleEventType = "ConditionMet"
 )
 
 // PodLifecycleEvent is an event that reflects the change of the pod state.
@@ -64,10 +66,35 @@ type PodLifecycleEvent struct {
 // PodLifecycleEventGenerator contains functions for generating pod life cycle events.
 type PodLifecycleEventGenerator interface {
 	Start()
-	Stop()
-	Update(relistDuration *RelistDuration)
 	Watch() chan *PodLifecycleEvent
 	Healthy() (bool, error)
+	// SetPodWatchCondition flags the pod for reinspection on every Relist iteration until the watch
+	// condition is met. The condition is keyed so it can be updated before the condition
+	// is met.
+	SetPodWatchCondition(podUID types.UID, conditionKey string, condition WatchCondition)
+}
+
+// podLifecycleEventGeneratorHandler contains functions that are useful for different PLEGs
+// and need not be exposed to rest of the kubelet
+type podLifecycleEventGeneratorHandler interface {
+	PodLifecycleEventGenerator
+	Stop()
+	Update(relistDuration *RelistDuration)
 	Relist()
-	UpdateCache(*kubecontainer.Pod, types.UID) (error, bool)
+}
+
+// WatchCondition takes the latest PodStatus, and returns whether the condition is met.
+type WatchCondition = func(*kubecontainer.PodStatus) bool
+
+// RunningContainerWatchCondition wraps a condition on the container status to make a pod
+// WatchCondition. If the container is no longer running, the condition is implicitly cleared.
+func RunningContainerWatchCondition(containerName string, condition func(*kubecontainer.Status) bool) WatchCondition {
+	return func(podStatus *kubecontainer.PodStatus) bool {
+		status := podStatus.FindContainerStatusByName(containerName)
+		if status == nil || status.State != kubecontainer.ContainerStateRunning {
+			// Container isn't running. Consider the condition "completed" so it is cleared.
+			return true
+		}
+		return condition(status)
+	}
 }
