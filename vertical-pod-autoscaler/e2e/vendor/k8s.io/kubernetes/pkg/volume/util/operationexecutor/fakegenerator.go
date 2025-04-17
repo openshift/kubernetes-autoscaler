@@ -17,13 +17,13 @@ limitations under the License.
 package operationexecutor
 
 import (
-	"k8s.io/klog/v2"
 	"time"
+
+	"k8s.io/klog/v2"
 
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/types"
-	csitrans "k8s.io/csi-translation-lib"
 	"k8s.io/kubernetes/pkg/volume"
 	"k8s.io/kubernetes/pkg/volume/util/hostutil"
 	volumetypes "k8s.io/kubernetes/pkg/volume/util/types"
@@ -89,17 +89,6 @@ func (f *fakeOGCounter) GenerateUnmapDeviceFunc(deviceToDetach AttachedVolume, a
 
 func (f *fakeOGCounter) GetVolumePluginMgr() *volume.VolumePluginMgr {
 	return nil
-}
-
-func (f *fakeOGCounter) GetCSITranslator() InTreeToCSITranslator {
-	return csitrans.New()
-}
-
-func (f *fakeOGCounter) GenerateBulkVolumeVerifyFunc(
-	map[types.NodeName][]*volume.Spec,
-	string,
-	map[*volume.Spec]v1.UniqueVolumeName, ActualStateOfWorldAttacherUpdater) (volumetypes.GeneratedOperations, error) {
-	return f.recordFuncCall("GenerateBulkVolumeVerifyFunc"), nil
 }
 
 func (f *fakeOGCounter) GenerateExpandVolumeFunc(*v1.PersistentVolumeClaim, *v1.PersistentVolume) (volumetypes.GeneratedOperations, error) {

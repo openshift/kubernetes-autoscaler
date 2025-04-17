@@ -53,9 +53,11 @@ type DefaultPreemption struct {
 	args      config.DefaultPreemptionArgs
 	podLister corelisters.PodLister
 	pdbLister policylisters.PodDisruptionBudgetLister
+	Evaluator *preemption.Evaluator
 }
 
 var _ framework.PostFilterPlugin = &DefaultPreemption{}
+var _ framework.PreEnqueuePlugin = &DefaultPreemption{}
 
 // Name returns name of the plugin. It is used in logs, etc.
 func (pl *DefaultPreemption) Name() string {
@@ -63,7 +65,7 @@ func (pl *DefaultPreemption) Name() string {
 }
 
 // New initializes a new plugin and returns it.
-func New(dpArgs runtime.Object, fh framework.Handle, fts feature.Features) (framework.Plugin, error) {
+func New(_ context.Context, dpArgs runtime.Object, fh framework.Handle, fts feature.Features) (framework.Plugin, error) {
 	args, ok := dpArgs.(*config.DefaultPreemptionArgs)
 	if !ok {
 		return nil, fmt.Errorf("got args of type %T, want *DefaultPreemptionArgs", dpArgs)
@@ -71,36 +73,52 @@ func New(dpArgs runtime.Object, fh framework.Handle, fts feature.Features) (fram
 	if err := validation.ValidateDefaultPreemptionArgs(nil, args); err != nil {
 		return nil, err
 	}
+
+	podLister := fh.SharedInformerFactory().Core().V1().Pods().Lister()
+	pdbLister := getPDBLister(fh.SharedInformerFactory())
+
 	pl := DefaultPreemption{
 		fh:        fh,
 		fts:       fts,
 		args:      *args,
-		podLister: fh.SharedInformerFactory().Core().V1().Pods().Lister(),
-		pdbLister: getPDBLister(fh.SharedInformerFactory()),
+		podLister: podLister,
+		pdbLister: pdbLister,
 	}
+	pl.Evaluator = preemption.NewEvaluator(Name, fh, &pl, fts.EnableAsyncPreemption)
+
 	return &pl, nil
 }
 
 // PostFilter invoked at the postFilter extension point.
-func (pl *DefaultPreemption) PostFilter(ctx context.Context, state *framework.CycleState, pod *v1.Pod, m framework.NodeToStatusMap) (*framework.PostFilterResult, *framework.Status) {
+func (pl *DefaultPreemption) PostFilter(ctx context.Context, state *framework.CycleState, pod *v1.Pod, m framework.NodeToStatusReader) (*framework.PostFilterResult, *framework.Status) {
 	defer func() {
 		metrics.PreemptionAttempts.Inc()
 	}()
 
-	pe := preemption.Evaluator{
-		PluginName: names.DefaultPreemption,
-		Handler:    pl.fh,
-		PodLister:  pl.podLister,
-		PdbLister:  pl.pdbLister,
-		State:      state,
-		Interface:  pl,
-	}
-
-	result, status := pe.Preempt(ctx, pod, m)
-	if status.Message() != "" {
-		return result, framework.NewStatus(status.Code(), "preemption: "+status.Message())
+	result, status := pl.Evaluator.Preempt(ctx, state, pod, m)
+	msg := status.Message()
+	if len(msg) > 0 {
+		return result, framework.NewStatus(status.Code(), "preemption: "+msg)
 	}
 	return result, status
+}
+
+func (pl *DefaultPreemption) PreEnqueue(ctx context.Context, p *v1.Pod) *framework.Status {
+	if !pl.fts.EnableAsyncPreemption {
+		return nil
+	}
+	if pl.Evaluator.IsPodRunningPreemption(p.GetUID()) {
+		return framework.NewStatus(framework.UnschedulableAndUnresolvable, "waiting for the preemption for this pod to be finished")
+	}
+	return nil
+}
+
+// EventsToRegister returns the possible events that may make a Pod
+// failed by this plugin schedulable.
+func (pl *DefaultPreemption) EventsToRegister(_ context.Context) ([]framework.ClusterEventWithHint, error) {
+	// The plugin moves the preemptor Pod to acviteQ/backoffQ once the preemption API calls are all done,
+	// and we don't need to move the Pod with any events.
+	return nil, nil
 }
 
 // calculateNumCandidates returns the number of candidates the FindCandidates
@@ -145,7 +163,7 @@ func (pl *DefaultPreemption) SelectVictimsOnNode(
 	logger := klog.FromContext(ctx)
 	var potentialVictims []*framework.PodInfo
 	removePod := func(rpi *framework.PodInfo) error {
-		if err := nodeInfo.RemovePod(rpi.Pod); err != nil {
+		if err := nodeInfo.RemovePod(logger, rpi.Pod); err != nil {
 			return err
 		}
 		status := pl.fh.RunPreFilterExtensionRemovePod(ctx, state, pod, rpi, nodeInfo)
@@ -176,8 +194,7 @@ func (pl *DefaultPreemption) SelectVictimsOnNode(
 
 	// No potential victims are found, and so we don't need to evaluate the node again since its state didn't change.
 	if len(potentialVictims) == 0 {
-		message := fmt.Sprintf("No preemption victims found for incoming pod")
-		return nil, 0, framework.NewStatus(framework.UnschedulableAndUnresolvable, message)
+		return nil, 0, framework.NewStatus(framework.UnschedulableAndUnresolvable, "No preemption victims found for incoming pod")
 	}
 
 	// If the new pod does not fit after removing all the lower priority pods,
@@ -191,6 +208,8 @@ func (pl *DefaultPreemption) SelectVictimsOnNode(
 	}
 	var victims []*v1.Pod
 	numViolatingVictim := 0
+	// Sort potentialVictims by pod priority from high to low, which ensures to
+	// reprieve higher priority pods first.
 	sort.Slice(potentialVictims, func(i, j int) bool { return util.MoreImportantPod(potentialVictims[i].Pod, potentialVictims[j].Pod) })
 	// Try to reprieve as many pods as possible. We first try to reprieve the PDB
 	// violating victims and then other non-violating ones. In both cases, we start
@@ -225,6 +244,11 @@ func (pl *DefaultPreemption) SelectVictimsOnNode(
 			return nil, 0, framework.AsStatus(err)
 		}
 	}
+
+	// Sort victims after reprieving pods to keep the pods in the victims sorted in order of priority from high to low.
+	if len(violatingVictims) != 0 && len(nonViolatingVictims) != 0 {
+		sort.Slice(victims, func(i, j int) bool { return util.MoreImportantPod(victims[i], victims[j]) })
+	}
 	return victims, numViolatingVictim, framework.NewStatus(framework.Success)
 }
 
@@ -236,7 +260,7 @@ func (pl *DefaultPreemption) SelectVictimsOnNode(
 //  2. The pod has already preempted other pods and the victims are in their graceful termination period.
 //     Currently we check the node that is nominated for this pod, and as long as there are
 //     terminating pods on this node, we don't attempt to preempt more pods.
-func (pl *DefaultPreemption) PodEligibleToPreemptOthers(pod *v1.Pod, nominatedNodeStatus *framework.Status) (bool, string) {
+func (pl *DefaultPreemption) PodEligibleToPreemptOthers(_ context.Context, pod *v1.Pod, nominatedNodeStatus *framework.Status) (bool, string) {
 	if pod.Spec.PreemptionPolicy != nil && *pod.Spec.PreemptionPolicy == v1.PreemptNever {
 		return false, "not eligible due to preemptionPolicy=Never."
 	}
@@ -253,7 +277,7 @@ func (pl *DefaultPreemption) PodEligibleToPreemptOthers(pod *v1.Pod, nominatedNo
 		if nodeInfo, _ := nodeInfos.Get(nomNodeName); nodeInfo != nil {
 			podPriority := corev1helpers.PodPriority(pod)
 			for _, p := range nodeInfo.Pods {
-				if corev1helpers.PodPriority(p.Pod) < podPriority && podTerminatingByPreemption(p.Pod, pl.fts.EnablePodDisruptionConditions) {
+				if corev1helpers.PodPriority(p.Pod) < podPriority && podTerminatingByPreemption(p.Pod) {
 					// There is a terminating pod on the nominated node.
 					return false, "not eligible due to a terminating pod on the nominated node."
 				}
@@ -263,15 +287,15 @@ func (pl *DefaultPreemption) PodEligibleToPreemptOthers(pod *v1.Pod, nominatedNo
 	return true, ""
 }
 
-// podTerminatingByPreemption returns the pod's terminating state if feature PodDisruptionConditions is not enabled.
-// Otherwise, it additionally checks if the termination state is caused by scheduler preemption.
-func podTerminatingByPreemption(p *v1.Pod, enablePodDisruptionConditions bool) bool {
+// OrderedScoreFuncs returns a list of ordered score functions to select preferable node where victims will be preempted.
+func (pl *DefaultPreemption) OrderedScoreFuncs(ctx context.Context, nodesToVictims map[string]*extenderv1.Victims) []func(node string) int64 {
+	return nil
+}
+
+// podTerminatingByPreemption returns true if the pod is in the termination state caused by scheduler preemption.
+func podTerminatingByPreemption(p *v1.Pod) bool {
 	if p.DeletionTimestamp == nil {
 		return false
-	}
-
-	if !enablePodDisruptionConditions {
-		return true
 	}
 
 	for _, condition := range p.Status.Conditions {

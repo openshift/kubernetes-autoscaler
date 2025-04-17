@@ -23,6 +23,7 @@ import (
 	"fmt"
 
 	"github.com/google/go-cmp/cmp"
+
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/events"
@@ -68,6 +69,18 @@ func NewMap(ctx context.Context, cfgs []config.KubeSchedulerProfile, r framework
 func (m Map) HandlesSchedulerName(name string) bool {
 	_, ok := m[name]
 	return ok
+}
+
+// Close closes all frameworks registered in this map.
+func (m Map) Close() error {
+	var errs []error
+	for name, f := range m {
+		err := f.Close()
+		if err != nil {
+			errs = append(errs, fmt.Errorf("framework %s failed to close: %w", name, err))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // NewRecorderFactory returns a RecorderFactory for the broadcaster.

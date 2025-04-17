@@ -21,7 +21,7 @@ limitations under the License.
 package operationexecutor
 
 import (
-	"time"
+	"k8s.io/apimachinery/pkg/types"
 
 	"k8s.io/kubernetes/pkg/kubelet/pluginmanager/cache"
 	"k8s.io/kubernetes/pkg/util/goroutinemap"
@@ -43,9 +43,9 @@ import (
 // errors are simply logged and the goroutine is terminated without updating
 // actualStateOfWorld.
 type OperationExecutor interface {
-	// RegisterPlugin registers the given plugin using the a handler in the plugin handler map.
+	// RegisterPlugin registers the given plugin using a handler in the plugin handler map.
 	// It then updates the actual state of the world to reflect that.
-	RegisterPlugin(socketPath string, timestamp time.Time, pluginHandlers map[string]cache.PluginHandler, actualStateOfWorld ActualStateOfWorldUpdater) error
+	RegisterPlugin(socketPath string, UUID types.UID, pluginHandlers map[string]cache.PluginHandler, actualStateOfWorld ActualStateOfWorldUpdater) error
 
 	// UnregisterPlugin deregisters the given plugin using a handler in the given plugin handler map.
 	// It then updates the actual state of the world to reflect that.
@@ -94,11 +94,11 @@ func (oe *operationExecutor) IsOperationPending(socketPath string) bool {
 
 func (oe *operationExecutor) RegisterPlugin(
 	socketPath string,
-	timestamp time.Time,
+	pluginUUID types.UID,
 	pluginHandlers map[string]cache.PluginHandler,
 	actualStateOfWorld ActualStateOfWorldUpdater) error {
 	generatedOperation :=
-		oe.operationGenerator.GenerateRegisterPluginFunc(socketPath, timestamp, pluginHandlers, actualStateOfWorld)
+		oe.operationGenerator.GenerateRegisterPluginFunc(socketPath, pluginUUID, pluginHandlers, actualStateOfWorld)
 
 	return oe.pendingOperations.Run(
 		socketPath, generatedOperation)

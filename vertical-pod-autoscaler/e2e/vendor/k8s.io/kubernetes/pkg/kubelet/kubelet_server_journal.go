@@ -53,7 +53,7 @@ var (
 	// The set of known safe characters to pass to journalctl / GetWinEvent flags - only add to this list if the
 	// character cannot be used to create invalid sequences. This is intended as a broad defense against malformed
 	// input that could cause an escape.
-	reServiceNameUnsafeCharacters = regexp.MustCompile(`[^a-zA-Z\-_0-9@]+`)
+	reServiceNameUnsafeCharacters = regexp.MustCompile(`[^a-zA-Z\-_.:0-9@]+`)
 )
 
 // journalServer returns text output from the OS specific service logger to view
@@ -267,7 +267,7 @@ func (n *nodeLogQuery) Copy(w io.Writer) {
 	// set the deadline to the maximum across both runs
 	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(30*time.Second))
 	defer cancel()
-	boot := int(0)
+	boot := 0
 	if n.Boot != nil {
 		boot = *n.Boot
 	}
@@ -343,7 +343,7 @@ func copyFileLogs(ctx context.Context, w io.Writer, services []string) {
 	}
 
 	for _, service := range services {
-		heuristicsCopyFileLogs(ctx, w, service)
+		heuristicsCopyFileLogs(ctx, w, nodeLogDir, service)
 	}
 }
 
@@ -352,21 +352,16 @@ func copyFileLogs(ctx context.Context, w io.Writer, services []string) {
 // /var/log/service.log or
 // /var/log/service/service.log or
 // in that order stopping on first success.
-func heuristicsCopyFileLogs(ctx context.Context, w io.Writer, service string) {
+func heuristicsCopyFileLogs(ctx context.Context, w io.Writer, logDir, service string) {
 	logFileNames := [3]string{
-		fmt.Sprintf("%s", service),
+		service,
 		fmt.Sprintf("%s.log", service),
 		fmt.Sprintf("%s/%s.log", service, service),
 	}
 
 	var err error
 	for _, logFileName := range logFileNames {
-		var logFile string
-		logFile, err = securejoin.SecureJoin(nodeLogDir, logFileName)
-		if err != nil {
-			break
-		}
-		err = heuristicsCopyFileLog(ctx, w, logFile)
+		err = heuristicsCopyFileLog(ctx, w, logDir, logFileName)
 		if err == nil {
 			break
 		} else if errors.Is(err, os.ErrNotExist) {
@@ -405,30 +400,6 @@ func newReaderCtx(ctx context.Context, r io.Reader) io.Reader {
 		ctx:    ctx,
 		Reader: r,
 	}
-}
-
-// heuristicsCopyFileLog returns the contents of the given logFile
-func heuristicsCopyFileLog(ctx context.Context, w io.Writer, logFile string) error {
-	fInfo, err := os.Stat(logFile)
-	if err != nil {
-		return err
-	}
-	// This is to account for the heuristics where logs for service foo
-	// could be in /var/log/foo/
-	if fInfo.IsDir() {
-		return os.ErrNotExist
-	}
-
-	f, err := os.Open(logFile)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	if _, err := io.Copy(w, newReaderCtx(ctx, f)); err != nil {
-		return err
-	}
-	return nil
 }
 
 func safeServiceName(s string) error {

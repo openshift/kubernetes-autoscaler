@@ -88,6 +88,11 @@ type KubeletConfiguration struct {
 	// staticPodPath is the path to the directory containing local (static) pods to
 	// run, or the path to a single static pod file.
 	StaticPodPath string
+	// podLogsDir is a custom root directory path kubelet will use to place pod's log files.
+	// Default: "/var/log/pods/"
+	// Note: it is not recommended to use the temp folder as a log directory as it may cause
+	// unexpected behavior in many places.
+	PodLogsDir string
 	// syncFrequency is the max period between synchronizing running
 	// containers and config
 	SyncFrequency metav1.Duration
@@ -192,9 +197,13 @@ type KubeletConfiguration struct {
 	NodeStatusReportFrequency metav1.Duration
 	// nodeLeaseDurationSeconds is the duration the Kubelet will set on its corresponding Lease.
 	NodeLeaseDurationSeconds int32
-	// imageMinimumGCAge is the minimum age for an unused image before it is
+	// ImageMinimumGCAge is the minimum age for an unused image before it is
 	// garbage collected.
 	ImageMinimumGCAge metav1.Duration
+	// ImageMaximumGCAge is the maximum age an image can be unused before it is garbage collected.
+	// The default of this field is "0s", which disables this field--meaning images won't be garbage
+	// collected based on being unused for too long.
+	ImageMaximumGCAge metav1.Duration
 	// imageGCHighThresholdPercent is the percent of disk usage after which
 	// image garbage collection is always run. The percent is calculated as
 	// this field value out of 100.
@@ -220,6 +229,10 @@ type KubeletConfiguration struct {
 	CgroupsPerQOS bool
 	// driver that the kubelet uses to manipulate cgroups on the host (cgroupfs or systemd)
 	CgroupDriver string
+	// SingleProcessOOMKill, if true, will prevent the `memory.oom.group` flag from being set for container
+	// cgroups in cgroups v2. This causes processes in the container to be OOM killed individually instead of as
+	// a group. It means that if true, the behavior aligns with the behavior of cgroups v1.
+	SingleProcessOOMKill *bool
 	// CPUManagerPolicy is the name of the policy to use.
 	// Requires the CPUManager feature gate to be enabled.
 	CPUManagerPolicy string
@@ -272,6 +285,7 @@ type KubeletConfiguration struct {
 	ResolverConfig string
 	// RunOnce causes the Kubelet to check the API server once for pods,
 	// run those in addition to the pods specified by static pod files, and exit.
+	// Deprecated: no longer has any effect.
 	RunOnce bool
 	// cpuCFSQuota enables CPU CFS quota enforcement for containers that
 	// specify CPU limits
@@ -343,6 +357,11 @@ type KubeletConfiguration struct {
 	ContainerLogMaxSize string
 	// Maximum number of container log files that can be present for a container.
 	ContainerLogMaxFiles int32
+	// Maximum number of concurrent log rotation workers to spawn for processing the log rotation
+	// requests
+	ContainerLogMaxWorkers int32
+	// Interval at which the container logs are monitored for rotation
+	ContainerLogMonitorInterval metav1.Duration
 	// ConfigMapAndSecretChangeDetectionStrategy is a mode in which config map and secret managers are running.
 	ConfigMapAndSecretChangeDetectionStrategy ResourceChangeDetectionStrategy
 	// A comma separated allowlist of unsafe sysctls or sysctl patterns (ending in `*`).
@@ -360,12 +379,12 @@ type KubeletConfiguration struct {
 	// A set of ResourceName=ResourceQuantity (e.g. cpu=200m,memory=150G,ephemeral-storage=1G,pid=100) pairs
 	// that describe resources reserved for non-kubernetes components.
 	// Currently only cpu, memory and local ephemeral storage for root file system are supported.
-	// See http://kubernetes.io/docs/user-guide/compute-resources for more detail.
+	// See https://kubernetes.io/docs/tasks/administer-cluster/reserve-compute-resources for more detail.
 	SystemReserved map[string]string
 	// A set of ResourceName=ResourceQuantity (e.g. cpu=200m,memory=150G,ephemeral-storage=1G,pid=100) pairs
 	// that describe resources reserved for kubernetes system components.
 	// Currently only cpu, memory and local ephemeral storage for root file system are supported.
-	// See http://kubernetes.io/docs/user-guide/compute-resources for more detail.
+	// See https://kubernetes.io/docs/tasks/administer-cluster/reserve-compute-resources for more detail.
 	KubeReserved map[string]string
 	// This flag helps kubelet identify absolute name of top level cgroup used to enforce `SystemReserved` compute resource reservation for OS system daemons.
 	// Refer to [Node Allocatable](https://kubernetes.io/docs/tasks/administer-cluster/reserve-compute-resources/#node-allocatable) doc for more information.
@@ -480,6 +499,19 @@ type KubeletConfiguration struct {
 	// If not specified the default value is ContainerRuntimeEndpoint
 	// +optional
 	ImageServiceEndpoint string
+
+	// FailCgroupV1 prevents the kubelet from starting on hosts
+	// that use cgroup v1. By default, this is set to 'false', meaning
+	// the kubelet is allowed to start on cgroup v1 hosts unless this
+	// option is explicitly enabled.
+	// +optional
+	FailCgroupV1 bool
+
+	// CrashLoopBackOff contains config to modify node-level parameters for
+	// container restart behavior
+	// +featureGate=KubeletCrashLoopBackoffMax
+	// +optional
+	CrashLoopBackOff CrashLoopBackOffConfig
 }
 
 // KubeletAuthorizationMode denotes the authorization mode for the kubelet
@@ -652,9 +684,19 @@ type ShutdownGracePeriodByPodPriority struct {
 
 type MemorySwapConfiguration struct {
 	// swapBehavior configures swap memory available to container workloads. May be one of
-	// "", "LimitedSwap": workload combined memory and swap usage cannot exceed pod memory limit
-	// "UnlimitedSwap": workloads can use unlimited swap, up to the allocatable limit.
+	// "", "NoSwap": workloads can not use swap, default option.
+	// "LimitedSwap": workload swap usage is limited. The swap limit is proportionate to the container's memory request.
 	// +featureGate=NodeSwap
 	// +optional
 	SwapBehavior string
+}
+
+// CrashLoopBackOffConfig is used for setting configuration for this kubelet's
+// container restart behavior
+type CrashLoopBackOffConfig struct {
+	// MaxContainerRestartPeriod is the maximum duration the backoff delay can accrue
+	// to for container restarts, minimum 1 second, maximum 300 seconds.
+	// +featureGate=KubeletCrashLoopBackOffMax
+	// +optional
+	MaxContainerRestartPeriod *metav1.Duration
 }

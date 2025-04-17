@@ -105,7 +105,7 @@ var _ volume.CustomBlockVolumeMapper = &csiBlockMapper{}
 // Example: plugins/kubernetes.io/csi/volumeDevices/{specName}/dev
 func (m *csiBlockMapper) GetGlobalMapPath(spec *volume.Spec) (string, error) {
 	dir := getVolumeDevicePluginDir(m.specName, m.plugin.host)
-	klog.V(4).Infof(log("blockMapper.GetGlobalMapPath = %s", dir))
+	klog.V(4).Info(log("blockMapper.GetGlobalMapPath = %s", dir))
 	return dir, nil
 }
 
@@ -137,7 +137,7 @@ func (m *csiBlockMapper) getPublishPath() string {
 // returns: pods/{podUID}/volumeDevices/kubernetes.io~csi, {specName}
 func (m *csiBlockMapper) GetPodDeviceMapPath() (string, string) {
 	path := m.plugin.host.GetPodVolumeDeviceDir(m.podUID, utilstrings.EscapeQualifiedName(CSIPluginName))
-	klog.V(4).Infof(log("blockMapper.GetPodDeviceMapPath [path=%s; name=%s]", path, m.specName))
+	klog.V(4).Info(log("blockMapper.GetPodDeviceMapPath [path=%s; name=%s]", path, m.specName))
 	return path, m.specName
 }
 
@@ -149,10 +149,10 @@ func (m *csiBlockMapper) stageVolumeForBlock(
 	csiSource *v1.CSIPersistentVolumeSource,
 	attachment *storage.VolumeAttachment,
 ) (string, error) {
-	klog.V(4).Infof(log("blockMapper.stageVolumeForBlock called"))
+	klog.V(4).Info(log("blockMapper.stageVolumeForBlock called"))
 
 	stagingPath := m.GetStagingPath()
-	klog.V(4).Infof(log("blockMapper.stageVolumeForBlock stagingPath set [%s]", stagingPath))
+	klog.V(4).Info(log("blockMapper.stageVolumeForBlock stagingPath set [%s]", stagingPath))
 
 	// Check whether "STAGE_UNSTAGE_VOLUME" is set
 	stageUnstageSet, err := csi.NodeSupportsStageUnstage(ctx)
@@ -160,7 +160,7 @@ func (m *csiBlockMapper) stageVolumeForBlock(
 		return "", errors.New(log("blockMapper.stageVolumeForBlock failed to check STAGE_UNSTAGE_VOLUME capability: %v", err))
 	}
 	if !stageUnstageSet {
-		klog.Infof(log("blockMapper.stageVolumeForBlock STAGE_UNSTAGE_VOLUME capability not set. Skipping MountDevice..."))
+		klog.Info(log("blockMapper.stageVolumeForBlock STAGE_UNSTAGE_VOLUME capability not set. Skipping MountDevice..."))
 		return "", nil
 	}
 	publishVolumeInfo := map[string]string{}
@@ -200,7 +200,7 @@ func (m *csiBlockMapper) stageVolumeForBlock(
 		return "", err
 	}
 
-	klog.V(4).Infof(log("blockMapper.stageVolumeForBlock successfully requested NodeStageVolume [%s]", stagingPath))
+	klog.V(4).Info(log("blockMapper.stageVolumeForBlock successfully requested NodeStageVolume [%s]", stagingPath))
 	return stagingPath, nil
 }
 
@@ -212,7 +212,7 @@ func (m *csiBlockMapper) publishVolumeForBlock(
 	csiSource *v1.CSIPersistentVolumeSource,
 	attachment *storage.VolumeAttachment,
 ) (string, error) {
-	klog.V(4).Infof(log("blockMapper.publishVolumeForBlock called"))
+	klog.V(4).Info(log("blockMapper.publishVolumeForBlock called"))
 
 	publishVolumeInfo := map[string]string{}
 	if attachment != nil {
@@ -279,7 +279,7 @@ func (m *csiBlockMapper) publishVolumeForBlock(
 
 // SetUpDevice ensures the device is attached returns path where the device is located.
 func (m *csiBlockMapper) SetUpDevice() (string, error) {
-	klog.V(4).Infof(log("blockMapper.SetUpDevice called"))
+	klog.V(4).Info(log("blockMapper.SetUpDevice called"))
 
 	// Get csiSource from spec
 	if m.spec == nil {
@@ -319,7 +319,9 @@ func (m *csiBlockMapper) SetUpDevice() (string, error) {
 
 	csiClient, err := m.csiClientGetter.Get()
 	if err != nil {
-		return "", errors.New(log("blockMapper.SetUpDevice failed to get CSI client: %v", err))
+		// Treat the absence of the CSI driver as a transient error
+		// See https://github.com/kubernetes/kubernetes/issues/120268
+		return "", volumetypes.NewTransientOperationFailure(log("blockMapper.SetUpDevice failed to get CSI client: %v", err))
 	}
 
 	// Call NodeStageVolume
@@ -339,7 +341,7 @@ func (m *csiBlockMapper) SetUpDevice() (string, error) {
 }
 
 func (m *csiBlockMapper) MapPodDevice() (string, error) {
-	klog.V(4).Infof(log("blockMapper.MapPodDevice called"))
+	klog.V(4).Info(log("blockMapper.MapPodDevice called"))
 
 	// Get csiSource from spec
 	if m.spec == nil {
@@ -379,7 +381,9 @@ func (m *csiBlockMapper) MapPodDevice() (string, error) {
 
 	csiClient, err := m.csiClientGetter.Get()
 	if err != nil {
-		return "", errors.New(log("blockMapper.MapPodDevice failed to get CSI client: %v", err))
+		// Treat the absence of the CSI driver as a transient error
+		// See https://github.com/kubernetes/kubernetes/issues/120268
+		return "", volumetypes.NewTransientOperationFailure(log("blockMapper.MapPodDevice failed to get CSI client: %v", err))
 	}
 
 	// Call NodePublishVolume
@@ -404,7 +408,7 @@ func (m *csiBlockMapper) unpublishVolumeForBlock(ctx context.Context, csi csiCli
 	if err := csi.NodeUnpublishVolume(ctx, m.volumeID, publishPath); err != nil {
 		return errors.New(log("blockMapper.unpublishVolumeForBlock failed: %v", err))
 	}
-	klog.V(4).Infof(log("blockMapper.unpublishVolumeForBlock NodeUnpublished successfully [%s]", publishPath))
+	klog.V(4).Info(log("blockMapper.unpublishVolumeForBlock NodeUnpublished successfully [%s]", publishPath))
 
 	return nil
 }
@@ -417,7 +421,7 @@ func (m *csiBlockMapper) unstageVolumeForBlock(ctx context.Context, csi csiClien
 		return errors.New(log("blockMapper.unstageVolumeForBlock failed to check STAGE_UNSTAGE_VOLUME capability: %v", err))
 	}
 	if !stageUnstageSet {
-		klog.Infof(log("blockMapper.unstageVolumeForBlock STAGE_UNSTAGE_VOLUME capability not set. Skipping unstageVolumeForBlock ..."))
+		klog.Info(log("blockMapper.unstageVolumeForBlock STAGE_UNSTAGE_VOLUME capability not set. Skipping unstageVolumeForBlock ..."))
 		return nil
 	}
 
@@ -427,7 +431,7 @@ func (m *csiBlockMapper) unstageVolumeForBlock(ctx context.Context, csi csiClien
 	if err := csi.NodeUnstageVolume(ctx, m.volumeID, stagingPath); err != nil {
 		return errors.New(log("blockMapper.unstageVolumeForBlock failed: %v", err))
 	}
-	klog.V(4).Infof(log("blockMapper.unstageVolumeForBlock NodeUnstageVolume successfully [%s]", stagingPath))
+	klog.V(4).Info(log("blockMapper.unstageVolumeForBlock NodeUnstageVolume successfully [%s]", stagingPath))
 
 	// Remove stagingPath directory and its contents
 	if err := os.RemoveAll(stagingPath); err != nil {
@@ -444,14 +448,16 @@ func (m *csiBlockMapper) TearDownDevice(globalMapPath, devicePath string) error 
 
 	csiClient, err := m.csiClientGetter.Get()
 	if err != nil {
-		return errors.New(log("blockMapper.TearDownDevice failed to get CSI client: %v", err))
+		// Treat the absence of the CSI driver as a transient error
+		// See https://github.com/kubernetes/kubernetes/issues/120268
+		return volumetypes.NewTransientOperationFailure(log("blockMapper.TearDownDevice failed to get CSI client: %v", err))
 	}
 
 	// Call NodeUnstageVolume
 	stagingPath := m.GetStagingPath()
 	if _, err := os.Stat(stagingPath); err != nil {
 		if os.IsNotExist(err) {
-			klog.V(4).Infof(log("blockMapper.TearDownDevice stagingPath(%s) has already been deleted, skip calling NodeUnstageVolume", stagingPath))
+			klog.V(4).Info(log("blockMapper.TearDownDevice stagingPath(%s) has already been deleted, skip calling NodeUnstageVolume", stagingPath))
 		} else {
 			return err
 		}
@@ -506,7 +512,9 @@ func (m *csiBlockMapper) UnmapPodDevice() error {
 
 	csiClient, err := m.csiClientGetter.Get()
 	if err != nil {
-		return errors.New(log("blockMapper.UnmapPodDevice failed to get CSI client: %v", err))
+		// Treat the absence of the CSI driver as a transient error
+		// See https://github.com/kubernetes/kubernetes/issues/120268
+		return volumetypes.NewTransientOperationFailure(log("blockMapper.UnmapPodDevice failed to get CSI client: %v", err))
 	}
 
 	ctx, cancel := createCSIOperationContext(m.spec, csiTimeout)

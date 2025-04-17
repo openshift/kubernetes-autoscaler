@@ -98,6 +98,12 @@ type KubeletConfiguration struct {
 	// Default: ""
 	// +optional
 	StaticPodPath string `json:"staticPodPath,omitempty"`
+	// podLogsDir is a custom root directory path kubelet will use to place pod's log files.
+	// Default: "/var/log/pods/"
+	// Note: it is not recommended to use the temp folder as a log directory as it may cause
+	// unexpected behavior in many places.
+	// +optional
+	PodLogsDir string `json:"podLogsDir,omitempty"`
 	// syncFrequency is the max period between synchronizing running
 	// containers and config.
 	// Default: "1m"
@@ -290,6 +296,12 @@ type KubeletConfiguration struct {
 	// Default: "2m"
 	// +optional
 	ImageMinimumGCAge metav1.Duration `json:"imageMinimumGCAge,omitempty"`
+	// imageMaximumGCAge is the maximum age an image can be unused before it is garbage collected.
+	// The default of this field is "0s", which disables this field--meaning images won't be garbage
+	// collected based on being unused for too long.
+	// Default: "0s" (disabled)
+	// +optional
+	ImageMaximumGCAge metav1.Duration `json:"imageMaximumGCAge,omitempty"`
 	// imageGCHighThresholdPercent is the percent of disk usage after which
 	// image garbage collection is always run. The percent is calculated by
 	// dividing this field value by 100, so this field must be between 0 and
@@ -342,6 +354,15 @@ type KubeletConfiguration struct {
 	// Default: "None"
 	// +optional
 	CPUManagerPolicy string `json:"cpuManagerPolicy,omitempty"`
+	// singleProcessOOMKill, if true, will prevent the `memory.oom.group` flag from being set for container
+	// cgroups in cgroups v2. This causes processes in the container to be OOM killed individually instead of as
+	// a group. It means that if true, the behavior aligns with the behavior of cgroups v1.
+	// The default value is determined automatically when you don't specify.
+	// On non-linux such as windows, only null / absent is allowed.
+	// On cgroup v1 linux, only null / absent and true are allowed.
+	// On cgroup v2 linux, null / absent, true and false are allowed. The default value is false.
+	// +optional
+	SingleProcessOOMKill *bool `json:"singleProcessOOMKill,omitempty"`
 	// cpuManagerPolicyOptions is a set of key=value which 	allows to set extra options
 	// to fine tune the behaviour of the cpu manager policies.
 	// Requires  both the "CPUManager" and "CPUManagerPolicyOptions" feature gates to be enabled.
@@ -515,9 +536,6 @@ type KubeletConfiguration struct {
 	// evictionMaxPodGracePeriod is the maximum allowed grace period (in seconds) to use
 	// when terminating pods in response to a soft eviction threshold being met. This value
 	// effectively caps the Pod's terminationGracePeriodSeconds value during soft evictions.
-	// Note: Due to issue #64530, the behavior has a bug where this value currently just
-	// overrides the grace period during soft eviction, which can increase the grace
-	// period from what is set on the Pod. This bug will be fixed in a future release.
 	// Default: 0
 	// +optional
 	EvictionMaxPodGracePeriod int32 `json:"evictionMaxPodGracePeriod,omitempty"`
@@ -589,6 +607,21 @@ type KubeletConfiguration struct {
 	// Default: 5
 	// +optional
 	ContainerLogMaxFiles *int32 `json:"containerLogMaxFiles,omitempty"`
+
+	// ContainerLogMaxWorkers specifies the maximum number of concurrent workers to spawn
+	// for performing the log rotate operations. Set this count to 1 for disabling the
+	// concurrent log rotation workflows
+	// Default: 1
+	// +optional
+	ContainerLogMaxWorkers *int32 `json:"containerLogMaxWorkers,omitempty"`
+
+	// ContainerLogMonitorInterval specifies the duration at which the container logs are monitored
+	// for performing the log rotate operation. This defaults to 10 * time.Seconds. But can be
+	// customized to a smaller value based on the log generation rate and the size required to be
+	// rotated against
+	// Default: 10s
+	// +optional
+	ContainerLogMonitorInterval *metav1.Duration `json:"containerLogMonitorInterval,omitempty"`
 	// configMapAndSecretChangeDetectionStrategy is a mode in which ConfigMap and Secret
 	// managers are running. Valid values include:
 	//
@@ -605,14 +638,14 @@ type KubeletConfiguration struct {
 	// systemReserved is a set of ResourceName=ResourceQuantity (e.g. cpu=200m,memory=150G)
 	// pairs that describe resources reserved for non-kubernetes components.
 	// Currently only cpu and memory are supported.
-	// See http://kubernetes.io/docs/user-guide/compute-resources for more detail.
+	// See https://kubernetes.io/docs/tasks/administer-cluster/reserve-compute-resources for more detail.
 	// Default: nil
 	// +optional
 	SystemReserved map[string]string `json:"systemReserved,omitempty"`
 	// kubeReserved is a set of ResourceName=ResourceQuantity (e.g. cpu=200m,memory=150G) pairs
 	// that describe resources reserved for kubernetes system components.
 	// Currently cpu, memory and local storage for root file system are supported.
-	// See https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+	// See https://kubernetes.io/docs/tasks/administer-cluster/reserve-compute-resources
 	// for more details.
 	// Default: nil
 	// +optional
@@ -742,6 +775,11 @@ type KubeletConfiguration struct {
 	// +featureGate=GracefulNodeShutdownBasedOnPodPriority
 	// +optional
 	ShutdownGracePeriodByPodPriority []ShutdownGracePeriodByPodPriority `json:"shutdownGracePeriodByPodPriority,omitempty"`
+	// CrashLoopBackOff contains config to modify node-level parameters for
+	// container restart behavior
+	// +featureGate=KubeletCrashLoopBackOffMax
+	// +optional
+	CrashLoopBackOff CrashLoopBackOffConfig `json:"crashLoopBackOff,omitempty"`
 	// reservedMemory specifies a comma-separated list of memory reservations for NUMA nodes.
 	// The parameter makes sense only in the context of the memory manager feature.
 	// The memory manager will not allocate reserved memory for container workloads.
@@ -824,6 +862,14 @@ type KubeletConfiguration struct {
 	// If not specified, the value in containerRuntimeEndpoint is used.
 	// +optional
 	ImageServiceEndpoint string `json:"imageServiceEndpoint,omitempty"`
+
+	// FailCgroupV1 prevents the kubelet from starting on hosts
+	// that use cgroup v1. By default, this is set to 'false', meaning
+	// the kubelet is allowed to start on cgroup v1 hosts unless this
+	// option is explicitly enabled.
+	// Default: false
+	// +optional
+	FailCgroupV1 *bool `json:"failCgroupV1,omitempty"`
 }
 
 type KubeletAuthorizationMode string
@@ -927,11 +973,20 @@ type ShutdownGracePeriodByPodPriority struct {
 
 type MemorySwapConfiguration struct {
 	// swapBehavior configures swap memory available to container workloads. May be one of
-	// "", "LimitedSwap": workload combined memory and swap usage cannot exceed pod memory limit
-	// "UnlimitedSwap": workloads can use unlimited swap, up to the allocatable limit.
+	// "", "NoSwap": workloads can not use swap, default option.
+	// "LimitedSwap": workload swap usage is limited. The swap limit is proportionate to the container's memory request.
 	// +featureGate=NodeSwap
 	// +optional
 	SwapBehavior string `json:"swapBehavior,omitempty"`
+}
+
+type CrashLoopBackOffConfig struct {
+	// maxContainerRestartPeriod is the maximum duration the backoff delay can accrue
+	// to for container restarts, minimum 1 second, maximum 300 seconds. If not set,
+	// defaults to the internal crashloopbackoff maximum (300s).
+	// +featureGate=KubeletCrashLoopBackOffMax
+	// +optional
+	MaxContainerRestartPeriod *metav1.Duration `json:"maxContainerRestartPeriod,omitempty"`
 }
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object

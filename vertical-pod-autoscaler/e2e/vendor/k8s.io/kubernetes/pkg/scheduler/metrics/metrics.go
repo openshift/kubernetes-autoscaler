@@ -20,8 +20,10 @@ import (
 	"sync"
 	"time"
 
+	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	"k8s.io/component-base/metrics"
 	"k8s.io/component-base/metrics/legacyregistry"
+	"k8s.io/kubernetes/pkg/features"
 	volumebindingmetrics "k8s.io/kubernetes/pkg/scheduler/framework/plugins/volumebinding/metrics"
 )
 
@@ -38,7 +40,29 @@ const (
 	Binding = "binding"
 )
 
-// Below are possible values for the extension_point label.
+const (
+	GoroutineResultSuccess = "success"
+	GoroutineResultError   = "error"
+)
+
+// ExtentionPoints is a list of possible values for the extension_point label.
+var ExtentionPoints = []string{
+	PreFilter,
+	Filter,
+	PreFilterExtensionAddPod,
+	PreFilterExtensionRemovePod,
+	PostFilter,
+	PreScore,
+	Score,
+	ScoreExtensionNormalize,
+	PreBind,
+	Bind,
+	PostBind,
+	Reserve,
+	Unreserve,
+	Permit,
+}
+
 const (
 	PreFilter                   = "PreFilter"
 	Filter                      = "Filter"
@@ -56,8 +80,73 @@ const (
 	Permit                      = "Permit"
 )
 
+const (
+	QueueingHintResultQueue     = "Queue"
+	QueueingHintResultQueueSkip = "QueueSkip"
+	QueueingHintResultError     = "Error"
+)
+
+const (
+	PodPoppedInFlightEvent = "PodPopped"
+)
+
 // All the histogram based metrics have 1ms as size for the smallest bucket.
 var (
+	scheduleAttempts           *metrics.CounterVec
+	EventHandlingLatency       *metrics.HistogramVec
+	schedulingLatency          *metrics.HistogramVec
+	SchedulingAlgorithmLatency *metrics.Histogram
+	PreemptionVictims          *metrics.Histogram
+	PreemptionAttempts         *metrics.Counter
+	pendingPods                *metrics.GaugeVec
+	InFlightEvents             *metrics.GaugeVec
+	Goroutines                 *metrics.GaugeVec
+
+	// PodSchedulingDuration is deprecated as of Kubernetes v1.28, and will be removed
+	// in v1.31. Please use PodSchedulingSLIDuration instead.
+	PodSchedulingDuration           *metrics.HistogramVec
+	PodSchedulingSLIDuration        *metrics.HistogramVec
+	PodSchedulingAttempts           *metrics.Histogram
+	FrameworkExtensionPointDuration *metrics.HistogramVec
+	PluginExecutionDuration         *metrics.HistogramVec
+
+	PermitWaitDuration    *metrics.HistogramVec
+	CacheSize             *metrics.GaugeVec
+	unschedulableReasons  *metrics.GaugeVec
+	PluginEvaluationTotal *metrics.CounterVec
+
+	// The below two are only available when the QHint feature gate is enabled.
+	queueingHintExecutionDuration *metrics.HistogramVec
+	SchedulerQueueIncomingPods    *metrics.CounterVec
+
+	// The below two are only available when the async-preemption feature gate is enabled.
+	PreemptionGoroutinesDuration       *metrics.HistogramVec
+	PreemptionGoroutinesExecutionTotal *metrics.CounterVec
+
+	// metricsList is a list of all metrics that should be registered always, regardless of any feature gate's value.
+	metricsList []metrics.Registerable
+)
+
+var registerMetrics sync.Once
+
+// Register all metrics.
+func Register() {
+	// Register the metrics.
+	registerMetrics.Do(func() {
+		InitMetrics()
+		RegisterMetrics(metricsList...)
+		volumebindingmetrics.RegisterVolumeSchedulingMetrics()
+
+		if utilfeature.DefaultFeatureGate.Enabled(features.SchedulerQueueingHints) {
+			RegisterMetrics(queueingHintExecutionDuration, InFlightEvents)
+		}
+		if utilfeature.DefaultFeatureGate.Enabled(features.SchedulerAsyncPreemption) {
+			RegisterMetrics(PreemptionGoroutinesDuration, PreemptionGoroutinesExecutionTotal)
+		}
+	})
+}
+
+func InitMetrics() {
 	scheduleAttempts = metrics.NewCounterVec(
 		&metrics.CounterOpts{
 			Subsystem:      SchedulerSubsystem,
@@ -65,6 +154,16 @@ var (
 			Help:           "Number of attempts to schedule pods, by the result. 'unschedulable' means a pod could not be scheduled, while 'error' means an internal scheduler problem.",
 			StabilityLevel: metrics.STABLE,
 		}, []string{"result", "profile"})
+
+	EventHandlingLatency = metrics.NewHistogramVec(
+		&metrics.HistogramOpts{
+			Subsystem: SchedulerSubsystem,
+			Name:      "event_handling_duration_seconds",
+			Help:      "Event handling latency in seconds.",
+			// Start with 0.1ms with the last bucket being [~200ms, Inf)
+			Buckets:        metrics.ExponentialBuckets(0.0001, 2, 12),
+			StabilityLevel: metrics.ALPHA,
+		}, []string{"event"})
 
 	schedulingLatency = metrics.NewHistogramVec(
 		&metrics.HistogramOpts{
@@ -106,6 +205,13 @@ var (
 			Help:           "Number of pending pods, by the queue type. 'active' means number of pods in activeQ; 'backoff' means number of pods in backoffQ; 'unschedulable' means number of pods in unschedulablePods that the scheduler attempted to schedule and failed; 'gated' is the number of unschedulable pods that the scheduler never attempted to schedule because they are gated.",
 			StabilityLevel: metrics.STABLE,
 		}, []string{"queue"})
+	InFlightEvents = metrics.NewGaugeVec(
+		&metrics.GaugeOpts{
+			Subsystem:      SchedulerSubsystem,
+			Name:           "inflight_events",
+			Help:           "Number of events currently tracked in the scheduling queue.",
+			StabilityLevel: metrics.ALPHA,
+		}, []string{"event"})
 	Goroutines = metrics.NewGaugeVec(
 		&metrics.GaugeOpts{
 			Subsystem:      SchedulerSubsystem,
@@ -113,14 +219,29 @@ var (
 			Help:           "Number of running goroutines split by the work they do such as binding.",
 			StabilityLevel: metrics.ALPHA,
 		}, []string{"operation"})
+
+	// PodSchedulingDuration is deprecated as of Kubernetes v1.28, and will be removed
+	// in v1.31. Please use PodSchedulingSLIDuration instead.
 	PodSchedulingDuration = metrics.NewHistogramVec(
 		&metrics.HistogramOpts{
 			Subsystem: SchedulerSubsystem,
 			Name:      "pod_scheduling_duration_seconds",
 			Help:      "E2e latency for a pod being scheduled which may include multiple scheduling attempts.",
 			// Start with 10ms with the last bucket being [~88m, Inf).
+			Buckets:           metrics.ExponentialBuckets(0.01, 2, 20),
+			StabilityLevel:    metrics.STABLE,
+			DeprecatedVersion: "1.29.0",
+		},
+		[]string{"attempts"})
+
+	PodSchedulingSLIDuration = metrics.NewHistogramVec(
+		&metrics.HistogramOpts{
+			Subsystem: SchedulerSubsystem,
+			Name:      "pod_scheduling_sli_duration_seconds",
+			Help:      "E2e latency for a pod being scheduled, from the time the pod enters the scheduling queue and might involve multiple scheduling attempts.",
+			// Start with 10ms with the last bucket being [~88m, Inf).
 			Buckets:        metrics.ExponentialBuckets(0.01, 2, 20),
-			StabilityLevel: metrics.STABLE,
+			StabilityLevel: metrics.BETA,
 		},
 		[]string{"attempts"})
 
@@ -155,6 +276,19 @@ var (
 			StabilityLevel: metrics.ALPHA,
 		},
 		[]string{"plugin", "extension_point", "status"})
+
+	// This is only available when the QHint feature gate is enabled.
+	queueingHintExecutionDuration = metrics.NewHistogramVec(
+		&metrics.HistogramOpts{
+			Subsystem: SchedulerSubsystem,
+			Name:      "queueing_hint_execution_duration_seconds",
+			Help:      "Duration for running a queueing hint function of a plugin.",
+			// Start with 0.01ms with the last bucket being [~22ms, Inf). We use a small factor (1.5)
+			// so that we have better granularity since plugin latency is very sensitive.
+			Buckets:        metrics.ExponentialBuckets(0.00001, 1.5, 20),
+			StabilityLevel: metrics.ALPHA,
+		},
+		[]string{"plugin", "event", "hint"})
 
 	SchedulerQueueIncomingPods = metrics.NewCounterVec(
 		&metrics.CounterOpts{
@@ -194,18 +328,39 @@ var (
 		&metrics.CounterOpts{
 			Subsystem:      SchedulerSubsystem,
 			Name:           "plugin_evaluation_total",
-			Help:           "Number of attempts to schedule pods by each plugin and the extension point (available only in PreFilter and Filter.).",
+			Help:           "Number of attempts to schedule pods by each plugin and the extension point (available only in PreFilter, Filter, PreScore, and Score).",
 			StabilityLevel: metrics.ALPHA,
 		}, []string{"plugin", "extension_point", "profile"})
+
+	PreemptionGoroutinesDuration = metrics.NewHistogramVec(
+		&metrics.HistogramOpts{
+			Subsystem:      SchedulerSubsystem,
+			Name:           "preemption_goroutines_duration_seconds",
+			Help:           "Duration in seconds for running goroutines for the preemption.",
+			Buckets:        metrics.ExponentialBuckets(0.01, 2, 20),
+			StabilityLevel: metrics.ALPHA,
+		},
+		[]string{"result"})
+
+	PreemptionGoroutinesExecutionTotal = metrics.NewCounterVec(
+		&metrics.CounterOpts{
+			Subsystem:      SchedulerSubsystem,
+			Name:           "preemption_goroutines_execution_total",
+			Help:           "Number of preemption goroutines executed.",
+			StabilityLevel: metrics.ALPHA,
+		},
+		[]string{"result"})
 
 	metricsList = []metrics.Registerable{
 		scheduleAttempts,
 		schedulingLatency,
 		SchedulingAlgorithmLatency,
+		EventHandlingLatency,
 		PreemptionVictims,
 		PreemptionAttempts,
 		pendingPods,
 		PodSchedulingDuration,
+		PodSchedulingSLIDuration,
 		PodSchedulingAttempts,
 		FrameworkExtensionPointDuration,
 		PluginExecutionDuration,
@@ -216,17 +371,6 @@ var (
 		unschedulableReasons,
 		PluginEvaluationTotal,
 	}
-)
-
-var registerMetrics sync.Once
-
-// Register all metrics.
-func Register() {
-	// Register the metrics.
-	registerMetrics.Do(func() {
-		RegisterMetrics(metricsList...)
-		volumebindingmetrics.RegisterVolumeSchedulingMetrics()
-	})
 }
 
 // RegisterMetrics registers a list of metrics.

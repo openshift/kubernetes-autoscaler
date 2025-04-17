@@ -20,6 +20,7 @@ limitations under the License.
 package cadvisor
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"net/http"
@@ -34,13 +35,12 @@ import (
 
 	"github.com/google/cadvisor/cache/memory"
 	cadvisormetrics "github.com/google/cadvisor/container"
-	"github.com/google/cadvisor/events"
 	cadvisorapi "github.com/google/cadvisor/info/v1"
 	cadvisorapiv2 "github.com/google/cadvisor/info/v2"
 	"github.com/google/cadvisor/manager"
 	"github.com/google/cadvisor/utils/sysfs"
 	"k8s.io/klog/v2"
-	"k8s.io/utils/pointer"
+	"k8s.io/utils/ptr"
 )
 
 type cadvisorClient struct {
@@ -72,7 +72,8 @@ func init() {
 			f.DefValue = defaultValue
 			f.Value.Set(defaultValue)
 		} else {
-			klog.ErrorS(nil, "Expected cAdvisor flag not found", "flag", name)
+			ctx := context.Background()
+			klog.FromContext(ctx).Error(nil, "Expected cAdvisor flag not found", "flag", name)
 		}
 	}
 }
@@ -97,9 +98,9 @@ func New(imageFsInfoProvider ImageFsInfoProvider, rootPath string, cgroupRoots [
 	}
 
 	duration := maxHousekeepingInterval
-	housekeepingConfig := manager.HouskeepingConfig{
+	housekeepingConfig := manager.HousekeepingConfig{
 		Interval:     &duration,
-		AllowDynamic: pointer.Bool(allowDynamicHousekeeping),
+		AllowDynamic: ptr.To(allowDynamicHousekeeping),
 	}
 
 	// Create the cAdvisor container manager.
@@ -129,10 +130,6 @@ func (cc *cadvisorClient) Start() error {
 	return cc.Manager.Start()
 }
 
-func (cc *cadvisorClient) ContainerInfo(name string, req *cadvisorapi.ContainerInfoRequest) (*cadvisorapi.ContainerInfo, error) {
-	return cc.GetContainerInfo(name, req)
-}
-
 func (cc *cadvisorClient) ContainerInfoV2(name string, options cadvisorapiv2.RequestOptions) (map[string]cadvisorapiv2.ContainerInfo, error) {
 	return cc.GetContainerInfoV2(name, options)
 }
@@ -141,36 +138,23 @@ func (cc *cadvisorClient) VersionInfo() (*cadvisorapi.VersionInfo, error) {
 	return cc.GetVersionInfo()
 }
 
-func (cc *cadvisorClient) SubcontainerInfo(name string, req *cadvisorapi.ContainerInfoRequest) (map[string]*cadvisorapi.ContainerInfo, error) {
-	infos, err := cc.SubcontainersInfo(name, req)
-	if err != nil && len(infos) == 0 {
-		return nil, err
-	}
-
-	result := make(map[string]*cadvisorapi.ContainerInfo, len(infos))
-	for _, info := range infos {
-		result[info.Name] = info
-	}
-	return result, err
-}
-
 func (cc *cadvisorClient) MachineInfo() (*cadvisorapi.MachineInfo, error) {
 	return cc.GetMachineInfo()
 }
 
-func (cc *cadvisorClient) ImagesFsInfo() (cadvisorapiv2.FsInfo, error) {
+func (cc *cadvisorClient) ImagesFsInfo(ctx context.Context) (cadvisorapiv2.FsInfo, error) {
 	label, err := cc.imageFsInfoProvider.ImageFsInfoLabel()
 	if err != nil {
 		return cadvisorapiv2.FsInfo{}, err
 	}
-	return cc.getFsInfo(label)
+	return cc.getFsInfo(ctx, label)
 }
 
 func (cc *cadvisorClient) RootFsInfo() (cadvisorapiv2.FsInfo, error) {
 	return cc.GetDirFsInfo(cc.rootPath)
 }
 
-func (cc *cadvisorClient) getFsInfo(label string) (cadvisorapiv2.FsInfo, error) {
+func (cc *cadvisorClient) getFsInfo(ctx context.Context, label string) (cadvisorapiv2.FsInfo, error) {
 	res, err := cc.GetFsInfo(label)
 	if err != nil {
 		return cadvisorapiv2.FsInfo{}, err
@@ -180,12 +164,16 @@ func (cc *cadvisorClient) getFsInfo(label string) (cadvisorapiv2.FsInfo, error) 
 	}
 	// TODO(vmarmol): Handle this better when a label has more than one image filesystem.
 	if len(res) > 1 {
-		klog.InfoS("More than one filesystem labeled. Only using the first one", "label", label, "fileSystem", res)
+		klog.FromContext(ctx).Info("More than one filesystem labeled. Only using the first one", "label", label, "fileSystem", res)
 	}
 
 	return res[0], nil
 }
 
-func (cc *cadvisorClient) WatchEvents(request *events.Request) (*events.EventChannel, error) {
-	return cc.WatchForEvents(request)
+func (cc *cadvisorClient) ContainerFsInfo(ctx context.Context) (cadvisorapiv2.FsInfo, error) {
+	label, err := cc.imageFsInfoProvider.ContainerFsInfoLabel()
+	if err != nil {
+		return cadvisorapiv2.FsInfo{}, err
+	}
+	return cc.getFsInfo(ctx, label)
 }

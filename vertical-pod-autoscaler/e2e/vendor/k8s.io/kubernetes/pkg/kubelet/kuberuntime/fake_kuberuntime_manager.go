@@ -38,7 +38,7 @@ import (
 	"k8s.io/kubernetes/pkg/kubelet/lifecycle"
 	"k8s.io/kubernetes/pkg/kubelet/logs"
 	proberesults "k8s.io/kubernetes/pkg/kubelet/prober/results"
-	utilpointer "k8s.io/utils/pointer"
+	"k8s.io/utils/ptr"
 )
 
 const (
@@ -46,6 +46,8 @@ const (
 
 	fakeNodeAllocatableMemory = "32Gi"
 	fakeNodeAllocatableCPU    = "16"
+
+	fakePodLogsDirectory = "/var/log/pods"
 )
 
 type fakeHTTP struct {
@@ -94,7 +96,7 @@ func (f *fakePodPullingTimeRecorder) RecordImageFinishedPulling(podUID types.UID
 func newFakeKubeRuntimeManager(runtimeService internalapi.RuntimeService, imageService internalapi.ImageManagerService, machineInfo *cadvisorapi.MachineInfo, osInterface kubecontainer.OSInterface, runtimeHelper kubecontainer.RuntimeHelper, keyring credentialprovider.DockerKeyring, tracer trace.Tracer) (*kubeGenericRuntimeManager, error) {
 	ctx := context.Background()
 	recorder := &record.FakeRecorder{}
-	logManager, err := logs.NewContainerLogManager(runtimeService, osInterface, "1", 2)
+	logManager, err := logs.NewContainerLogManager(runtimeService, osInterface, "1", 2, 10, metav1.Duration{Duration: 10 * time.Second})
 	if err != nil {
 		return nil, err
 	}
@@ -115,6 +117,7 @@ func newFakeKubeRuntimeManager(runtimeService internalapi.RuntimeService, imageS
 		logReduction:           logreduction.NewLogReduction(identicalErrorDelay),
 		logManager:             logManager,
 		memoryThrottlingFactor: 0.9,
+		podLogsDirectory:       fakePodLogsDirectory,
 	}
 
 	typedVersion, err := runtimeService.Version(ctx, kubeRuntimeAPIVersion)
@@ -131,8 +134,8 @@ func newFakeKubeRuntimeManager(runtimeService internalapi.RuntimeService, imageS
 		kubeRuntimeManager,
 		flowcontrol.NewBackOff(time.Second, 300*time.Second),
 		false,
-		utilpointer.Int32Ptr(0), // No limit on max parallel image pulls,
-		0,                       // Disable image pull throttling by setting QPS to 0,
+		ptr.To[int32](0), // No limit on max parallel image pulls,
+		0,                // Disable image pull throttling by setting QPS to 0,
 		0,
 		&fakePodPullingTimeRecorder{},
 	)

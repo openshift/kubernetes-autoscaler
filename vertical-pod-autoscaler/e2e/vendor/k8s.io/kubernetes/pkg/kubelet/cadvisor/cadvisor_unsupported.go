@@ -20,9 +20,9 @@ limitations under the License.
 package cadvisor
 
 import (
+	"context"
 	"errors"
 
-	"github.com/google/cadvisor/events"
 	cadvisorapi "github.com/google/cadvisor/info/v1"
 	cadvisorapiv2 "github.com/google/cadvisor/info/v2"
 )
@@ -43,23 +43,11 @@ func (cu *cadvisorUnsupported) Start() error {
 	return errUnsupported
 }
 
-func (cu *cadvisorUnsupported) DockerContainer(name string, req *cadvisorapi.ContainerInfoRequest) (cadvisorapi.ContainerInfo, error) {
-	return cadvisorapi.ContainerInfo{}, errUnsupported
-}
-
-func (cu *cadvisorUnsupported) ContainerInfo(name string, req *cadvisorapi.ContainerInfoRequest) (*cadvisorapi.ContainerInfo, error) {
-	return nil, errUnsupported
-}
-
 func (cu *cadvisorUnsupported) ContainerInfoV2(name string, options cadvisorapiv2.RequestOptions) (map[string]cadvisorapiv2.ContainerInfo, error) {
 	return nil, errUnsupported
 }
 
 func (cu *cadvisorUnsupported) GetRequestedContainersInfo(containerName string, options cadvisorapiv2.RequestOptions) (map[string]*cadvisorapi.ContainerInfo, error) {
-	return nil, errUnsupported
-}
-
-func (cu *cadvisorUnsupported) SubcontainerInfo(name string, req *cadvisorapi.ContainerInfoRequest) (map[string]*cadvisorapi.ContainerInfo, error) {
 	return nil, errUnsupported
 }
 
@@ -71,7 +59,7 @@ func (cu *cadvisorUnsupported) VersionInfo() (*cadvisorapi.VersionInfo, error) {
 	return nil, errUnsupported
 }
 
-func (cu *cadvisorUnsupported) ImagesFsInfo() (cadvisorapiv2.FsInfo, error) {
+func (cu *cadvisorUnsupported) ImagesFsInfo(context.Context) (cadvisorapiv2.FsInfo, error) {
 	return cadvisorapiv2.FsInfo{}, errUnsupported
 }
 
@@ -79,8 +67,8 @@ func (cu *cadvisorUnsupported) RootFsInfo() (cadvisorapiv2.FsInfo, error) {
 	return cadvisorapiv2.FsInfo{}, errUnsupported
 }
 
-func (cu *cadvisorUnsupported) WatchEvents(request *events.Request) (*events.EventChannel, error) {
-	return nil, errUnsupported
+func (cu *cadvisorUnsupported) ContainerFsInfo(context.Context) (cadvisorapiv2.FsInfo, error) {
+	return cadvisorapiv2.FsInfo{}, errUnsupported
 }
 
 func (cu *cadvisorUnsupported) GetDirFsInfo(path string) (cadvisorapiv2.FsInfo, error) {

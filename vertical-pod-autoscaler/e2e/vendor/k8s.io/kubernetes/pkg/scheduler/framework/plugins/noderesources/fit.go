@@ -21,16 +21,20 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/google/go-cmp/cmp"
+
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/sets"
-	"k8s.io/kubernetes/pkg/api/v1/resource"
+	"k8s.io/component-helpers/resource"
+	"k8s.io/klog/v2"
 	v1helper "k8s.io/kubernetes/pkg/apis/core/v1/helper"
 	"k8s.io/kubernetes/pkg/scheduler/apis/config"
 	"k8s.io/kubernetes/pkg/scheduler/apis/config/validation"
 	"k8s.io/kubernetes/pkg/scheduler/framework"
 	"k8s.io/kubernetes/pkg/scheduler/framework/plugins/feature"
 	"k8s.io/kubernetes/pkg/scheduler/framework/plugins/names"
+	schedutil "k8s.io/kubernetes/pkg/scheduler/util"
 )
 
 var _ framework.PreFilterPlugin = &Fit{}
@@ -85,6 +89,8 @@ type Fit struct {
 	ignoredResourceGroups           sets.Set[string]
 	enableInPlacePodVerticalScaling bool
 	enableSidecarContainers         bool
+	enableSchedulingQueueHint       bool
+	enablePodLevelResources         bool
 	handle                          framework.Handle
 	resourceAllocationScorer
 }
@@ -118,7 +124,7 @@ func (s *preScoreState) Clone() framework.StateData {
 }
 
 // PreScore calculates incoming pod's resource requests and writes them to the cycle state used.
-func (f *Fit) PreScore(ctx context.Context, cycleState *framework.CycleState, pod *v1.Pod, nodes []*v1.Node) *framework.Status {
+func (f *Fit) PreScore(ctx context.Context, cycleState *framework.CycleState, pod *v1.Pod, nodes []*framework.NodeInfo) *framework.Status {
 	state := &preScoreState{
 		podRequests: f.calculatePodResourceRequestList(pod, f.resources),
 	}
@@ -145,7 +151,7 @@ func (f *Fit) Name() string {
 }
 
 // NewFit initializes a new plugin and returns it.
-func NewFit(plArgs runtime.Object, h framework.Handle, fts feature.Features) (framework.Plugin, error) {
+func NewFit(_ context.Context, plArgs runtime.Object, h framework.Handle, fts feature.Features) (framework.Plugin, error) {
 	args, ok := plArgs.(*config.NodeResourcesFitArgs)
 	if !ok {
 		return nil, fmt.Errorf("want args to be of type NodeResourcesFitArgs, got %T", plArgs)
@@ -169,9 +175,15 @@ func NewFit(plArgs runtime.Object, h framework.Handle, fts feature.Features) (fr
 		ignoredResourceGroups:           sets.New(args.IgnoredResourceGroups...),
 		enableInPlacePodVerticalScaling: fts.EnableInPlacePodVerticalScaling,
 		enableSidecarContainers:         fts.EnableSidecarContainers,
+		enableSchedulingQueueHint:       fts.EnableSchedulingQueueHint,
 		handle:                          h,
+		enablePodLevelResources:         fts.EnablePodLevelResources,
 		resourceAllocationScorer:        *scorePlugin(args),
 	}, nil
+}
+
+type ResourceRequestsOptions struct {
+	EnablePodLevelResources bool
 }
 
 // computePodResourceRequest returns a framework.Resource that covers the largest
@@ -201,9 +213,14 @@ func NewFit(plArgs runtime.Object, h framework.Handle, fts feature.Features) (fr
 //	    Memory: 1G
 //
 // Result: CPU: 3, Memory: 3G
-func computePodResourceRequest(pod *v1.Pod) *preFilterState {
+// TODO(ndixita): modify computePodResourceRequest to accept opts of type
+// ResourceRequestOptions as the second parameter.
+func computePodResourceRequest(pod *v1.Pod, opts ResourceRequestsOptions) *preFilterState {
 	// pod hasn't scheduled yet so we don't need to worry about InPlacePodVerticalScalingEnabled
-	reqs := resource.PodRequests(pod, resource.PodResourcesOptions{})
+	reqs := resource.PodRequests(pod, resource.PodResourcesOptions{
+		// SkipPodLevelResources is set to false when PodLevelResources feature is enabled.
+		SkipPodLevelResources: !opts.EnablePodLevelResources,
+	})
 	result := &preFilterState{}
 	result.SetMaxResource(reqs)
 	return result
@@ -211,7 +228,15 @@ func computePodResourceRequest(pod *v1.Pod) *preFilterState {
 
 // PreFilter invoked at the prefilter extension point.
 func (f *Fit) PreFilter(ctx context.Context, cycleState *framework.CycleState, pod *v1.Pod) (*framework.PreFilterResult, *framework.Status) {
-	cycleState.Write(preFilterStateKey, computePodResourceRequest(pod))
+	if !f.enableSidecarContainers && hasRestartableInitContainer(pod) {
+		// Scheduler will calculate resources usage for a Pod containing
+		// restartable init containers that will be equal or more than kubelet will
+		// require to run the Pod. So there will be no overbooking. However, to
+		// avoid the inconsistency in resource calculation between the scheduler
+		// and the older (before v1.28) kubelet, make the Pod unschedulable.
+		return nil, framework.NewStatus(framework.UnschedulableAndUnresolvable, "Pod has a restartable init container and the SidecarContainers feature is disabled")
+	}
+	cycleState.Write(preFilterStateKey, computePodResourceRequest(pod, ResourceRequestsOptions{EnablePodLevelResources: f.enablePodLevelResources}))
 	return nil, nil
 }
 
@@ -236,32 +261,198 @@ func getPreFilterState(cycleState *framework.CycleState) (*preFilterState, error
 
 // EventsToRegister returns the possible events that may make a Pod
 // failed by this plugin schedulable.
-func (f *Fit) EventsToRegister() []framework.ClusterEventWithHint {
+func (f *Fit) EventsToRegister(_ context.Context) ([]framework.ClusterEventWithHint, error) {
 	podActionType := framework.Delete
 	if f.enableInPlacePodVerticalScaling {
-		// If InPlacePodVerticalScaling (KEP 1287) is enabled, then PodUpdate event should be registered
+		// If InPlacePodVerticalScaling (KEP 1287) is enabled, then UpdatePodScaleDown event should be registered
 		// for this plugin since a Pod update may free up resources that make other Pods schedulable.
-		podActionType |= framework.Update
+		podActionType |= framework.UpdatePodScaleDown
 	}
+
+	// A note about UpdateNodeTaint/UpdateNodeLabel event:
+	// Ideally, it's supposed to register only Add | UpdateNodeAllocatable because the only resource update could change the node resource fit plugin's result.
+	// But, we may miss Node/Add event due to preCheck, and we decided to register UpdateNodeTaint | UpdateNodeLabel for all plugins registering Node/Add.
+	// See: https://github.com/kubernetes/kubernetes/issues/109437
+	nodeActionType := framework.Add | framework.UpdateNodeAllocatable | framework.UpdateNodeTaint | framework.UpdateNodeLabel
+	if f.enableSchedulingQueueHint {
+		// preCheck is not used when QHint is enabled, and hence Update event isn't necessary.
+		nodeActionType = framework.Add | framework.UpdateNodeAllocatable
+	}
+
 	return []framework.ClusterEventWithHint{
-		{Event: framework.ClusterEvent{Resource: framework.Pod, ActionType: podActionType}},
-		{Event: framework.ClusterEvent{Resource: framework.Node, ActionType: framework.Add | framework.Update}},
+		{Event: framework.ClusterEvent{Resource: framework.Pod, ActionType: podActionType}, QueueingHintFn: f.isSchedulableAfterPodEvent},
+		{Event: framework.ClusterEvent{Resource: framework.Node, ActionType: nodeActionType}, QueueingHintFn: f.isSchedulableAfterNodeChange},
+	}, nil
+}
+
+// isSchedulableAfterPodEvent is invoked whenever a pod deleted or scaled down. It checks whether
+// that change made a previously unschedulable pod schedulable.
+func (f *Fit) isSchedulableAfterPodEvent(logger klog.Logger, pod *v1.Pod, oldObj, newObj interface{}) (framework.QueueingHint, error) {
+	originalPod, modifiedPod, err := schedutil.As[*v1.Pod](oldObj, newObj)
+	if err != nil {
+		return framework.Queue, err
 	}
+
+	if modifiedPod == nil {
+		if originalPod.Spec.NodeName == "" {
+			logger.V(5).Info("the deleted pod was unscheduled and it wouldn't make the unscheduled pod schedulable", "pod", klog.KObj(pod), "deletedPod", klog.KObj(originalPod))
+			return framework.QueueSkip, nil
+		}
+
+		// any deletion event to a scheduled pod could make the unscheduled pod schedulable.
+		logger.V(5).Info("another scheduled pod was deleted, and it may make the unscheduled pod schedulable", "pod", klog.KObj(pod), "deletedPod", klog.KObj(originalPod))
+		return framework.Queue, nil
+	}
+
+	if !f.enableInPlacePodVerticalScaling {
+		// If InPlacePodVerticalScaling (KEP 1287) is disabled, the pod scale down event cannot free up any resources.
+		logger.V(5).Info("another pod was modified, but InPlacePodVerticalScaling is disabled, so it doesn't make the unscheduled pod schedulable", "pod", klog.KObj(pod), "modifiedPod", klog.KObj(modifiedPod))
+		return framework.QueueSkip, nil
+	}
+
+	if !f.isSchedulableAfterPodScaleDown(pod, originalPod, modifiedPod) {
+		if loggerV := logger.V(10); loggerV.Enabled() {
+			// Log more information.
+			loggerV.Info("pod got scaled down, but the modification isn't related to the resource requests of the target pod", "pod", klog.KObj(pod), "modifiedPod", klog.KObj(modifiedPod), "diff", cmp.Diff(originalPod, modifiedPod))
+		} else {
+			logger.V(5).Info("pod got scaled down, but the modification isn't related to the resource requests of the target pod", "pod", klog.KObj(pod), "modifiedPod", klog.KObj(modifiedPod))
+		}
+		return framework.QueueSkip, nil
+	}
+
+	logger.V(5).Info("another scheduled pod or the target pod itself got scaled down, and it may make the unscheduled pod schedulable", "pod", klog.KObj(pod), "modifiedPod", klog.KObj(modifiedPod))
+	return framework.Queue, nil
+}
+
+// isSchedulableAfterPodScaleDown checks whether the scale down event may make the target pod schedulable. Specifically:
+// - Returns true when the update event is for the target pod itself.
+// - Returns true when the update event shows a scheduled pod's resource request that the target pod also requests got reduced.
+func (f *Fit) isSchedulableAfterPodScaleDown(targetPod, originalPod, modifiedPod *v1.Pod) bool {
+	if modifiedPod.UID == targetPod.UID {
+		// If the scaling down event is for targetPod, it would make targetPod schedulable.
+		return true
+	}
+
+	if modifiedPod.Spec.NodeName == "" {
+		// If the update event is for a unscheduled Pod,
+		// it wouldn't make targetPod schedulable.
+		return false
+	}
+
+	// the other pod was scheduled, so modification or deletion may free up some resources.
+	originalMaxResourceReq, modifiedMaxResourceReq := &framework.Resource{}, &framework.Resource{}
+	originalMaxResourceReq.SetMaxResource(resource.PodRequests(originalPod, resource.PodResourcesOptions{UseStatusResources: f.enableInPlacePodVerticalScaling}))
+	modifiedMaxResourceReq.SetMaxResource(resource.PodRequests(modifiedPod, resource.PodResourcesOptions{UseStatusResources: f.enableInPlacePodVerticalScaling}))
+
+	// check whether the resource request of the modified pod is less than the original pod.
+	podRequests := resource.PodRequests(targetPod, resource.PodResourcesOptions{UseStatusResources: f.enableInPlacePodVerticalScaling})
+	for rName, rValue := range podRequests {
+		if rValue.IsZero() {
+			// We only care about the resources requested by the pod we are trying to schedule.
+			continue
+		}
+		switch rName {
+		case v1.ResourceCPU:
+			if originalMaxResourceReq.MilliCPU > modifiedMaxResourceReq.MilliCPU {
+				return true
+			}
+		case v1.ResourceMemory:
+			if originalMaxResourceReq.Memory > modifiedMaxResourceReq.Memory {
+				return true
+			}
+		case v1.ResourceEphemeralStorage:
+			if originalMaxResourceReq.EphemeralStorage > modifiedMaxResourceReq.EphemeralStorage {
+				return true
+			}
+		default:
+			if schedutil.IsScalarResourceName(rName) && originalMaxResourceReq.ScalarResources[rName] > modifiedMaxResourceReq.ScalarResources[rName] {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// isSchedulableAfterNodeChange is invoked whenever a node added or changed. It checks whether
+// that change could make a previously unschedulable pod schedulable.
+func (f *Fit) isSchedulableAfterNodeChange(logger klog.Logger, pod *v1.Pod, oldObj, newObj interface{}) (framework.QueueingHint, error) {
+	originalNode, modifiedNode, err := schedutil.As[*v1.Node](oldObj, newObj)
+	if err != nil {
+		return framework.Queue, err
+	}
+	// Leaving in the queue, since the pod won't fit into the modified node anyway.
+	if !isFit(pod, modifiedNode, ResourceRequestsOptions{EnablePodLevelResources: f.enablePodLevelResources}) {
+		logger.V(5).Info("node was created or updated, but it doesn't have enough resource(s) to accommodate this pod", "pod", klog.KObj(pod), "node", klog.KObj(modifiedNode))
+		return framework.QueueSkip, nil
+	}
+	// The pod will fit, so since it's add, unblock scheduling.
+	if originalNode == nil {
+		logger.V(5).Info("node was added and it might fit the pod's resource requests", "pod", klog.KObj(pod), "node", klog.KObj(modifiedNode))
+		return framework.Queue, nil
+	}
+	// The pod will fit, but since there was no increase in available resources, the change won't make the pod schedulable.
+	if !haveAnyRequestedResourcesIncreased(pod, originalNode, modifiedNode, ResourceRequestsOptions{EnablePodLevelResources: f.enablePodLevelResources}) {
+		logger.V(5).Info("node was updated, but haven't changed the pod's resource requestments fit assessment", "pod", klog.KObj(pod), "node", klog.KObj(modifiedNode))
+		return framework.QueueSkip, nil
+	}
+
+	logger.V(5).Info("node was updated, and may now fit the pod's resource requests", "pod", klog.KObj(pod), "node", klog.KObj(modifiedNode))
+	return framework.Queue, nil
+}
+
+// haveAnyRequestedResourcesIncreased returns true if any of the resources requested by the pod have increased or if allowed pod number increased.
+func haveAnyRequestedResourcesIncreased(pod *v1.Pod, originalNode, modifiedNode *v1.Node, opts ResourceRequestsOptions) bool {
+	podRequest := computePodResourceRequest(pod, opts)
+	originalNodeInfo := framework.NewNodeInfo()
+	originalNodeInfo.SetNode(originalNode)
+	modifiedNodeInfo := framework.NewNodeInfo()
+	modifiedNodeInfo.SetNode(modifiedNode)
+
+	if modifiedNodeInfo.Allocatable.AllowedPodNumber > originalNodeInfo.Allocatable.AllowedPodNumber {
+		return true
+	}
+
+	if podRequest.MilliCPU == 0 &&
+		podRequest.Memory == 0 &&
+		podRequest.EphemeralStorage == 0 &&
+		len(podRequest.ScalarResources) == 0 {
+		return false
+	}
+
+	if (podRequest.MilliCPU > 0 && modifiedNodeInfo.Allocatable.MilliCPU > originalNodeInfo.Allocatable.MilliCPU) ||
+		(podRequest.Memory > 0 && modifiedNodeInfo.Allocatable.Memory > originalNodeInfo.Allocatable.Memory) ||
+		(podRequest.EphemeralStorage > 0 && modifiedNodeInfo.Allocatable.EphemeralStorage > originalNodeInfo.Allocatable.EphemeralStorage) {
+		return true
+	}
+
+	for rName, rQuant := range podRequest.ScalarResources {
+		// Skip in case request quantity is zero
+		if rQuant == 0 {
+			continue
+		}
+
+		if modifiedNodeInfo.Allocatable.ScalarResources[rName] > originalNodeInfo.Allocatable.ScalarResources[rName] {
+			return true
+		}
+	}
+	return false
+}
+
+// isFit checks if the pod fits the node. If the node is nil, it returns false.
+// It constructs a fake NodeInfo object for the node and checks if the pod fits the node.
+func isFit(pod *v1.Pod, node *v1.Node, opts ResourceRequestsOptions) bool {
+	if node == nil {
+		return false
+	}
+	nodeInfo := framework.NewNodeInfo()
+	nodeInfo.SetNode(node)
+	return len(Fits(pod, nodeInfo, opts)) == 0
 }
 
 // Filter invoked at the filter extension point.
 // Checks if a node has sufficient resources, such as cpu, memory, gpu, opaque int resources etc to run a pod.
 // It returns a list of insufficient resources, if empty, then the node has all the resources requested by the pod.
 func (f *Fit) Filter(ctx context.Context, cycleState *framework.CycleState, pod *v1.Pod, nodeInfo *framework.NodeInfo) *framework.Status {
-	if !f.enableSidecarContainers && hasRestartableInitContainer(pod) {
-		// Scheduler will calculate resources usage for a Pod containing
-		// restartable init containers that will be equal or more than kubelet will
-		// require to run the Pod. So there will be no overbooking. However, to
-		// avoid the inconsistency in resource calculation between the scheduler
-		// and the older (before v1.28) kubelet, make the Pod unschedulable.
-		return framework.NewStatus(framework.UnschedulableAndUnresolvable, "Pod has a restartable init container and the SidecarContainers feature is disabled")
-	}
-
 	s, err := getPreFilterState(cycleState)
 	if err != nil {
 		return framework.AsStatus(err)
@@ -301,8 +492,8 @@ type InsufficientResource struct {
 }
 
 // Fits checks if node have enough resources to host the pod.
-func Fits(pod *v1.Pod, nodeInfo *framework.NodeInfo) []InsufficientResource {
-	return fitsRequest(computePodResourceRequest(pod), nodeInfo, nil, nil)
+func Fits(pod *v1.Pod, nodeInfo *framework.NodeInfo, opts ResourceRequestsOptions) []InsufficientResource {
+	return fitsRequest(computePodResourceRequest(pod, opts), nodeInfo, nil, nil)
 }
 
 func fitsRequest(podRequest *preFilterState, nodeInfo *framework.NodeInfo, ignoredExtendedResources, ignoredResourceGroups sets.Set[string]) []InsufficientResource {
