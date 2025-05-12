@@ -19,7 +19,6 @@ package clusterapi
 import (
 	"context"
 	"fmt"
-	"reflect"
 	"testing"
 	"time"
 
@@ -115,32 +114,12 @@ func TestSetSize(t *testing.T) {
 }
 
 func TestReplicas(t *testing.T) {
-	type testCase struct {
-		description            string
-		initialReplicas        int
-		updatedReplicas        int
-		expectedReplicas       int
-		includeDeletingMachine bool
-	}
+	initialReplicas := 1
+	updatedReplicas := 5
 
-	test := func(t *testing.T, tc testCase, testConfig *testConfig) {
+	test := func(t *testing.T, testConfig *testConfig) {
 		controller, stop := mustCreateTestController(t, testConfig)
 		defer stop()
-
-		// machines in deleting phase should be included in the replicas count
-		if tc.includeDeletingMachine {
-			if tc.initialReplicas < 1 {
-				t.Fatal("test cannot pass, deleted machine requires at least 1 machine")
-			}
-
-			machine := testConfig.machines[0].DeepCopy()
-			timestamp := metav1.Now()
-			machine.SetDeletionTimestamp(&timestamp)
-
-			if err := updateResource(controller.managementClient, controller.machineInformer, controller.machineResource, machine); err != nil {
-				t.Fatalf("unexpected error updating machine, got %v", err)
-			}
-		}
 
 		testResource := testConfig.machineSet
 		if testConfig.machineDeployment != nil {
@@ -162,8 +141,8 @@ func TestReplicas(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		if i != tc.initialReplicas {
-			t.Errorf("expected %v, got: %v", tc.initialReplicas, i)
+		if i != initialReplicas {
+			t.Errorf("expected %v, got: %v", initialReplicas, i)
 		}
 
 		// fetch and update machineSet
@@ -173,7 +152,7 @@ func TestReplicas(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		s.Spec.Replicas = int32(tc.updatedReplicas)
+		s.Spec.Replicas = int32(updatedReplicas)
 
 		ch := make(chan error)
 		checkDone := func(obj interface{}) (bool, error) {
@@ -189,8 +168,8 @@ func TestReplicas(t *testing.T) {
 			if err != nil {
 				return true, err
 			}
-			if i != tc.expectedReplicas {
-				return true, fmt.Errorf("expected %v, got: %v", tc.expectedReplicas, i)
+			if i != updatedReplicas {
+				return true, fmt.Errorf("expected %v, got: %v", updatedReplicas, i)
 			}
 			return true, nil
 		}
@@ -230,85 +209,6 @@ func TestReplicas(t *testing.T) {
 			case <-time.After(1 * time.Second):
 				t.Fatal(fmt.Errorf("timeout while waiting for update. Last error was: %v", lastErr))
 			}
-		}
-	}
-
-	testCases := []testCase{
-		{
-			description:      "starting with 1 replica and increasing to 5 replicas should return 5 replicas",
-			initialReplicas:  1,
-			updatedReplicas:  5,
-			expectedReplicas: 5,
-		},
-		{
-			description:            "starting with 1 replica and a machine in deleting and increasing to 5 replicas should return 5 replicas",
-			initialReplicas:        1,
-			updatedReplicas:        5,
-			expectedReplicas:       5,
-			includeDeletingMachine: true,
-		},
-	}
-
-	for _, tc := range testCases {
-		t.Run("MachineSet", func(t *testing.T) {
-			test(t, tc, createMachineSetTestConfig(RandomString(6), RandomString(6), RandomString(6), tc.initialReplicas, nil, nil))
-		})
-	}
-
-	for _, tc := range testCases {
-		t.Run("MachineDeployment", func(t *testing.T) {
-			test(t, tc, createMachineDeploymentTestConfig(RandomString(6), RandomString(6), RandomString(6), tc.initialReplicas, nil, nil))
-		})
-	}
-}
-
-func TestTaints(t *testing.T) {
-	initialReplicas := 1
-
-	expectedTaints := []v1.Taint{
-		{Key: "test", Effect: v1.TaintEffectNoSchedule, Value: "test"},
-		{Key: "test-no-value", Effect: v1.TaintEffectNoSchedule},
-	}
-	expectedTaintsWithAnnotations := []v1.Taint{
-		{Key: "test", Effect: v1.TaintEffectNoSchedule, Value: "test"},
-		{Key: "test-no-value", Effect: v1.TaintEffectNoSchedule},
-		{Key: "key1", Effect: v1.TaintEffectNoSchedule, Value: "value1"},
-		{Key: "key2", Effect: v1.TaintEffectNoExecute, Value: "value2"},
-	}
-	taintAnnotation := "key1=value1:NoSchedule,key2=value2:NoExecute"
-
-	test := func(t *testing.T, testConfig *testConfig) {
-		controller, stop := mustCreateTestController(t, testConfig)
-		defer stop()
-
-		testResource := testConfig.machineSet
-		if testConfig.machineDeployment != nil {
-			testResource = testConfig.machineDeployment
-		}
-
-		sr, err := newUnstructuredScalableResource(controller, testResource)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		taints := sr.Taints()
-
-		if !reflect.DeepEqual(taints, expectedTaints) {
-			t.Errorf("expected %v, got: %v", expectedTaints, taints)
-		}
-
-		srAnnotations := sr.unstructured.GetAnnotations()
-		if srAnnotations == nil {
-			srAnnotations = make(map[string]string)
-		}
-
-		srAnnotations[taintsKey] = taintAnnotation
-		sr.unstructured.SetAnnotations(srAnnotations)
-
-		taints = sr.Taints()
-
-		if !reflect.DeepEqual(taints, expectedTaintsWithAnnotations) {
-			t.Errorf("expected %v, got: %v", expectedTaintsWithAnnotations, taints)
 		}
 	}
 
@@ -390,22 +290,13 @@ func TestSetSizeAndReplicas(t *testing.T) {
 	})
 }
 
-// This test now tests both the upstream and downstream annotation values while we support them both.
 func TestAnnotations(t *testing.T) {
 	cpuQuantity := resource.MustParse("2")
+	memQuantity := resource.MustParse("1024Mi")
 	diskQuantity := resource.MustParse("100Gi")
-	memQuantity := resource.MustParse("1024")
 	gpuQuantity := resource.MustParse("1")
 	maxPodsQuantity := resource.MustParse("42")
-
-	// Note, the first two taints comes from the spec of the machine template, the rest from the annotations.
-	expectedTaints := []v1.Taint{
-		{Key: "test", Effect: v1.TaintEffectNoSchedule, Value: "test"},
-		{Key: "test-no-value", Effect: v1.TaintEffectNoSchedule},
-		{Key: "key1", Effect: v1.TaintEffectNoSchedule, Value: "value1"},
-		{Key: "key2", Effect: v1.TaintEffectNoExecute, Value: "value2"},
-	}
-
+	expectedTaints := []v1.Taint{{Key: "key1", Effect: v1.TaintEffectNoSchedule, Value: "value1"}, {Key: "key2", Effect: v1.TaintEffectNoExecute, Value: "value2"}}
 	annotations := map[string]string{
 		cpuKey:          cpuQuantity.String(),
 		memoryKey:       memQuantity.String(),
@@ -487,7 +378,7 @@ func TestCanScaleFromZero(t *testing.T) {
 			"can scale from zero",
 			map[string]string{
 				cpuKey:    "1",
-				memoryKey: "1024",
+				memoryKey: "1024Mi",
 			},
 			nil,
 			true,
@@ -495,7 +386,7 @@ func TestCanScaleFromZero(t *testing.T) {
 		{
 			"with missing CPU info cannot scale from zero",
 			map[string]string{
-				memoryKey: "1024",
+				memoryKey: "1024Mi",
 			},
 			nil,
 			false,
@@ -543,7 +434,7 @@ func TestCanScaleFromZero(t *testing.T) {
 			"with both annotations and capacity in machine template can scale from zero",
 			map[string]string{
 				cpuKey:    "1",
-				memoryKey: "1024",
+				memoryKey: "1024Mi",
 			},
 			map[string]string{
 				cpuStatusKey:    "1",

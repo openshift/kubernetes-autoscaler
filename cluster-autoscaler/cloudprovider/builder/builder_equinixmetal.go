@@ -1,8 +1,8 @@
-//go:build kamatera
-// +build kamatera
+//go:build equinixmetal
+// +build equinixmetal
 
 /*
-Copyright 2020 The Kubernetes Authors.
+Copyright 2019 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -21,23 +21,24 @@ package builder
 
 import (
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
-	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/kamatera"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/equinixmetal"
 	"k8s.io/autoscaler/cluster-autoscaler/config"
 	"k8s.io/client-go/informers"
 )
 
-// AvailableCloudProviders supported by the Kamaterea cloud provider builder.
+// AvailableCloudProviders supported by the cloud provider builder.
 var AvailableCloudProviders = []string{
-	cloudprovider.KamateraProviderName,
+	cloudprovider.PacketProviderName,
+	cloudprovider.EquinixMetalProviderName,
 }
 
-// DefaultCloudProvider for Kamatera-only build is Kamatera.
-const DefaultCloudProvider = cloudprovider.KamateraProviderName
+// DefaultCloudProvider for Packet or Equinix Metal-only build is Equinix Metal.
+const DefaultCloudProvider = cloudprovider.EquinixMetalProviderName
 
 func buildCloudProvider(opts config.AutoscalingOptions, do cloudprovider.NodeGroupDiscoveryOptions, rl *cloudprovider.ResourceLimiter, _ informers.SharedInformerFactory) cloudprovider.CloudProvider {
 	switch opts.CloudProviderName {
-	case cloudprovider.KamateraProviderName:
-		return kamatera.BuildKamatera(opts, do, rl)
+	case cloudprovider.PacketProviderName, cloudprovider.EquinixMetalProviderName:
+		return equinixmetal.BuildCloudProvider(opts, do, rl)
 	}
 
 	return nil

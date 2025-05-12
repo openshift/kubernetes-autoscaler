@@ -1,19 +1,13 @@
 approvers:
 - kwiesmueller
-- kgolab
 - jbartosik
-- krzysied
-- voelzmo
 - raywainman
 reviewers:
 - kwiesmueller
-- kgolab
 - jbartosik
-- krzysied
-- voelzmo
 - raywainman
-- adrianmoisey
 emeritus_approvers:
-- schylek # 2022-09-30
+- bskiba # 2022-09-30
+- wojtek-t # 2022-09-30
 labels:
-- area/vertical-pod-autoscaler
+- area/addon-resizer
