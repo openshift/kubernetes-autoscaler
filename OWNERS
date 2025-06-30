@@ -15,5 +15,4 @@ reviewers:
 - racheljpg
 - sub-mod
 - theobarberbany
-component: Cloud Compute
-subcomponent: Cluster Autoscaler
+component: Cluster Autoscaler
