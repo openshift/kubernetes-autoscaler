@@ -113,15 +113,18 @@ func (p *SchedulerBasedPredicateChecker) FitsAnyNodeMatching(clusterSnapshot clu
 	for i := range nodeInfosList {
 		nodeInfo := nodeInfosList[(p.lastIndex+i)%len(nodeInfosList)]
 		if !nodeMatches(nodeInfo) {
+			klog.V(5).Infof("FitsAnyNodeMatching nodeMatches is false for node %q for pod %q", nodeInfo.Node().Name, pod.Name)
 			continue
 		}
 
 		if !preFilterResult.AllNodes() && !preFilterResult.NodeNames.Has(nodeInfo.Node().Name) {
+			klog.V(5).Infof("FitsAnyNodeMatching node %q is not in preFilterResult for pod %q", nodeInfo.Node().Name, pod.Name)
 			continue
 		}
 
 		// Be sure that the node is schedulable.
 		if nodeInfo.Node().Spec.Unschedulable {
+			klog.V(5).Infof("FitsAnyNodeMatching node %q is unschedulable for pod %q", nodeInfo.Node().Name, pod.Name)
 			continue
 		}
 
