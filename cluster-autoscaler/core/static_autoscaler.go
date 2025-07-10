@@ -568,6 +568,18 @@ func (a *StaticAutoscaler) RunOnce(currentTime time.Time) caerrors.AutoscalerErr
 		klog.V(1).Info("Unschedulable pods are very new, waiting one iteration for more")
 	} else {
 		scaleUpStart := preScaleUp()
+		if klog.V(6).Enabled() {
+			readyNodeNames := []string{}
+			for _, n := range readyNodes {
+				readyNodeNames = append(readyNodeNames, n.Name)
+			}
+			nodeInfosNames := []string{}
+			for _, n := range nodeInfosForGroups {
+				nodeInfosNames = append(nodeInfosNames, n.Node().Name)
+			}
+			klog.V(6).Infof("ScaleUp ready nodes: %v", readyNodeNames)
+			klog.V(6).Infof("ScaleUp node infos for groups: %v", nodeInfosNames)
+		}
 		scaleUpStatus, typedErr = a.scaleUpOrchestrator.ScaleUp(unschedulablePodsToHelp, readyNodes, daemonsets, nodeInfosForGroups, false)
 		if exit, err := postScaleUp(scaleUpStart); exit {
 			return err
