@@ -635,6 +635,7 @@ func (a *StaticAutoscaler) RunOnce(currentTime time.Time) caerrors.AutoscalerErr
 
 		if scaleDownInCooldown {
 			scaleDownStatus.Result = scaledownstatus.ScaleDownInCooldown
+			a.updateSoftDeletionTaints(allNodes)
 			if len(removedNodeGroups) > 0 {
 				a.processors.ScaleDownStatusProcessor.Process(autoscalingContext, scaleDownStatus)
 			}
@@ -656,13 +657,7 @@ func (a *StaticAutoscaler) RunOnce(currentTime time.Time) caerrors.AutoscalerErr
 				a.clusterStateRegistry.Recalculate()
 			}
 
-			if (scaleDownStatus.Result == scaledownstatus.ScaleDownNoNodeDeleted ||
-				scaleDownStatus.Result == scaledownstatus.ScaleDownNoUnneeded) &&
-				a.AutoscalingContext.AutoscalingOptions.MaxBulkSoftTaintCount != 0 {
-				taintableNodes := a.scaleDownPlanner.UnneededNodes()
-				untaintableNodes := subtractNodes(allNodes, taintableNodes)
-				actuation.UpdateSoftDeletionTaints(a.AutoscalingContext, taintableNodes, untaintableNodes)
-			}
+			a.updateSoftDeletionTaints(allNodes)
 
 			if a.processors != nil && a.processors.ScaleDownStatusProcessor != nil {
 				scaleDownStatus.SetUnremovableNodesInfo(a.scaleDownPlanner.UnremovableNodes(), a.scaleDownPlanner.NodeUtilizationMap(), a.CloudProvider)
@@ -687,6 +682,21 @@ func (a *StaticAutoscaler) RunOnce(currentTime time.Time) caerrors.AutoscalerErr
 	}
 
 	return nil
+}
+
+func (a *StaticAutoscaler) updateSoftDeletionTaints(allNodes []*apiv1.Node) {
+	if a.AutoscalingContext.AutoscalingOptions.MaxBulkSoftTaintCount != 0 {
+		taintableNodes := a.scaleDownPlanner.UnneededNodes()
+
+		// Make sure we are only cleaning taints from selected node groups.
+		selectedNodes := filterNodesFromSelectedGroups(a.CloudProvider, allNodes...)
+
+		// This is a sanity check to make sure `taintableNodes` only includes
+		// nodes from selected nodes.
+		taintableNodes = intersectNodes(selectedNodes, taintableNodes)
+		untaintableNodes := subtractNodes(selectedNodes, taintableNodes)
+		actuation.UpdateSoftDeletionTaints(a.AutoscalingContext, taintableNodes, untaintableNodes)
+	}
 }
 
 // Sets the target size of node groups to the current number of nodes in them
@@ -1069,4 +1079,35 @@ func nodeNames(ns []*apiv1.Node) []string {
 		names[i] = node.Name
 	}
 	return names
+}
+
+func filterNodesFromSelectedGroups(cp cloudprovider.CloudProvider, nodes ...*apiv1.Node) []*apiv1.Node {
+	filtered := make([]*apiv1.Node, 0, len(nodes))
+	for _, n := range nodes {
+		if ng, err := cp.NodeGroupForNode(n); err != nil {
+			klog.Errorf("Failed to get a node group node node: %v", err)
+		} else if ng != nil {
+			filtered = append(filtered, n)
+		}
+	}
+	return filtered
+}
+
+func filterNodesByName(nodes []*apiv1.Node, names []string) []*apiv1.Node {
+	c := make([]*apiv1.Node, 0, len(names))
+	filterSet := make(map[string]bool, len(names))
+	for _, name := range names {
+		filterSet[name] = true
+	}
+	for _, n := range nodes {
+		if filterSet[n.Name] {
+			c = append(c, n)
+		}
+	}
+	return c
+}
+
+// intersectNodes gives intersection of 2 node lists
+func intersectNodes(a []*apiv1.Node, b []*apiv1.Node) []*apiv1.Node {
+	return filterNodesByName(a, nodeNames(b))
 }
