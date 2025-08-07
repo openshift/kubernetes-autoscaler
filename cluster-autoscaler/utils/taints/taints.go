@@ -166,6 +166,7 @@ func MarkToBeDeleted(node *apiv1.Node, client kube_client.Interface, cordonNode 
 		Value:  fmt.Sprint(time.Now().Unix()),
 		Effect: apiv1.TaintEffectNoSchedule,
 	}
+	klog.V(6).Infof("marking node %q with ToBeDeleted taint", node.Name)
 	return AddTaints(node, client, []apiv1.Taint{taint}, cordonNode)
 }
 
@@ -176,6 +177,7 @@ func MarkDeletionCandidate(node *apiv1.Node, client kube_client.Interface) error
 		Value:  fmt.Sprint(time.Now().Unix()),
 		Effect: apiv1.TaintEffectPreferNoSchedule,
 	}
+	klog.V(6).Infof("marking node %q with DeletionCandidate taint", node.Name)
 	return AddTaints(node, client, []apiv1.Taint{taint}, false)
 }
 
@@ -286,11 +288,13 @@ func GetTaintTime(node *apiv1.Node, taintKey string) (*time.Time, error) {
 
 // CleanToBeDeleted cleans CA's NoSchedule taint from a node.
 func CleanToBeDeleted(node *apiv1.Node, client kube_client.Interface, cordonNode bool) (bool, error) {
+	klog.V(6).Infof("cleaning ToBeDeleted taint from node %q", node.Name)
 	return CleanTaints(node, client, []string{ToBeDeletedTaint}, cordonNode)
 }
 
 // CleanDeletionCandidate cleans CA's soft NoSchedule taint from a node.
 func CleanDeletionCandidate(node *apiv1.Node, client kube_client.Interface) (bool, error) {
+	klog.V(6).Infof("cleaning DeletionCandidate taint from node %q", node.Name)
 	return CleanTaints(node, client, []string{DeletionCandidateTaint}, false)
 }
 
