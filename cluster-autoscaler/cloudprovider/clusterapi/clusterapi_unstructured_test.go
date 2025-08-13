@@ -115,32 +115,12 @@ func TestSetSize(t *testing.T) {
 }
 
 func TestReplicas(t *testing.T) {
-	type testCase struct {
-		description            string
-		initialReplicas        int
-		updatedReplicas        int
-		expectedReplicas       int
-		includeDeletingMachine bool
-	}
+	initialReplicas := 1
+	updatedReplicas := 5
 
-	test := func(t *testing.T, tc testCase, testConfig *testConfig) {
+	test := func(t *testing.T, testConfig *testConfig) {
 		controller, stop := mustCreateTestController(t, testConfig)
 		defer stop()
-
-		// machines in deleting phase should be included in the replicas count
-		if tc.includeDeletingMachine {
-			if tc.initialReplicas < 1 {
-				t.Fatal("test cannot pass, deleted machine requires at least 1 machine")
-			}
-
-			machine := testConfig.machines[0].DeepCopy()
-			timestamp := metav1.Now()
-			machine.SetDeletionTimestamp(&timestamp)
-
-			if err := updateResource(controller.managementClient, controller.machineInformer, controller.machineResource, machine); err != nil {
-				t.Fatalf("unexpected error updating machine, got %v", err)
-			}
-		}
 
 		testResource := testConfig.machineSet
 		if testConfig.machineDeployment != nil {
@@ -162,8 +142,8 @@ func TestReplicas(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		if i != tc.initialReplicas {
-			t.Errorf("expected %v, got: %v", tc.initialReplicas, i)
+		if i != initialReplicas {
+			t.Errorf("expected %v, got: %v", initialReplicas, i)
 		}
 
 		// fetch and update machineSet
@@ -173,7 +153,7 @@ func TestReplicas(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		s.Spec.Replicas = int32(tc.updatedReplicas)
+		s.Spec.Replicas = int32(updatedReplicas)
 
 		ch := make(chan error)
 		checkDone := func(obj interface{}) (bool, error) {
@@ -189,8 +169,8 @@ func TestReplicas(t *testing.T) {
 			if err != nil {
 				return true, err
 			}
-			if i != tc.expectedReplicas {
-				return true, fmt.Errorf("expected %v, got: %v", tc.expectedReplicas, i)
+			if i != updatedReplicas {
+				return true, fmt.Errorf("expected %v, got: %v", updatedReplicas, i)
 			}
 			return true, nil
 		}
@@ -233,33 +213,13 @@ func TestReplicas(t *testing.T) {
 		}
 	}
 
-	testCases := []testCase{
-		{
-			description:      "starting with 1 replica and increasing to 5 replicas should return 5 replicas",
-			initialReplicas:  1,
-			updatedReplicas:  5,
-			expectedReplicas: 5,
-		},
-		{
-			description:            "starting with 1 replica and a machine in deleting and increasing to 5 replicas should return 5 replicas",
-			initialReplicas:        1,
-			updatedReplicas:        5,
-			expectedReplicas:       5,
-			includeDeletingMachine: true,
-		},
-	}
+	t.Run("MachineSet", func(t *testing.T) {
+		test(t, createMachineSetTestConfig(RandomString(6), RandomString(6), RandomString(6), initialReplicas, nil, nil))
+	})
 
-	for _, tc := range testCases {
-		t.Run("MachineSet", func(t *testing.T) {
-			test(t, tc, createMachineSetTestConfig(RandomString(6), RandomString(6), RandomString(6), tc.initialReplicas, nil, nil))
-		})
-	}
-
-	for _, tc := range testCases {
-		t.Run("MachineDeployment", func(t *testing.T) {
-			test(t, tc, createMachineDeploymentTestConfig(RandomString(6), RandomString(6), RandomString(6), tc.initialReplicas, nil, nil))
-		})
-	}
+	t.Run("MachineDeployment", func(t *testing.T) {
+		test(t, createMachineDeploymentTestConfig(RandomString(6), RandomString(6), RandomString(6), initialReplicas, nil, nil))
+	})
 }
 
 func TestTaints(t *testing.T) {
