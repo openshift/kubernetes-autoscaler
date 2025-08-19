@@ -418,6 +418,7 @@ func TestNodeGroupDecreaseTargetSize(t *testing.T) {
 		includePendingMachine               bool
 		includePendingMachineWithProviderID bool
 		machinesDoNotHaveProviderIDs        bool
+		failedMachineIsMAPI                 bool
 	}
 
 	test := func(t *testing.T, tc *testCase, testConfig *testConfig) {
@@ -453,7 +454,13 @@ func TestNodeGroupDecreaseTargetSize(t *testing.T) {
 			if !tc.includeFailedMachineWithProviderID {
 				unstructured.RemoveNestedField(machine.Object, "spec", "providerID")
 			}
-			unstructured.SetNestedField(machine.Object, "ErrorMessage", "status", "errorMessage")
+
+			if tc.failedMachineIsMAPI {
+				machine.SetAPIVersion(fmt.Sprintf("%s/v1beta1", openshiftMAPIGroup))
+				unstructured.SetNestedField(machine.Object, "ErrorMessage", "status", "errorMessage")
+			} else {
+				unstructured.SetNestedField(machine.Object, "ErrorMessage", "status", "failureMessage")
+			}
 
 			if err := updateResource(controller.managementClient, controller.machineInformer, controller.machineResource, machine); err != nil {
 				t.Fatalf("unexpected error updating machine, got %v", err)
@@ -664,21 +671,31 @@ func TestNodeGroupDecreaseTargetSize(t *testing.T) {
 			includeFailedMachineWithProviderID: true,
 		},
 		{
-			description:                         "A node group with 4 replicas with one pending machine that has a provider ID should decrease by 1",
-			initial:                             4,
-			targetSizeIncrement:                 0,
-			expected:                            3,
-			delta:                               -1,
-			includePendingMachine:               true,
-			includePendingMachineWithProviderID: true,
-		},
-		{
 			description:                  "A node group with target size 4 but only 3 existing instances without provider IDs should decrease by 1",
 			initial:                      3,
 			targetSizeIncrement:          1,
 			expected:                     3,
 			delta:                        -1,
 			machinesDoNotHaveProviderIDs: true,
+		},
+		{
+			description:          "A node group with 4 replicas with one failed MAPI machine without a provider ID should decrease by 1",
+			initial:              4,
+			targetSizeIncrement:  0,
+			expected:             3,
+			delta:                -1,
+			includeFailedMachine: true,
+			failedMachineIsMAPI:  true,
+		},
+		{
+			description:                        "A node group with 4 replicas with one failed MAPI machine that has a provider ID should decrease by 1",
+			initial:                            4,
+			targetSizeIncrement:                0,
+			expected:                           3,
+			delta:                              -1,
+			includeFailedMachine:               true,
+			includeFailedMachineWithProviderID: true,
+			failedMachineIsMAPI:                true,
 		},
 	}
 
@@ -1338,13 +1355,20 @@ func TestNodeGroupDeleteNodesSequential(t *testing.T) {
 }
 
 func TestNodeGroupWithFailedMachine(t *testing.T) {
-	test := func(t *testing.T, testConfig *testConfig) {
-		controller, stop := mustCreateTestController(t, testConfig)
+	type testCase struct {
+		description         string
+		testConfig          *testConfig
+		failedMachineIsMAPI bool
+	}
+
+	test := func(t *testing.T, tc testCase) {
+		controller, stop := mustCreateTestController(t, tc.testConfig)
 		defer stop()
 
 		// Simulate a failed machine
-		machine := testConfig.machines[3].DeepCopy()
+		machine := tc.testConfig.machines[3].DeepCopy()
 
+		machine.SetAPIVersion(fmt.Sprintf("%s/v1beta1", openshiftMAPIGroup))
 		unstructured.RemoveNestedField(machine.Object, "spec", "providerID")
 		unstructured.SetNestedField(machine.Object, "ErrorMessage", "status", "errorMessage")
 
@@ -1367,8 +1391,8 @@ func TestNodeGroupWithFailedMachine(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		if len(nodeNames) != len(testConfig.nodes) {
-			t.Fatalf("expected len=%v, got len=%v", len(testConfig.nodes), len(nodeNames))
+		if len(nodeNames) != len(tc.testConfig.nodes) {
+			t.Fatalf("expected len=%v, got len=%v", len(tc.testConfig.nodes), len(nodeNames))
 		}
 
 		sort.SliceStable(nodeNames, func(i, j int) bool {
@@ -1392,8 +1416,8 @@ func TestNodeGroupWithFailedMachine(t *testing.T) {
 				nodeIndex = i
 			}
 
-			if nodeNames[i].Id != testConfig.nodes[nodeIndex].Spec.ProviderID {
-				t.Fatalf("expected %q, got %q", testConfig.nodes[nodeIndex].Spec.ProviderID, nodeNames[i].Id)
+			if nodeNames[i].Id != tc.testConfig.nodes[nodeIndex].Spec.ProviderID {
+				t.Fatalf("expected %q, got %q", tc.testConfig.nodes[nodeIndex].Spec.ProviderID, nodeNames[i].Id)
 			}
 		}
 	}
@@ -1402,40 +1426,48 @@ func TestNodeGroupWithFailedMachine(t *testing.T) {
 	// Going beyond 10 will break the sorting that happens in the
 	// test() function because sort.Strings() will not do natural
 	// sorting and the expected semantics in test() will fail.
+	annotations := map[string]string{
+		nodeGroupMinSizeAnnotationKey: "1",
+		nodeGroupMaxSizeAnnotationKey: "10",
+	}
 
-	t.Run("MachineSet", func(t *testing.T) {
-		test(
-			t,
-			createMachineSetTestConfig(
+	testCases := []testCase{
+		{
+			description: "one failed machine with MAPI api group",
+			testConfig: createMachineSetTestConfig(
 				RandomString(6),
 				RandomString(6),
 				RandomString(6),
 				10,
-				map[string]string{
-					nodeGroupMinSizeAnnotationKey: "1",
-					nodeGroupMaxSizeAnnotationKey: "10",
-				},
+				annotations,
 				nil,
 			),
-		)
-	})
-
-	t.Run("MachineDeployment", func(t *testing.T) {
-		test(
-			t,
-			createMachineDeploymentTestConfig(
+			failedMachineIsMAPI: true,
+		},
+		{
+			description: "one failed machine with CAPI api group",
+			testConfig: createMachineSetTestConfig(
 				RandomString(6),
 				RandomString(6),
 				RandomString(6),
 				10,
-				map[string]string{
-					nodeGroupMinSizeAnnotationKey: "1",
-					nodeGroupMaxSizeAnnotationKey: "10",
-				},
+				annotations,
 				nil,
 			),
-		)
-	})
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(fmt.Sprintf("MachineSet/%s", tc.description), func(t *testing.T) {
+			test(t, tc)
+		})
+	}
+
+	for _, tc := range testCases {
+		t.Run(fmt.Sprintf("MachineDeployment/%s", tc.description), func(t *testing.T) {
+			test(t, tc)
+		})
+	}
 }
 
 func TestNodeGroupTemplateNodeInfo(t *testing.T) {
