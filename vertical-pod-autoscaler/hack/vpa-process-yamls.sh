@@ -66,14 +66,20 @@ for i in $COMPONENTS; do
     if [[ ${ACTION} == create || ${ACTION} == apply ]] ; then
       # Allow gencerts to fail silently if certs already exist
       (bash ${SCRIPT_ROOT}/pkg/admission-controller/gencerts.sh || true)
+      kubectl apply -f ${SCRIPT_ROOT}/deploy/admission-controller-service.yaml
     elif [ ${ACTION} == delete ] ; then
       (bash ${SCRIPT_ROOT}/pkg/admission-controller/rmcerts.sh || true)
       (bash ${SCRIPT_ROOT}/pkg/admission-controller/delete-webhook.sh || true)
+      kubectl delete -f ${SCRIPT_ROOT}/deploy/admission-controller-service.yaml --ignore-not-found
     fi
   fi
   if [[ ${ACTION} == print ]]; then
     ${SCRIPT_ROOT}/hack/vpa-process-yaml.sh $(script_path $i)
   else
-    ${SCRIPT_ROOT}/hack/vpa-process-yaml.sh $(script_path $i) | kubectl ${ACTION} -f - || true
+    EXTRA_FLAGS=""
+    if [[ ${ACTION} == delete ]]; then
+      EXTRA_FLAGS+=" --ignore-not-found"
+    fi
+    ${SCRIPT_ROOT}/hack/vpa-process-yaml.sh $(script_path $i) | kubectl ${ACTION} ${EXTRA_FLAGS} -f - || true
   fi
 done

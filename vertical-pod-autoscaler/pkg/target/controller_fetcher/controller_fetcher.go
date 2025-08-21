@@ -18,6 +18,7 @@ package controllerfetcher
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -58,6 +59,9 @@ const (
 const (
 	discoveryResetPeriod time.Duration = 5 * time.Minute
 )
+
+// ErrNodeInvalidOwner is thrown when a Pod is owned by a Node.
+var ErrNodeInvalidOwner = errors.New("node is not a valid owner")
 
 // ControllerKey identifies a controller.
 type ControllerKey struct {
@@ -111,7 +115,8 @@ func (f *controllerFetcher) Start(ctx context.Context, loopPeriod time.Duration)
 func NewControllerFetcher(config *rest.Config, kubeClient kube_client.Interface, factory informers.SharedInformerFactory, betweenRefreshes, lifeTime time.Duration, jitterFactor float64) *controllerFetcher {
 	discoveryClient, err := discovery.NewDiscoveryClientForConfig(config)
 	if err != nil {
-		klog.Fatalf("Could not create discoveryClient: %v", err)
+		klog.ErrorS(err, "Could not create discoveryClient")
+		klog.FlushAndExit(klog.ExitFlushTimeout, 1)
 	}
 	resolver := scale.NewDiscoveryScaleKindResolver(discoveryClient)
 	restClient := kubeClient.CoreV1().RESTClient()
@@ -290,7 +295,7 @@ func (f *controllerFetcher) getOwnerForScaleResource(ctx context.Context, groupK
 		// Some pods specify nodes as their owners. This causes performance problems
 		// in big clusters when VPA tries to get all nodes. We know nodes aren't
 		// valid controllers so we can skip trying to fetch them.
-		return nil, fmt.Errorf("node is not a valid owner")
+		return nil, ErrNodeInvalidOwner
 	}
 	mappings, err := f.mapper.RESTMappings(groupKind)
 	if err != nil {

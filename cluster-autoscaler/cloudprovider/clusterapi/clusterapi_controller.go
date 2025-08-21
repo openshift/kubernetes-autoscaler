@@ -82,6 +82,7 @@ type machineController struct {
 	nodeInformer                cache.SharedIndexInformer
 	managementClient            dynamic.Interface
 	managementScaleClient       scale.ScalesGetter
+	managementDiscoveryClient   discovery.DiscoveryInterface
 	machineSetResource          schema.GroupVersionResource
 	machineResource             schema.GroupVersionResource
 	machinePoolResource         schema.GroupVersionResource
@@ -457,7 +458,7 @@ func newMachineController(
 	managementInformerFactory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(managementClient, 0, namespaceToWatch(autoDiscoverySpecs), nil)
 
 	CAPIGroup := getCAPIGroup()
-	CAPIVersion, err := getAPIGroupPreferredVersion(managementDiscoveryClient, CAPIGroup)
+	CAPIVersion, err := getCAPIGroupPreferredVersion(managementDiscoveryClient, CAPIGroup)
 	if err != nil {
 		return nil, fmt.Errorf("could not find preferred version for CAPI group %q: %v", CAPIGroup, err)
 	}
@@ -561,6 +562,7 @@ func newMachineController(
 		nodeInformer:                nodeInformer,
 		managementClient:            managementClient,
 		managementScaleClient:       managementScaleClient,
+		managementDiscoveryClient:   managementDiscoveryClient,
 		machineSetResource:          gvrMachineSet,
 		machinePoolResource:         gvrMachinePool,
 		machinePoolsAvailable:       machinePoolsAvailable,
@@ -586,11 +588,15 @@ func groupVersionHasResource(client discovery.DiscoveryInterface, groupVersion, 
 	return false, nil
 }
 
-func getAPIGroupPreferredVersion(client discovery.DiscoveryInterface, APIGroup string) (string, error) {
+func getCAPIGroupPreferredVersion(client discovery.DiscoveryInterface, APIGroup string) (string, error) {
 	if version := os.Getenv(CAPIVersionEnvVar); version != "" {
 		return version, nil
 	}
 
+	return getAPIGroupPreferredVersion(client, APIGroup)
+}
+
+func getAPIGroupPreferredVersion(client discovery.DiscoveryInterface, APIGroup string) (string, error) {
 	groupList, err := client.ServerGroups()
 	if err != nil {
 		return "", fmt.Errorf("failed to get ServerGroups: %v", err)
@@ -643,7 +649,7 @@ func (c *machineController) findScalableResourceProviderIDs(scalableResource *un
 		// then become failed later. We want to ensure that a failed machine is not counted towards the total
 		// number of nodes in the cluster, for this reason we will detect a failed machine first, regardless
 		// of provider ID, and give it a normalized provider ID with failure message prepended.
-		errorMessage, found, err := unstructured.NestedString(machine.UnstructuredContent(), "status", "errorMessage")
+		failureMessage, found, err := unstructured.NestedString(machine.UnstructuredContent(), "status", "failureMessage")
 		if err != nil {
 			return nil, err
 		}
@@ -654,7 +660,7 @@ func (c *machineController) findScalableResourceProviderIDs(scalableResource *un
 			// Fake ID needs to be recognised later and converted into a machine key.
 			// Use an underscore as a separator between namespace and name as it is not a
 			// valid character within a namespace name.
-			klog.V(4).Infof("Status.ErrorMessage of machine %q is %q", machine.GetName(), errorMessage)
+			klog.V(4).Infof("Status.FailureMessage of machine %q is %q", machine.GetName(), failureMessage)
 			providerIDs = append(providerIDs, createFailedMachineNormalizedProviderID(machine.GetNamespace(), machine.GetName()))
 			continue
 		}
@@ -662,7 +668,7 @@ func (c *machineController) findScalableResourceProviderIDs(scalableResource *un
 		// Deleting Machines
 		// Machines that are in deleting state should be identified so that in scenarios where the core
 		// autoscaler would like to adjust the size of a node group, we can give a proper count and
-		// be able to filter machines in that state, regardless of whether they become a node or not.
+		// be able to filter machines in that state, regardless of whether they are still active nodes in the cluster.
 		// We give these machines normalized provider IDs to aid in the filtering process.
 		if !machine.GetDeletionTimestamp().IsZero() {
 			klog.V(4).Infof("Machine %q has a non-zero deletion timestamp", machine.GetName())

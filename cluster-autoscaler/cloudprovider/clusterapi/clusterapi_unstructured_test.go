@@ -19,16 +19,17 @@ package clusterapi
 import (
 	"context"
 	"fmt"
-	"reflect"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	v1 "k8s.io/api/core/v1"
+	resourceapi "k8s.io/api/resource/v1beta1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/tools/cache"
+	"k8s.io/utils/ptr"
 )
 
 const (
@@ -40,6 +41,7 @@ const (
 func TestSetSize(t *testing.T) {
 	initialReplicas := 1
 	updatedReplicas := 5
+	finalReplicas := 0
 
 	test := func(t *testing.T, testConfig *testConfig) {
 		controller, stop := mustCreateTestController(t, testConfig)
@@ -60,6 +62,7 @@ func TestSetSize(t *testing.T) {
 			t.Fatal(err)
 		}
 
+		// First update to updatedReplicas
 		err = sr.SetSize(updatedReplicas)
 		if err != nil {
 			t.Fatal(err)
@@ -85,6 +88,33 @@ func TestSetSize(t *testing.T) {
 		if replicas != int64(updatedReplicas) {
 			t.Errorf("expected %v, got: %v", updatedReplicas, replicas)
 		}
+
+		// Second update to finalReplicas
+		err = sr.SetSize(finalReplicas)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		s, err = sr.controller.managementScaleClient.Scales(testResource.GetNamespace()).
+			Get(context.TODO(), gvr.GroupResource(), testResource.GetName(), metav1.GetOptions{})
+		if err != nil {
+			t.Fatalf("error getting scale subresource: %v", err)
+		}
+
+		if s.Spec.Replicas != int32(finalReplicas) {
+			t.Errorf("expected %v, got: %v", finalReplicas, s.Spec.Replicas)
+		}
+
+		replicas, found, err = unstructured.NestedInt64(sr.unstructured.Object, "spec", "replicas")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !found {
+			t.Fatal("replicas = 0")
+		}
+		if replicas != int64(finalReplicas) {
+			t.Errorf("expected %v, got: %v", finalReplicas, replicas)
+		}
 	}
 
 	t.Run("MachineSet", func(t *testing.T) {
@@ -93,7 +123,7 @@ func TestSetSize(t *testing.T) {
 			RandomString(6),
 			RandomString(6),
 			initialReplicas, map[string]string{
-				nodeGroupMinSizeAnnotationKey: "1",
+				nodeGroupMinSizeAnnotationKey: "0",
 				nodeGroupMaxSizeAnnotationKey: "10",
 			},
 			nil,
@@ -106,7 +136,7 @@ func TestSetSize(t *testing.T) {
 			RandomString(6),
 			RandomString(6),
 			initialReplicas, map[string]string{
-				nodeGroupMinSizeAnnotationKey: "1",
+				nodeGroupMinSizeAnnotationKey: "0",
 				nodeGroupMaxSizeAnnotationKey: "10",
 			},
 			nil,
@@ -222,65 +252,6 @@ func TestReplicas(t *testing.T) {
 	})
 }
 
-func TestTaints(t *testing.T) {
-	initialReplicas := 1
-
-	expectedTaints := []v1.Taint{
-		{Key: "test", Effect: v1.TaintEffectNoSchedule, Value: "test"},
-		{Key: "test-no-value", Effect: v1.TaintEffectNoSchedule},
-	}
-	expectedTaintsWithAnnotations := []v1.Taint{
-		{Key: "test", Effect: v1.TaintEffectNoSchedule, Value: "test"},
-		{Key: "test-no-value", Effect: v1.TaintEffectNoSchedule},
-		{Key: "key1", Effect: v1.TaintEffectNoSchedule, Value: "value1"},
-		{Key: "key2", Effect: v1.TaintEffectNoExecute, Value: "value2"},
-	}
-	taintAnnotation := "key1=value1:NoSchedule,key2=value2:NoExecute"
-
-	test := func(t *testing.T, testConfig *testConfig) {
-		controller, stop := mustCreateTestController(t, testConfig)
-		defer stop()
-
-		testResource := testConfig.machineSet
-		if testConfig.machineDeployment != nil {
-			testResource = testConfig.machineDeployment
-		}
-
-		sr, err := newUnstructuredScalableResource(controller, testResource)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		taints := sr.Taints()
-
-		if !reflect.DeepEqual(taints, expectedTaints) {
-			t.Errorf("expected %v, got: %v", expectedTaints, taints)
-		}
-
-		srAnnotations := sr.unstructured.GetAnnotations()
-		if srAnnotations == nil {
-			srAnnotations = make(map[string]string)
-		}
-
-		srAnnotations[taintsKey] = taintAnnotation
-		sr.unstructured.SetAnnotations(srAnnotations)
-
-		taints = sr.Taints()
-
-		if !reflect.DeepEqual(taints, expectedTaintsWithAnnotations) {
-			t.Errorf("expected %v, got: %v", expectedTaintsWithAnnotations, taints)
-		}
-	}
-
-	t.Run("MachineSet", func(t *testing.T) {
-		test(t, createMachineSetTestConfig(RandomString(6), RandomString(6), RandomString(6), initialReplicas, nil, nil))
-	})
-
-	t.Run("MachineDeployment", func(t *testing.T) {
-		test(t, createMachineDeploymentTestConfig(RandomString(6), RandomString(6), RandomString(6), initialReplicas, nil, nil))
-	})
-}
-
 func TestSetSizeAndReplicas(t *testing.T) {
 	initialReplicas := 1
 	updatedReplicas := 5
@@ -350,22 +321,39 @@ func TestSetSizeAndReplicas(t *testing.T) {
 	})
 }
 
-// This test now tests both the upstream and downstream annotation values while we support them both.
 func TestAnnotations(t *testing.T) {
 	cpuQuantity := resource.MustParse("2")
+	memQuantity := resource.MustParse("1024Mi")
 	diskQuantity := resource.MustParse("100Gi")
-	memQuantity := resource.MustParse("1024")
 	gpuQuantity := resource.MustParse("1")
 	maxPodsQuantity := resource.MustParse("42")
-
-	// Note, the first two taints comes from the spec of the machine template, the rest from the annotations.
-	expectedTaints := []v1.Taint{
-		{Key: "test", Effect: v1.TaintEffectNoSchedule, Value: "test"},
-		{Key: "test-no-value", Effect: v1.TaintEffectNoSchedule},
-		{Key: "key1", Effect: v1.TaintEffectNoSchedule, Value: "value1"},
-		{Key: "key2", Effect: v1.TaintEffectNoExecute, Value: "value2"},
+	expectedTaints := []v1.Taint{{Key: "key1", Effect: v1.TaintEffectNoSchedule, Value: "value1"}, {Key: "key2", Effect: v1.TaintEffectNoExecute, Value: "value2"}}
+	testNodeName := "test-node"
+	draDriver := "test-driver"
+	expectedResourceSlice := &resourceapi.ResourceSlice{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: testNodeName + "-" + draDriver,
+		},
+		Spec: resourceapi.ResourceSliceSpec{
+			Driver:   draDriver,
+			NodeName: testNodeName,
+			Pool: resourceapi.ResourcePool{
+				Name: testNodeName,
+			},
+			Devices: []resourceapi.Device{
+				{
+					Name: "gpu-0",
+					Basic: &resourceapi.BasicDevice{
+						Attributes: map[resourceapi.QualifiedName]resourceapi.DeviceAttribute{
+							"type": {
+								StringValue: ptr.To(GpuDeviceType),
+							},
+						},
+					},
+				},
+			},
+		},
 	}
-
 	annotations := map[string]string{
 		cpuKey:          cpuQuantity.String(),
 		memoryKey:       memQuantity.String(),
@@ -374,6 +362,7 @@ func TestAnnotations(t *testing.T) {
 		maxPodsKey:      maxPodsQuantity.String(),
 		taintsKey:       "key1=value1:NoSchedule,key2=value2:NoExecute",
 		labelsKey:       "key3=value3,key4=value4,key5=value5",
+		draDriverKey:    draDriver,
 	}
 
 	test := func(t *testing.T, testConfig *testConfig, testResource *unstructured.Unstructured) {
@@ -415,6 +404,14 @@ func TestAnnotations(t *testing.T) {
 			t.Errorf("expected %v, got %v", maxPodsQuantity, maxPods)
 		}
 
+		if resourceSlices, err := sr.InstanceResourceSlices(testNodeName); err != nil {
+			t.Fatal(err)
+		} else {
+			for _, resourceslice := range resourceSlices {
+				assert.Equal(t, expectedResourceSlice, resourceslice)
+			}
+		}
+
 		taints := sr.Taints()
 		assert.Equal(t, expectedTaints, taints)
 
@@ -447,7 +444,7 @@ func TestCanScaleFromZero(t *testing.T) {
 			"can scale from zero",
 			map[string]string{
 				cpuKey:    "1",
-				memoryKey: "1024",
+				memoryKey: "1024Mi",
 			},
 			nil,
 			true,
@@ -455,7 +452,7 @@ func TestCanScaleFromZero(t *testing.T) {
 		{
 			"with missing CPU info cannot scale from zero",
 			map[string]string{
-				memoryKey: "1024",
+				memoryKey: "1024Mi",
 			},
 			nil,
 			false,
@@ -503,7 +500,7 @@ func TestCanScaleFromZero(t *testing.T) {
 			"with both annotations and capacity in machine template can scale from zero",
 			map[string]string{
 				cpuKey:    "1",
-				memoryKey: "1024",
+				memoryKey: "1024Mi",
 			},
 			map[string]string{
 				cpuStatusKey:    "1",

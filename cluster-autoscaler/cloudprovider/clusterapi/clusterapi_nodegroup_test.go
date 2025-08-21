@@ -453,7 +453,7 @@ func TestNodeGroupDecreaseTargetSize(t *testing.T) {
 			if !tc.includeFailedMachineWithProviderID {
 				unstructured.RemoveNestedField(machine.Object, "spec", "providerID")
 			}
-			unstructured.SetNestedField(machine.Object, "ErrorMessage", "status", "errorMessage")
+			unstructured.SetNestedField(machine.Object, "FailureMessage", "status", "failureMessage")
 
 			if err := updateResource(controller.managementClient, controller.machineInformer, controller.machineResource, machine); err != nil {
 				t.Fatalf("unexpected error updating machine, got %v", err)
@@ -673,7 +673,7 @@ func TestNodeGroupDecreaseTargetSize(t *testing.T) {
 			includePendingMachineWithProviderID: true,
 		},
 		{
-			description:                  "A node group with target size 4 but only 3 existing instances without provider IDs should decrease by 1",
+			description:                  "A node group with target size 4 but only 3 existing instances without provider IDs should not scale out",
 			initial:                      3,
 			targetSizeIncrement:          1,
 			expected:                     3,
@@ -1346,7 +1346,9 @@ func TestNodeGroupWithFailedMachine(t *testing.T) {
 		machine := testConfig.machines[3].DeepCopy()
 
 		unstructured.RemoveNestedField(machine.Object, "spec", "providerID")
-		unstructured.SetNestedField(machine.Object, "ErrorMessage", "status", "errorMessage")
+		if err := unstructured.SetNestedField(machine.Object, "FailureMessage", "status", "failureMessage"); err != nil {
+			t.Fatalf("unexpected error setting nested field: %v", err)
+		}
 
 		if err := updateResource(controller.managementClient, controller.machineInformer, controller.machineResource, machine); err != nil {
 			t.Fatalf("unexpected error updating machine, got %v", err)
@@ -1444,13 +1446,19 @@ func TestNodeGroupTemplateNodeInfo(t *testing.T) {
 		nodeGroupMaxSizeAnnotationKey: "10",
 	}
 
+	type testResourceSlice struct {
+		driverName string
+		gpuCount   int
+		deviceType string
+	}
+
 	type testCaseConfig struct {
-		nodeLabels         map[string]string
-		nodegroupLabels    map[string]string
-		includeNodes       bool
-		expectedErr        error
-		expectedCapacity   map[corev1.ResourceName]int64
-		expectedNodeLabels map[string]string
+		nodeLabels            map[string]string
+		includeNodes          bool
+		expectedErr           error
+		expectedCapacity      map[corev1.ResourceName]int64
+		expectedNodeLabels    map[string]string
+		expectedResourceSlice testResourceSlice
 	}
 
 	testCases := []struct {
@@ -1465,9 +1473,9 @@ func TestNodeGroupTemplateNodeInfo(t *testing.T) {
 			},
 		},
 		{
-			name: "When the NodeGroup can scale from zero with upstream annotations",
+			name: "When the NodeGroup can scale from zero",
 			nodeGroupAnnotations: map[string]string{
-				memoryKey:   "2048",
+				memoryKey:   "2048Mi",
 				cpuKey:      "2",
 				gpuTypeKey:  gpuapis.ResourceNvidiaGPU,
 				gpuCountKey: "1",
@@ -1480,7 +1488,7 @@ func TestNodeGroupTemplateNodeInfo(t *testing.T) {
 				},
 				expectedCapacity: map[corev1.ResourceName]int64{
 					corev1.ResourceCPU:        2,
-					corev1.ResourceMemory:     2048,
+					corev1.ResourceMemory:     2048 * 1024 * 1024,
 					corev1.ResourcePods:       110,
 					gpuapis.ResourceNvidiaGPU: 1,
 				},
@@ -1492,35 +1500,9 @@ func TestNodeGroupTemplateNodeInfo(t *testing.T) {
 			},
 		},
 		{
-			name: "When the NodeGroup can scale from zero and the nodegroup adds labels to the Node with upstream annotations",
+			name: "When the NodeGroup can scale from zero, the label capacity annotations merge with the pre-built node labels and take precedence if the same key is defined in both",
 			nodeGroupAnnotations: map[string]string{
-				memoryKey: "2048",
-				cpuKey:    "2",
-			},
-			config: testCaseConfig{
-				expectedErr: nil,
-				nodegroupLabels: map[string]string{
-					"nodeGroupLabel": "value",
-					"anotherLabel":   "anotherValue",
-				},
-				expectedCapacity: map[corev1.ResourceName]int64{
-					corev1.ResourceCPU:    2,
-					corev1.ResourceMemory: 2048,
-					corev1.ResourcePods:   110,
-				},
-				expectedNodeLabels: map[string]string{
-					"kubernetes.io/os":       "linux",
-					"kubernetes.io/arch":     "amd64",
-					"kubernetes.io/hostname": "random value",
-					"nodeGroupLabel":         "value",
-					"anotherLabel":           "anotherValue",
-				},
-			},
-		},
-		{
-			name: "When the NodeGroup can scale from zero, the label capacity annotations merge with the pre-built node labels and take precedence if the same key is defined in both with upstream annotations",
-			nodeGroupAnnotations: map[string]string{
-				memoryKey:   "2048",
+				memoryKey:   "2048Mi",
 				cpuKey:      "2",
 				gpuTypeKey:  gpuapis.ResourceNvidiaGPU,
 				gpuCountKey: "1",
@@ -1528,31 +1510,24 @@ func TestNodeGroupTemplateNodeInfo(t *testing.T) {
 			},
 			config: testCaseConfig{
 				expectedErr: nil,
-				nodegroupLabels: map[string]string{
-					"nodeGroupLabel":  "value",
-					"anotherLabel":    "anotherValue",
-					"my-custom-label": "not-what-i-want",
-				},
 				expectedCapacity: map[corev1.ResourceName]int64{
 					corev1.ResourceCPU:        2,
-					corev1.ResourceMemory:     2048,
+					corev1.ResourceMemory:     2048 * 1024 * 1024,
 					corev1.ResourcePods:       110,
 					gpuapis.ResourceNvidiaGPU: 1,
 				},
 				expectedNodeLabels: map[string]string{
-					"kubernetes.io/hostname": "random value",
 					"kubernetes.io/os":       "linux",
 					"kubernetes.io/arch":     "arm64",
-					"nodeGroupLabel":         "value",
-					"anotherLabel":           "anotherValue",
+					"kubernetes.io/hostname": "random value",
 					"my-custom-label":        "custom-value",
 				},
 			},
 		},
 		{
-			name: "When the NodeGroup can scale from zero and the Node still exists, it includes the known node labels with upstream annotations",
+			name: "When the NodeGroup can scale from zero and the Node still exists, it includes the known node labels",
 			nodeGroupAnnotations: map[string]string{
-				memoryKey: "2048",
+				memoryKey: "2048Mi",
 				cpuKey:    "2",
 			},
 			config: testCaseConfig{
@@ -1565,118 +1540,6 @@ func TestNodeGroupTemplateNodeInfo(t *testing.T) {
 				},
 				expectedCapacity: map[corev1.ResourceName]int64{
 					corev1.ResourceCPU:    2,
-					corev1.ResourceMemory: 2048,
-					corev1.ResourcePods:   110,
-				},
-				expectedNodeLabels: map[string]string{
-					"kubernetes.io/hostname":           "random value",
-					"kubernetes.io/os":                 "windows",
-					"kubernetes.io/arch":               "arm64",
-					"node.kubernetes.io/instance-type": "instance1",
-				},
-			},
-		},
-		{
-			name: "When the NodeGroup can scale from zero with downstream annotations",
-			nodeGroupAnnotations: map[string]string{
-				deprecatedMemoryKey:   "2048",
-				deprecatedCpuKey:      "2",
-				gpuTypeKey:            gpuapis.ResourceNvidiaGPU,
-				deprecatedGpuCountKey: "1",
-			},
-			config: testCaseConfig{
-				expectedErr: nil,
-				nodeLabels: map[string]string{
-					"kubernetes.io/os":   "linux",
-					"kubernetes.io/arch": "amd64",
-				},
-				expectedCapacity: map[corev1.ResourceName]int64{
-					corev1.ResourceCPU:        2,
-					corev1.ResourceMemory:     2048 * 1024 * 1024,
-					corev1.ResourcePods:       110,
-					gpuapis.ResourceNvidiaGPU: 1,
-				},
-				expectedNodeLabels: map[string]string{
-					"kubernetes.io/os":       "linux",
-					"kubernetes.io/arch":     "amd64",
-					"kubernetes.io/hostname": "random value",
-				},
-			},
-		},
-		{
-			name: "When the NodeGroup can scale from zero and the nodegroup adds labels to the Node with downstream annotations",
-			nodeGroupAnnotations: map[string]string{
-				deprecatedMemoryKey: "2048",
-				deprecatedCpuKey:    "2",
-			},
-			config: testCaseConfig{
-				expectedErr: nil,
-				nodegroupLabels: map[string]string{
-					"nodeGroupLabel": "value",
-					"anotherLabel":   "anotherValue",
-				},
-				expectedCapacity: map[corev1.ResourceName]int64{
-					corev1.ResourceCPU:    2,
-					corev1.ResourceMemory: 2048 * 1024 * 1024,
-					corev1.ResourcePods:   110,
-				},
-				expectedNodeLabels: map[string]string{
-					"kubernetes.io/os":       "linux",
-					"kubernetes.io/arch":     "amd64",
-					"kubernetes.io/hostname": "random value",
-					"nodeGroupLabel":         "value",
-					"anotherLabel":           "anotherValue",
-				},
-			},
-		},
-		{
-			name: "When the NodeGroup can scale from zero, the label capacity annotations merge with the pre-built node labels and take precedence if the same key is defined in both with downstream annotations",
-			nodeGroupAnnotations: map[string]string{
-				deprecatedMemoryKey:   "2048",
-				deprecatedCpuKey:      "2",
-				gpuTypeKey:            gpuapis.ResourceNvidiaGPU,
-				deprecatedGpuCountKey: "1",
-				labelsKey:             "kubernetes.io/arch=arm64,my-custom-label=custom-value",
-			},
-			config: testCaseConfig{
-				expectedErr: nil,
-				nodegroupLabels: map[string]string{
-					"nodeGroupLabel":  "value",
-					"anotherLabel":    "anotherValue",
-					"my-custom-label": "not-what-i-want",
-				},
-				expectedCapacity: map[corev1.ResourceName]int64{
-					corev1.ResourceCPU:        2,
-					corev1.ResourceMemory:     2048 * 1024 * 1024,
-					corev1.ResourcePods:       110,
-					gpuapis.ResourceNvidiaGPU: 1,
-				},
-				expectedNodeLabels: map[string]string{
-					"kubernetes.io/hostname": "random value",
-					"kubernetes.io/os":       "linux",
-					"kubernetes.io/arch":     "arm64",
-					"nodeGroupLabel":         "value",
-					"anotherLabel":           "anotherValue",
-					"my-custom-label":        "custom-value",
-				},
-			},
-		},
-		{
-			name: "When the NodeGroup can scale from zero and the Node still exists, it includes the known node labels with downstream annotations",
-			nodeGroupAnnotations: map[string]string{
-				deprecatedMemoryKey: "2048",
-				deprecatedCpuKey:    "2",
-			},
-			config: testCaseConfig{
-				includeNodes: true,
-				expectedErr:  nil,
-				nodeLabels: map[string]string{
-					"kubernetes.io/os":                 "windows",
-					"kubernetes.io/arch":               "arm64",
-					"node.kubernetes.io/instance-type": "instance1",
-				},
-				expectedCapacity: map[corev1.ResourceName]int64{
-					corev1.ResourceCPU:    2,
 					corev1.ResourceMemory: 2048 * 1024 * 1024,
 					corev1.ResourcePods:   110,
 				},
@@ -1685,18 +1548,39 @@ func TestNodeGroupTemplateNodeInfo(t *testing.T) {
 					"kubernetes.io/os":                 "windows",
 					"kubernetes.io/arch":               "arm64",
 					"node.kubernetes.io/instance-type": "instance1",
+				},
+			},
+		},
+		{
+			name: "When the NodeGroup can scale from zero and DRA is enabled, it creates ResourceSlice derived from the annotation of DRA driver name and GPU count",
+			nodeGroupAnnotations: map[string]string{
+				memoryKey:    "2048Mi",
+				cpuKey:       "2",
+				draDriverKey: "gpu.nvidia.com",
+				gpuCountKey:  "2",
+			},
+			config: testCaseConfig{
+				expectedErr: nil,
+				expectedCapacity: map[corev1.ResourceName]int64{
+					corev1.ResourceCPU:    2,
+					corev1.ResourceMemory: 2048 * 1024 * 1024,
+					corev1.ResourcePods:   110,
+				},
+				expectedResourceSlice: testResourceSlice{
+					driverName: "gpu.nvidia.com",
+					gpuCount:   2,
+					deviceType: GpuDeviceType,
+				},
+				expectedNodeLabels: map[string]string{
+					"kubernetes.io/os":       "linux",
+					"kubernetes.io/arch":     "amd64",
+					"kubernetes.io/hostname": "random value",
 				},
 			},
 		},
 	}
 
 	test := func(t *testing.T, testConfig *testConfig, config testCaseConfig) {
-		if testConfig.machineDeployment != nil {
-			unstructured.SetNestedStringMap(testConfig.machineDeployment.Object, config.nodegroupLabels, "spec", "template", "spec", "metadata", "labels")
-		} else {
-			unstructured.SetNestedStringMap(testConfig.machineSet.Object, config.nodegroupLabels, "spec", "template", "spec", "metadata", "labels")
-		}
-
 		if config.includeNodes {
 			for i := range testConfig.nodes {
 				testConfig.nodes[i].SetLabels(config.nodeLabels)
@@ -1724,9 +1608,6 @@ func TestNodeGroupTemplateNodeInfo(t *testing.T) {
 				t.Fatalf("expected error: %v, but got: %v", config.expectedErr, err)
 			}
 			return
-		}
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
 		}
 
 		nodeAllocatable := nodeInfo.Node().Status.Allocatable
@@ -1757,6 +1638,18 @@ func TestNodeGroupTemplateNodeInfo(t *testing.T) {
 					}
 				} else {
 					t.Errorf("Expected node label %q to exist in node", key)
+				}
+			}
+		}
+		for _, resourceslice := range nodeInfo.LocalResourceSlices {
+			if resourceslice.Spec.Driver != config.expectedResourceSlice.driverName {
+				t.Errorf("Expected DRA driver in ResourceSlice to have: %s, but got: %s", config.expectedResourceSlice.driverName, resourceslice.Spec.Driver)
+			} else if len(resourceslice.Spec.Devices) != config.expectedResourceSlice.gpuCount {
+				t.Errorf("Expected the number of DRA devices in ResourceSlice to have: %d, but got: %d", config.expectedResourceSlice.gpuCount, len(resourceslice.Spec.Devices))
+			}
+			for _, device := range resourceslice.Spec.Devices {
+				if *device.Basic.Attributes["type"].StringValue != config.expectedResourceSlice.deviceType {
+					t.Errorf("Expected device type to have: %s, but got: %s", config.expectedResourceSlice.deviceType, *device.Basic.Attributes["type"].StringValue)
 				}
 			}
 		}
