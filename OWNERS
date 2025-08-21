@@ -1,8 +1,11 @@
 approvers:
-- sig-autoscaling-leads
+- elmiko
+- jkyros
+- joelsmith
+- maxcao13
 reviewers:
-- sig-autoscaling-leads
-emeritus_approvers:
-- bskiba # 2022-09-30
-- mwielgus
-- maciekpytel
+- elmiko
+- jkyros
+- joelsmith
+- maxcao13
+component: Cluster Autoscaler
