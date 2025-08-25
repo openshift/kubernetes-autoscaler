@@ -25,10 +25,12 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	v1 "k8s.io/api/core/v1"
+	resourceapi "k8s.io/api/resource/v1beta1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/tools/cache"
+	"k8s.io/utils/ptr"
 )
 
 const (
@@ -374,6 +376,7 @@ func TestAnnotations(t *testing.T) {
 		maxPodsKey:      maxPodsQuantity.String(),
 		taintsKey:       "key1=value1:NoSchedule,key2=value2:NoExecute",
 		labelsKey:       "key3=value3,key4=value4,key5=value5",
+		draDriverKey:    draDriver,
 	}
 
 	test := func(t *testing.T, testConfig *testConfig, testResource *unstructured.Unstructured) {
@@ -413,6 +416,14 @@ func TestAnnotations(t *testing.T) {
 			t.Fatal(err)
 		} else if maxPodsQuantity.Cmp(maxPods) != 0 {
 			t.Errorf("expected %v, got %v", maxPodsQuantity, maxPods)
+		}
+
+		if resourceSlices, err := sr.InstanceResourceSlices(testNodeName); err != nil {
+			t.Fatal(err)
+		} else {
+			for _, resourceslice := range resourceSlices {
+				assert.Equal(t, expectedResourceSlice, resourceslice)
+			}
 		}
 
 		taints := sr.Taints()

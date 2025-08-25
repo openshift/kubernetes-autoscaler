@@ -24,12 +24,13 @@ import (
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/selection"
-	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/recommender/model"
 	"k8s.io/client-go/rest"
 	"k8s.io/klog/v2"
 	"k8s.io/metrics/pkg/apis/metrics/v1beta1"
 	resourceclient "k8s.io/metrics/pkg/client/clientset/versioned/typed/metrics/v1beta1"
 	"k8s.io/metrics/pkg/client/external_metrics"
+
+	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/recommender/model"
 )
 
 // PodMetricsLister wraps both metrics-client and External Metrics
@@ -56,7 +57,7 @@ func (s podMetricsSource) List(ctx context.Context, namespace string, opts v1.Li
 type externalMetricsClient struct {
 	externalClient external_metrics.ExternalMetricsClient
 	options        ExternalClientOptions
-	clusterState   *model.ClusterState
+	clusterState   model.ClusterState
 }
 
 // ExternalClientOptions specifies parameters for using an External Metrics Client.
@@ -67,10 +68,11 @@ type ExternalClientOptions struct {
 }
 
 // NewExternalClient returns a Source for an External Metrics Client.
-func NewExternalClient(c *rest.Config, clusterState *model.ClusterState, options ExternalClientOptions) PodMetricsLister {
+func NewExternalClient(c *rest.Config, clusterState model.ClusterState, options ExternalClientOptions) PodMetricsLister {
 	extClient, err := external_metrics.NewForConfig(c)
 	if err != nil {
-		klog.Fatalf("Failed initializing external metrics client: %v", err)
+		klog.ErrorS(err, "Failed initializing external metrics client")
+		klog.FlushAndExit(klog.ExitFlushTimeout, 1)
 	}
 	return &externalMetricsClient{
 		externalClient: extClient,
@@ -82,7 +84,7 @@ func NewExternalClient(c *rest.Config, clusterState *model.ClusterState, options
 func (s *externalMetricsClient) List(ctx context.Context, namespace string, opts v1.ListOptions) (*v1beta1.PodMetricsList, error) {
 	result := v1beta1.PodMetricsList{}
 
-	for _, vpa := range s.clusterState.Vpas {
+	for _, vpa := range s.clusterState.VPAs() {
 		if vpa.PodCount == 0 {
 			continue
 		}

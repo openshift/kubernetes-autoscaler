@@ -37,9 +37,61 @@ import (
 	"github.com/onsi/gomega"
 )
 
+const (
+	webhookConfigName = "vpa-webhook-config"
+	webhookName       = "vpa.k8s.io"
+)
+
+var _ = AdmissionControllerE2eDescribe("Admission-controller", ginkgo.Label("FG:InPlaceOrRecreate"), func() {
+	f := framework.NewDefaultFramework("vertical-pod-autoscaling")
+	f.NamespacePodSecurityEnforceLevel = podsecurity.LevelBaseline
+
+	ginkgo.BeforeEach(func() {
+		checkInPlaceOrRecreateTestsEnabled(f, true, false)
+		waitForVpaWebhookRegistration(f)
+	})
+
+	ginkgo.It("starts pods with new recommended request with InPlaceOrRecreate mode", func() {
+		d := NewHamsterDeploymentWithResources(f, ParseQuantityOrDie("100m") /*cpu*/, ParseQuantityOrDie("100Mi") /*memory*/)
+
+		ginkgo.By("Setting up a VPA CRD")
+		containerName := GetHamsterContainerNameByIndex(0)
+		vpaCRD := test.VerticalPodAutoscaler().
+			WithName("hamster-vpa").
+			WithNamespace(f.Namespace.Name).
+			WithTargetRef(hamsterTargetRef).
+			WithContainer(containerName).
+			WithUpdateMode(vpa_types.UpdateModeInPlaceOrRecreate).
+			AppendRecommendation(
+				test.Recommendation().
+					WithContainer(containerName).
+					WithTarget("250m", "200Mi").
+					WithLowerBound("250m", "200Mi").
+					WithUpperBound("250m", "200Mi").
+					GetContainerResources()).
+			Get()
+
+		InstallVPA(f, vpaCRD)
+
+		ginkgo.By("Setting up a hamster deployment")
+		podList := startDeploymentPods(f, d)
+
+		// Originally Pods had 100m CPU, 100Mi of memory, but admission controller
+		// should change it to recommended 250m CPU and 200Mi of memory.
+		for _, pod := range podList.Items {
+			gomega.Expect(pod.Spec.Containers[0].Resources.Requests[apiv1.ResourceCPU]).To(gomega.Equal(ParseQuantityOrDie("250m")))
+			gomega.Expect(pod.Spec.Containers[0].Resources.Requests[apiv1.ResourceMemory]).To(gomega.Equal(ParseQuantityOrDie("200Mi")))
+		}
+	})
+})
+
 var _ = AdmissionControllerE2eDescribe("Admission-controller", func() {
 	f := framework.NewDefaultFramework("vertical-pod-autoscaling")
 	f.NamespacePodSecurityEnforceLevel = podsecurity.LevelBaseline
+
+	ginkgo.BeforeEach(func() {
+		waitForVpaWebhookRegistration(f)
+	})
 
 	ginkgo.It("starts pods with new recommended request", func() {
 		d := NewHamsterDeploymentWithResources(f, ParseQuantityOrDie("100m") /*cpu*/, ParseQuantityOrDie("100Mi") /*memory*/)
@@ -853,8 +905,8 @@ var _ = AdmissionControllerE2eDescribe("Admission-controller", func() {
 		gomega.Expect(err2.Error()).To(gomega.MatchRegexp(`.*admission webhook .*vpa.* denied the request: .*`))
 	})
 
-	ginkgo.It("reloads the webhook certificate", func(ctx ginkgo.SpecContext) {
-		ginkgo.By("Retrieving alternative certificate")
+	ginkgo.It("reloads the webhook leaf and CA certificate", func(ctx ginkgo.SpecContext) {
+		ginkgo.By("Retrieving alternative certificates")
 		c := f.ClientSet
 		e2eCertsSecret, err := c.CoreV1().Secrets(metav1.NamespaceSystem).Get(ctx, "vpa-e2e-certs", metav1.GetOptions{})
 		gomega.Expect(err).To(gomega.Succeed(), "Failed to get vpa-e2e-certs secret")
@@ -862,10 +914,11 @@ var _ = AdmissionControllerE2eDescribe("Admission-controller", func() {
 		gomega.Expect(err).To(gomega.Succeed(), "Failed to get vpa-tls-certs secret")
 		actualCertsSecret.Data["serverKey.pem"] = e2eCertsSecret.Data["e2eKey.pem"]
 		actualCertsSecret.Data["serverCert.pem"] = e2eCertsSecret.Data["e2eCert.pem"]
+		actualCertsSecret.Data["caCert.pem"] = e2eCertsSecret.Data["e2eCaCert.pem"]
 		_, err = c.CoreV1().Secrets(metav1.NamespaceSystem).Update(ctx, actualCertsSecret, metav1.UpdateOptions{})
 		gomega.Expect(err).To(gomega.Succeed(), "Failed to update vpa-tls-certs secret with e2e rotation certs")
 
-		ginkgo.By("Waiting for certificate reload")
+		ginkgo.By("Waiting for certificate reloads")
 		pods, err := c.CoreV1().Pods(metav1.NamespaceSystem).List(ctx, metav1.ListOptions{})
 		gomega.Expect(err).To(gomega.Succeed())
 
@@ -883,7 +936,7 @@ var _ = AdmissionControllerE2eDescribe("Admission-controller", func() {
 			logs, err := io.ReadAll(reader)
 			g.Expect(err).To(gomega.Succeed())
 			return string(logs)
-		}).Should(gomega.ContainSubstring("New certificate found, reloading"))
+		}).Should(gomega.And(gomega.ContainSubstring("New certificate found, reloading"), gomega.ContainSubstring("New client CA found, reloading and patching webhook"), gomega.ContainSubstring("Successfully patched webhook with new client CA")))
 
 		ginkgo.By("Setting up invalid VPA object")
 		// there is an invalid "requests" field.
@@ -906,7 +959,6 @@ var _ = AdmissionControllerE2eDescribe("Admission-controller", func() {
 		gomega.Expect(err).To(gomega.HaveOccurred(), "Invalid VPA object accepted")
 		gomega.Expect(err.Error()).To(gomega.MatchRegexp(`.*admission webhook .*vpa.* denied the request: .*`), "Admission controller did not inspect the object")
 	})
-
 })
 
 func startDeploymentPods(f *framework.Framework, deployment *appsv1.Deployment) *apiv1.PodList {
@@ -960,4 +1012,18 @@ func startDeploymentPods(f *framework.Framework, deployment *appsv1.Deployment) 
 	podList, err := framework_deployment.GetPodsForDeployment(context.TODO(), c, deployment)
 	gomega.Expect(err).NotTo(gomega.HaveOccurred(), "when listing pods after deployment resize")
 	return podList
+}
+
+func waitForVpaWebhookRegistration(f *framework.Framework) {
+	ginkgo.By("Waiting for VPA webhook registration")
+	gomega.Eventually(func() bool {
+		webhook, err := f.ClientSet.AdmissionregistrationV1().MutatingWebhookConfigurations().Get(context.TODO(), webhookConfigName, metav1.GetOptions{})
+		if err != nil {
+			return false
+		}
+		if webhook != nil && len(webhook.Webhooks) > 0 && webhook.Webhooks[0].Name == webhookName {
+			return true
+		}
+		return false
+	}, 3*time.Minute, 5*time.Second).Should(gomega.BeTrue(), "Webhook was not registered in the cluster")
 }

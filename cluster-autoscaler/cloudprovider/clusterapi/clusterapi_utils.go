@@ -346,6 +346,13 @@ func parseMaxPodsCapacity(annotations map[string]string) (resource.Quantity, err
 	return parseIntKey(annotations, deprecatedMaxPodsKey)
 }
 
+func parseDRADriver(annotations map[string]string) string {
+	if val, found := annotations[draDriverKey]; found {
+		return val
+	}
+	return ""
+}
+
 func clusterNameFromResource(r *unstructured.Unstructured) string {
 	// Use Spec.ClusterName if defined (only available on v1alpha3+ types)
 	clusterName, found, err := unstructured.NestedString(r.Object, "spec", "clusterName")
