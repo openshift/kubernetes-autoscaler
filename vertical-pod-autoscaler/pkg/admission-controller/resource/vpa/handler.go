@@ -26,18 +26,21 @@ import (
 	apires "k8s.io/apimachinery/pkg/api/resource"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/klog/v2"
+
 	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/admission-controller/resource"
 	vpa_types "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/apis/autoscaling.k8s.io/v1"
+	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/features"
 	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/metrics/admission"
-	"k8s.io/klog/v2"
 )
 
 var (
 	possibleUpdateModes = map[vpa_types.UpdateMode]interface{}{
-		vpa_types.UpdateModeOff:      struct{}{},
-		vpa_types.UpdateModeInitial:  struct{}{},
-		vpa_types.UpdateModeRecreate: struct{}{},
-		vpa_types.UpdateModeAuto:     struct{}{},
+		vpa_types.UpdateModeOff:               struct{}{},
+		vpa_types.UpdateModeInitial:           struct{}{},
+		vpa_types.UpdateModeRecreate:          struct{}{},
+		vpa_types.UpdateModeAuto:              struct{}{},
+		vpa_types.UpdateModeInPlaceOrRecreate: struct{}{},
 	}
 
 	possibleScalingModes = map[vpa_types.ContainerScalingMode]interface{}{
@@ -119,6 +122,9 @@ func ValidateVPA(vpa *vpa_types.VerticalPodAutoscaler, isCreate bool) error {
 		}
 		if _, found := possibleUpdateModes[*mode]; !found {
 			return fmt.Errorf("unexpected UpdateMode value %s", *mode)
+		}
+		if (*mode == vpa_types.UpdateModeInPlaceOrRecreate) && !features.Enabled(features.InPlaceOrRecreate) && isCreate {
+			return fmt.Errorf("in order to use UpdateMode %s, you must enable feature gate %s in the admission-controller args", vpa_types.UpdateModeInPlaceOrRecreate, features.InPlaceOrRecreate)
 		}
 
 		if minReplicas := vpa.Spec.UpdatePolicy.MinReplicas; minReplicas != nil && *minReplicas <= 0 {
