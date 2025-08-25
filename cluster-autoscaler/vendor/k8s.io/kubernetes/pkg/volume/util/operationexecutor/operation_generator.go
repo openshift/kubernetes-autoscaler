@@ -584,6 +584,7 @@ func (og *operationGenerator) GenerateMountVolumeFunc(
 			FsGroup:             fsGroup,
 			DesiredSize:         volumeToMount.DesiredSizeLimit,
 			FSGroupChangePolicy: fsGroupChangePolicy,
+			Recorder:            og.recorder,
 			SELinuxLabel:        volumeToMount.SELinuxLabel,
 		})
 		// Update actual state of world
@@ -1476,6 +1477,13 @@ func (og *operationGenerator) GenerateVerifyControllerAttachedVolumeFunc(
 			}
 		}
 
+		// Volume is not attached - check if this is due to resource exhaustion before returning the error
+		if utilfeature.DefaultFeatureGate.Enabled(features.MutableCSINodeAllocatableCount) {
+			if attachablePlugin, pluginErr := og.volumePluginMgr.FindAttachablePluginBySpec(volumeToMount.VolumeSpec); pluginErr == nil && attachablePlugin != nil {
+				attachablePlugin.VerifyExhaustedResource(volumeToMount.VolumeSpec, nodeName)
+			}
+		}
+
 		// Volume not attached, return error. Caller will log and retry.
 		eventErr, detailedErr := volumeToMount.GenerateError("Volume not attached according to node status", nil)
 		return volumetypes.NewOperationContext(eventErr, detailedErr, migrated)
@@ -2075,6 +2083,11 @@ func (og *operationGenerator) checkForRecoveryFromExpansion(pvc *v1.PersistentVo
 	featureGateStatus := utilfeature.DefaultFeatureGate.Enabled(features.RecoverVolumeExpansionFailure)
 
 	if !featureGateStatus {
+		// even though RecoverVolumeExpansionFailure feature-gate is disabled, we should consider it enabled
+		// if resizeStatus is not empty or allocatedresources is set
+		if resizeStatus != "" || allocatedResource != nil {
+			return true
+		}
 		return false
 	}
 

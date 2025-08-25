@@ -384,15 +384,6 @@ var (
 		[]string{"direction", "reason"},
 	)
 
-	/**** Metrics related to NodeAutoprovisioning ****/
-	napEnabled = k8smetrics.NewGauge(
-		&k8smetrics.GaugeOpts{
-			Namespace: caNamespace,
-			Name:      "nap_enabled",
-			Help:      "Whether or not Node Autoprovisioning is enabled. 1 if it is, 0 otherwise.",
-		},
-	)
-
 	nodeGroupCreationCount = k8smetrics.NewCounterVec(
 		&k8smetrics.CounterOpts{
 			Namespace: caNamespace,
@@ -427,6 +418,15 @@ var (
 			Help:      "Number of migs where instance count according to InstanceGroupManagers.List() differs from the results of Instances.List(). This can happen when some instances are abandoned or a user edits instance 'created-by' metadata.",
 		},
 	)
+
+	binpackingHeterogeneity = k8smetrics.NewHistogramVec(
+		&k8smetrics.HistogramOpts{
+			Namespace: caNamespace,
+			Name:      "binpacking_heterogeneity",
+			Help:      "Number of groups of equivalent pods being processed as a part of the same binpacking simulation.",
+			Buckets:   k8smetrics.ExponentialBuckets(1, 2, 6), // 1, 2, 4, ..., 32
+		}, []string{"instance_type", "cpu_count", "namespace_count"},
+	)
 )
 
 // RegisterAll registers all metrics.
@@ -457,12 +457,12 @@ func RegisterAll(emitPerNodeGroupMetrics bool) {
 	legacyregistry.MustRegister(oldUnregisteredNodesRemovedCount)
 	legacyregistry.MustRegister(overflowingControllersCount)
 	legacyregistry.MustRegister(skippedScaleEventsCount)
-	legacyregistry.MustRegister(napEnabled)
 	legacyregistry.MustRegister(nodeGroupCreationCount)
 	legacyregistry.MustRegister(nodeGroupDeletionCount)
 	legacyregistry.MustRegister(pendingNodeDeletions)
 	legacyregistry.MustRegister(nodeTaintsCount)
 	legacyregistry.MustRegister(inconsistentInstancesMigsCount)
+	legacyregistry.MustRegister(binpackingHeterogeneity)
 
 	if emitPerNodeGroupMetrics {
 		legacyregistry.MustRegister(nodesGroupMinNodes)
@@ -504,9 +504,7 @@ func UpdateDurationFromStart(label FunctionLabel, start time.Time) {
 
 // UpdateDuration records the duration of the step identified by the label
 func UpdateDuration(label FunctionLabel, duration time.Duration) {
-	// TODO(maciekpytel): remove second condition if we manage to get
-	// asynchronous node drain
-	if duration > LogLongDurationThreshold && label != ScaleDown {
+	if duration > LogLongDurationThreshold {
 		klog.V(4).Infof("Function %s took %v to complete", label, duration)
 	}
 	functionDuration.WithLabelValues(string(label)).Observe(duration.Seconds())
@@ -668,15 +666,6 @@ func UpdateUnremovableNodesCount(unremovableReasonCounts map[simulator.Unremovab
 	}
 }
 
-// UpdateNapEnabled records if NodeAutoprovisioning is enabled
-func UpdateNapEnabled(enabled bool) {
-	if enabled {
-		napEnabled.Set(1)
-	} else {
-		napEnabled.Set(0)
-	}
-}
-
 // RegisterNodeGroupCreation registers node group creation
 func RegisterNodeGroupCreation() {
 	RegisterNodeGroupCreationWithLabelValues("")
@@ -754,4 +743,10 @@ func ObserveNodeTaintsCount(taintType string, count float64) {
 // This can happen when some instances are abandoned or a user edits instance 'created-by' metadata.
 func UpdateInconsistentInstancesMigsCount(migCount int) {
 	inconsistentInstancesMigsCount.Set(float64(migCount))
+}
+
+// ObserveBinpackingHeterogeneity records the number of pod equivalence groups
+// considered in a single binpacking estimation.
+func ObserveBinpackingHeterogeneity(instanceType, cpuCount, namespaceCount string, pegCount int) {
+	binpackingHeterogeneity.WithLabelValues(instanceType, cpuCount, namespaceCount).Observe(float64(pegCount))
 }

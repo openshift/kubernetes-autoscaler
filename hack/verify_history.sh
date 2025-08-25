@@ -15,9 +15,35 @@
 
 # Verifies git commits starting from predefined prefix.
 
+upstreamurl=https://github.com/kubernetes/autoscaler
+upstreambranch=cluster-autoscaler-release-1.33
+upstream=''
 # default to checking most recent commit only if not run by CI pipeline
 check_base="${PULL_BASE_SHA:-HEAD^}"
 check_sha="${PULL_PULL_SHA:-HEAD}"
+
+get_upstream() {
+  if [ -n "$upstream" ]; then
+    return 0
+  fi
+  while read name url ignore; do
+    if [ "$url" = "$upstreamurl" ]; then
+      upstream=$name
+      return 0
+     fi
+  done < <(git remote -v)
+  git remote add upstreamtmp "$upstreamurl" && git fetch upstreamtmp && upstream=upstreamtmp
+  return $?
+}
+
+upstream_has() {
+  get_upstream
+  if ! [ -n "$upstream" ]; then
+    return 1
+  fi
+  git merge-base --is-ancestor "$1" "$upstream/$upstreambranch"
+  return $?
+}
 
 read -d '' help_message << EOF
 
@@ -32,16 +58,18 @@ prefix='UPSTREAM: ([0-9]+|<(carry|drop)>): '
 echo "examining commits between $check_base and $check_sha"
 echo
 
-while read -r message; do
-  if ! [[ "$message" =~ ^$prefix ]]; then
-    echo "Git history in this PR doesn't conform to set commit message standards. Offending commit message is:"
+while read -r hash message; do
+  # valid commits either have the prefix or are part of the upstream branch $upstreambranch
+  if [[ "$message" =~ ^$prefix ]] || upstream_has "$hash"; then
     echo "$message"
-    echo
-    echo "$help_message"
-    exit 1
+    continue
   fi
+  echo "Git history in this PR doesn't conform to set commit message standards. Offending commit message is:"
   echo "$message"
-done < <(git log "$check_base".."$check_sha" --pretty=%s --no-merges)
+  echo
+  echo "$help_message"
+  exit 1
+done < <(git log "$check_base".."$check_sha" --pretty="%H %s" --no-merges)
 
 echo
 echo "All looks good"

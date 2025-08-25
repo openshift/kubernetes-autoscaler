@@ -86,6 +86,9 @@ type Config struct {
 	// EnableForceDelete defines whether to enable force deletion on the APIs
 	EnableForceDelete bool `json:"enableForceDelete,omitempty" yaml:"enableForceDelete,omitempty"`
 
+	// EnableVMsAgentPool defines whether to support VMs agentpool type in addition to VMSS type
+	EnableVMsAgentPool bool `json:"enableVMsAgentPool,omitempty" yaml:"enableVMsAgentPool,omitempty"`
+
 	// (DEPRECATED, DO NOT USE) EnableDynamicInstanceList defines whether to enable dynamic instance workflow for instance information check
 	EnableDynamicInstanceList bool `json:"enableDynamicInstanceList,omitempty" yaml:"enableDynamicInstanceList,omitempty"`
 
@@ -100,6 +103,9 @@ type Config struct {
 
 	// EnableFastDeleteOnFailedProvisioning defines whether to delete the experimental faster VMSS instance deletion on failed provisioning
 	EnableFastDeleteOnFailedProvisioning bool `json:"enableFastDeleteOnFailedProvisioning,omitempty" yaml:"enableFastDeleteOnFailedProvisioning,omitempty"`
+
+	// EnableLabelPredictionsOnTemplate defines whether to enable label predictions on the template when scaling from zero
+	EnableLabelPredictionsOnTemplate bool `json:"enableLabelPredictionsOnTemplate,omitempty" yaml:"enableLabelPredictionsOnTemplate,omitempty"`
 }
 
 // These are only here for backward compabitility. Their equivalent exists in providerazure.Config with a different name.
@@ -122,6 +128,7 @@ func BuildAzureConfig(configReader io.Reader) (*Config, error) {
 	// Static defaults
 	cfg.EnableDynamicInstanceList = false
 	cfg.EnableVmssFlexNodes = false
+	cfg.EnableVMsAgentPool = false
 	cfg.CloudProviderBackoffRetries = providerazureconsts.BackoffRetriesDefault
 	cfg.CloudProviderBackoffExponent = providerazureconsts.BackoffExponentDefault
 	cfg.CloudProviderBackoffDuration = providerazureconsts.BackoffDurationDefault
@@ -129,6 +136,7 @@ func BuildAzureConfig(configReader io.Reader) (*Config, error) {
 	cfg.VMType = providerazureconsts.VMTypeVMSS
 	cfg.MaxDeploymentsCount = int64(defaultMaxDeploymentsCount)
 	cfg.StrictCacheUpdates = false
+	cfg.EnableLabelPredictionsOnTemplate = true
 
 	// Config file overrides defaults
 	if configReader != nil {
@@ -257,6 +265,9 @@ func BuildAzureConfig(configReader io.Reader) (*Config, error) {
 	if _, err = assignBoolFromEnvIfExists(&cfg.StrictCacheUpdates, "AZURE_STRICT_CACHE_UPDATES"); err != nil {
 		return nil, err
 	}
+	if _, err = assignBoolFromEnvIfExists(&cfg.EnableVMsAgentPool, "AZURE_ENABLE_VMS_AGENT_POOLS"); err != nil {
+		return nil, err
+	}
 	if _, err = assignBoolFromEnvIfExists(&cfg.EnableDynamicInstanceList, "AZURE_ENABLE_DYNAMIC_INSTANCE_LIST"); err != nil {
 		return nil, err
 	}
@@ -299,6 +310,9 @@ func BuildAzureConfig(configReader io.Reader) (*Config, error) {
 		return nil, err
 	}
 	if _, err = assignBoolFromEnvIfExists(&cfg.EnableFastDeleteOnFailedProvisioning, "AZURE_ENABLE_FAST_DELETE_ON_FAILED_PROVISIONING"); err != nil {
+		return nil, err
+	}
+	if _, err = assignBoolFromEnvIfExists(&cfg.EnableLabelPredictionsOnTemplate, "AZURE_ENABLE_LABEL_PREDICTIONS_ON_TEMPLATE"); err != nil {
 		return nil, err
 	}
 

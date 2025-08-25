@@ -140,12 +140,10 @@ func (p *MixedTemplateNodeInfoProvider) Process(ctx *context.AutoscalingContext,
 		// working nodes in the node groups. By default CA tries to use a real-world example.
 		nodeInfo, err := simulator.SanitizedTemplateNodeInfoFromNodeGroup(nodeGroup, daemonsets, taintConfig)
 		if err != nil {
-			if errors.Is(err, cloudprovider.ErrNotImplemented) {
-				continue
-			} else {
+			if !errors.Is(err, cloudprovider.ErrNotImplemented) {
 				klog.Errorf("Unable to build proper template node for %s: %v", id, err)
-				return map[string]*framework.NodeInfo{}, caerror.ToAutoscalerError(caerror.CloudProviderError, err)
 			}
+			continue
 		}
 		result[id] = nodeInfo
 	}
@@ -184,5 +182,12 @@ func isNodeGoodTemplateCandidate(node *apiv1.Node, now time.Time) bool {
 	ready, lastTransitionTime, _ := kube_util.GetReadinessState(node)
 	stable := lastTransitionTime.Add(stabilizationDelay).Before(now)
 	schedulable := !node.Spec.Unschedulable
-	return ready && stable && schedulable
+	toBeDeleted := false
+	for _, taint := range node.Spec.Taints {
+		if taint.Key == taints.ToBeDeletedTaint {
+			toBeDeleted = true
+			break
+		}
+	}
+	return ready && stable && schedulable && !toBeDeleted
 }

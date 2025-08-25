@@ -2,17 +2,13 @@
 # To update this file please contact an existing owner and request
 # to be added to the owners-gen input data.
 approvers:
-- JoelSpeed
 - elmiko
-- enxebre
+- jkyros
 - joelsmith
+- maxcao13
 reviewers:
-- JoelSpeed
-- RadekManak
-- damdo
 - elmiko
-- nrb
-- racheljpg
-- sub-mod
-- theobarberbany
+- jkyros
+- joelsmith
+- maxcao13
 component: Cluster Autoscaler
