@@ -26,6 +26,7 @@ import (
 	apiv1 "k8s.io/api/core/v1"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+
 	resource_admission "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/admission-controller/resource"
 	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/admission-controller/resource/pod/patch"
 	vpa_types "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/apis/autoscaling.k8s.io/v1"
@@ -51,6 +52,10 @@ func (m *fakeVpaMatcher) GetMatchingVPA(_ context.Context, _ *apiv1.Pod) *vpa_ty
 type fakePatchCalculator struct {
 	patches []resource_admission.PatchRecord
 	err     error
+}
+
+func (*fakePatchCalculator) PatchResourceTarget() patch.PatchResourceTarget {
+	return patch.Pod
 }
 
 func (c *fakePatchCalculator) CalculatePatches(_ *apiv1.Pod, _ *vpa_types.VerticalPodAutoscaler) (

@@ -156,7 +156,7 @@ func (r *RemovalSimulator) SimulateNodeRemoval(
 
 	podsToRemove, daemonSetPods, blockingPod, err := GetPodsToMove(nodeInfo, r.deleteOptions, r.drainabilityRules, r.listers, remainingPdbTracker, timestamp)
 	if err != nil {
-		klog.V(2).Infof("node %s cannot be removed: %v", nodeName, err)
+		klog.V(2).Infof("Node %s cannot be removed: %v", nodeName, err)
 		if blockingPod != nil {
 			return nil, &UnremovableNode{Node: nodeInfo.Node(), Reason: BlockedByPod, BlockingPod: blockingPod}
 		}
@@ -167,10 +167,10 @@ func (r *RemovalSimulator) SimulateNodeRemoval(
 		return r.findPlaceFor(nodeName, podsToRemove, destinationMap, timestamp)
 	})
 	if err != nil {
-		klog.V(2).Infof("node %s is not suitable for removal: %v", nodeName, err)
+		klog.V(2).Infof("Node %s is not suitable for removal: %v", nodeName, err)
 		return nil, &UnremovableNode{Node: nodeInfo.Node(), Reason: NoPlaceToMovePods}
 	}
-	klog.V(2).Infof("node %s may be removed", nodeName)
+	klog.V(2).Infof("Node %s may be removed", nodeName)
 	return &NodeToBeRemoved{
 		Node:             nodeInfo.Node(),
 		PodsToReschedule: podsToRemove,
@@ -226,6 +226,8 @@ func (r *RemovalSimulator) findPlaceFor(removedNode string, pods []*apiv1.Pod, n
 			klog.Errorf("Simulating removal of %s/%s return error; %v", pod.Namespace, pod.Name, err)
 		}
 	}
+	// Remove the node from the snapshot, so that it doesn't interfere with topology spread constraint scheduling.
+	r.clusterSnapshot.RemoveNodeInfo(removedNode)
 
 	newpods := make([]*apiv1.Pod, 0, len(pods))
 	for _, podptr := range pods {

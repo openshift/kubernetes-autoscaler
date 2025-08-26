@@ -51,6 +51,7 @@ const (
 	// the following constants keep the upstream prefix so that we do not introduce separate values into the openshift api
 	diskCapacityKey = "capacity.cluster-autoscaler.kubernetes.io/ephemeral-disk"
 	labelsKey       = "capacity.cluster-autoscaler.kubernetes.io/labels"
+	draDriverKey    = "capacity.cluster-autoscaler.kubernetes.io/dra-driver"
 	taintsKey       = "capacity.cluster-autoscaler.kubernetes.io/taints" // not currently used on OpenShift
 
 	// UnknownArch is used if the Architecture is Unknown
@@ -67,6 +68,8 @@ const (
 	DefaultArch = Amd64
 	// scaleUpFromZeroDefaultEnvVar is the name of the env var for the default architecture
 	scaleUpFromZeroDefaultArchEnvVar = "CAPI_SCALE_ZERO_DEFAULT_ARCH"
+	// GpuDeviceType is used if DRA device is GPU
+	GpuDeviceType = "gpu"
 
 	// TODO: update machine API operator to match CAPI annotation so this can be inferred dynamically by getMachineDeleteAnnotationKey i.e ${apigroup}/delete-machine
 	// https://github.com/openshift/machine-api-operator/blob/128c5c90918c009172c6d24d5715888e0e1d59e4/pkg/controller/machineset/delete_policy.go#L34
@@ -344,6 +347,13 @@ func parseMaxPodsCapacity(annotations map[string]string) (resource.Quantity, err
 
 	// If we don't find the old annotation, parseIntKey returns zeroQuantity.
 	return parseIntKey(annotations, deprecatedMaxPodsKey)
+}
+
+func parseDRADriver(annotations map[string]string) string {
+	if val, found := annotations[draDriverKey]; found {
+		return val
+	}
+	return ""
 }
 
 func clusterNameFromResource(r *unstructured.Unstructured) string {

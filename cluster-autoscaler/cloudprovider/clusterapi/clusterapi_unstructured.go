@@ -18,21 +18,26 @@ package clusterapi
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"path"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/pkg/errors"
 	apiv1 "k8s.io/api/core/v1"
 	corev1 "k8s.io/api/core/v1"
+	resourceapi "k8s.io/api/resource/v1beta1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation"
 	gpuapis "k8s.io/autoscaler/cluster-autoscaler/utils/gpu"
 	klog "k8s.io/klog/v2"
+	"k8s.io/utils/ptr"
 )
 
 type unstructuredScalableResource struct {
@@ -119,23 +124,42 @@ func (r unstructuredScalableResource) SetSize(nreplicas int) error {
 		return err
 	}
 
-	s, err := r.controller.managementScaleClient.Scales(r.Namespace()).Get(context.TODO(), gvr.GroupResource(), r.Name(), metav1.GetOptions{})
+	spec := autoscalingv1Scale{
+		Spec: autoscalingv1ScaleSpec{
+			Replicas: ptr.To(int32(nreplicas)),
+		},
+	}
+
+	patch, err := json.Marshal(spec)
 	if err != nil {
-		return err
+		return fmt.Errorf("could not marshal json patch for scaling: %w", err)
 	}
 
-	if s == nil {
-		return fmt.Errorf("unknown %s %s/%s", r.Kind(), r.Namespace(), r.Name())
-	}
-
-	s.Spec.Replicas = int32(nreplicas)
-	_, updateErr := r.controller.managementScaleClient.Scales(r.Namespace()).Update(context.TODO(), gvr.GroupResource(), s, metav1.UpdateOptions{})
+	_, updateErr := r.controller.managementScaleClient.Scales(r.Namespace()).Patch(context.TODO(), gvr, r.Name(), types.MergePatchType, patch, metav1.PatchOptions{})
 
 	if updateErr == nil {
 		updateErr = unstructured.SetNestedField(r.unstructured.UnstructuredContent(), int64(nreplicas), "spec", "replicas")
 	}
 
 	return updateErr
+}
+
+// scale is a version of the autoscalingv1.Scale struct that marshals correctly.
+// Specifically the Spec.Replicas field is *int32 instead of int32.
+// Accordingly Spec.Replicas = 0 is not omitted, which is important for autoscale to 0 to work.
+type autoscalingv1Scale struct {
+	// spec defines the behavior of the scale. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#spec-and-status.
+	// +optional
+	Spec autoscalingv1ScaleSpec `json:"spec,omitempty" protobuf:"bytes,2,opt,name=spec"`
+}
+
+type autoscalingv1ScaleSpec struct {
+	// replicas is the desired number of instances for the scaled object.
+	// +optional
+	// +k8s:optional
+	// +default=0
+	// +k8s:minimum=0
+	Replicas *int32 `json:"replicas,omitempty" protobuf:"varint,1,opt,name=replicas"`
 }
 
 func (r unstructuredScalableResource) UnmarkMachineForDeletion(machine *unstructured.Unstructured) error {
@@ -343,6 +367,48 @@ func (r unstructuredScalableResource) InstanceCapacity() (map[corev1.ResourceNam
 	return capacity, nil
 }
 
+func (r unstructuredScalableResource) InstanceResourceSlices(nodeName string) ([]*resourceapi.ResourceSlice, error) {
+	var result []*resourceapi.ResourceSlice
+	driver := r.InstanceDRADriver()
+	if driver == "" {
+		return nil, nil
+	}
+	gpuCount, err := r.InstanceGPUCapacityAnnotation()
+	if err != nil {
+		return nil, err
+	}
+	if !gpuCount.IsZero() {
+		resourceslice := &resourceapi.ResourceSlice{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: nodeName + "-" + driver,
+			},
+			Spec: resourceapi.ResourceSliceSpec{
+				Driver:   driver,
+				NodeName: nodeName,
+				Pool: resourceapi.ResourcePool{
+					Name: nodeName,
+				},
+			},
+		}
+		for i := 0; i < int(gpuCount.Value()); i++ {
+			device := resourceapi.Device{
+				Name: "gpu-" + strconv.Itoa(i),
+				Basic: &resourceapi.BasicDevice{
+					Attributes: map[resourceapi.QualifiedName]resourceapi.DeviceAttribute{
+						"type": {
+							StringValue: ptr.To(GpuDeviceType),
+						},
+					},
+				},
+			}
+			resourceslice.Spec.Devices = append(resourceslice.Spec.Devices, device)
+		}
+		result = append(result, resourceslice)
+		return result, nil
+	}
+	return nil, nil
+}
+
 func (r unstructuredScalableResource) InstanceEphemeralDiskCapacityAnnotation() (resource.Quantity, error) {
 	return parseEphemeralDiskCapacity(r.unstructured.GetAnnotations())
 }
@@ -367,23 +433,49 @@ func (r unstructuredScalableResource) InstanceMaxPodsCapacityAnnotation() (resou
 	return parseMaxPodsCapacity(r.unstructured.GetAnnotations())
 }
 
+func (r unstructuredScalableResource) InstanceDRADriver() string {
+	return parseDRADriver(r.unstructured.GetAnnotations())
+}
+
 func (r unstructuredScalableResource) readInfrastructureReferenceResource() (*unstructured.Unstructured, error) {
+	obKind := r.unstructured.GetKind()
+	obName := r.unstructured.GetName()
+
 	infraref, found, err := unstructured.NestedStringMap(r.unstructured.Object, "spec", "template", "spec", "infrastructureRef")
 	if !found || err != nil {
 		return nil, nil
 	}
 
-	apiversion, ok := infraref["apiVersion"]
-	if !ok {
-		return nil, nil
+	var apiversion string
+
+	apiGroup, ok := infraref["apiGroup"]
+	if ok {
+		if apiversion, err = getAPIGroupPreferredVersion(r.controller.managementDiscoveryClient, apiGroup); err != nil {
+			klog.V(4).Infof("Unable to read preferred version from api group %s, error: %v", apiGroup, err)
+			return nil, err
+		}
+		apiversion = fmt.Sprintf("%s/%s", apiGroup, apiversion)
+	} else {
+		// Fall back to ObjectReference in capi v1beta1
+		apiversion, ok = infraref["apiVersion"]
+		if !ok {
+			info := fmt.Sprintf("Missing apiVersion from %s %s's InfrastructureReference", obKind, obName)
+			klog.V(4).Info(info)
+			return nil, errors.New(info)
+		}
 	}
+
 	kind, ok := infraref["kind"]
 	if !ok {
-		return nil, nil
+		info := fmt.Sprintf("Missing kind from %s %s's InfrastructureReference", obKind, obName)
+		klog.V(4).Info(info)
+		return nil, errors.New(info)
 	}
 	name, ok := infraref["name"]
 	if !ok {
-		return nil, nil
+		info := fmt.Sprintf("Missing name from %s %s's InfrastructureReference", obKind, obName)
+		klog.V(4).Info(info)
+		return nil, errors.New(info)
 	}
 	// kind needs to be lower case and plural
 	kind = fmt.Sprintf("%ss", strings.ToLower(kind))

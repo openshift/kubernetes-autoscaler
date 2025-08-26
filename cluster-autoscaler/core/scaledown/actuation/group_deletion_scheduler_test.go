@@ -132,9 +132,9 @@ func TestScheduleDeletion(t *testing.T) {
 	for _, tc := range testCases {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			provider := testprovider.NewTestCloudProvider(nil, func(nodeGroup string, node string) error {
+			provider := testprovider.NewTestCloudProviderBuilder().WithOnScaleDown(func(nodeGroup string, node string) error {
 				return nil
-			})
+			}).Build()
 
 			batcher := &countingBatcher{}
 			tracker := deletiontracker.NewNodeDeletionTracker(0)
@@ -173,7 +173,7 @@ func TestScheduleDeletion(t *testing.T) {
 				for _, bucket := range ti.toAbort {
 					for _, node := range bucket.Nodes {
 						nodeDeleteResult := status.NodeDeleteResult{ResultType: status.NodeDeleteErrorFailedToDelete, Err: cmpopts.AnyError}
-						scheduler.AbortNodeDeletion(node, bucket.Group.Id(), false, "simulated abort", nodeDeleteResult)
+						scheduler.AbortNodeDeletionDueToError(node, bucket.Group.Id(), false, "simulated abort", nodeDeleteResult)
 					}
 				}
 				if err := scheduleAll(ti.toScheduleAfterAbort, scheduler); err != nil {

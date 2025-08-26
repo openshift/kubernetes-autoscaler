@@ -23,7 +23,6 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"k8s.io/autoscaler/cluster-autoscaler/simulator/clustersnapshot"
-	drasnapshot "k8s.io/autoscaler/cluster-autoscaler/simulator/dynamicresources/snapshot"
 	schedulerframework "k8s.io/kubernetes/pkg/scheduler/framework"
 )
 
@@ -48,8 +47,8 @@ func BenchmarkBuildNodeInfoList(b *testing.B) {
 	for _, tc := range testCases {
 		b.Run(fmt.Sprintf("fork add 1000 to %d", tc.nodeCount), func(b *testing.B) {
 			nodes := clustersnapshot.CreateTestNodes(tc.nodeCount + 1000)
-			deltaStore := NewDeltaSnapshotStore()
-			if err := deltaStore.SetClusterState(nodes[:tc.nodeCount], nil, drasnapshot.Snapshot{}); err != nil {
+			deltaStore := NewDeltaSnapshotStore(16)
+			if err := deltaStore.SetClusterState(nodes[:tc.nodeCount], nil, nil); err != nil {
 				assert.NoError(b, err)
 			}
 			deltaStore.Fork()
@@ -70,8 +69,8 @@ func BenchmarkBuildNodeInfoList(b *testing.B) {
 	for _, tc := range testCases {
 		b.Run(fmt.Sprintf("base %d", tc.nodeCount), func(b *testing.B) {
 			nodes := clustersnapshot.CreateTestNodes(tc.nodeCount)
-			deltaStore := NewDeltaSnapshotStore()
-			if err := deltaStore.SetClusterState(nodes, nil, drasnapshot.Snapshot{}); err != nil {
+			deltaStore := NewDeltaSnapshotStore(16)
+			if err := deltaStore.SetClusterState(nodes, nil, nil); err != nil {
 				assert.NoError(b, err)
 			}
 			b.ResetTimer()
