@@ -66,6 +66,8 @@ const (
 	autoDiscovererTypeClusterAPI  = "clusterapi"
 	autoDiscovererClusterNameKey  = "clusterName"
 	autoDiscovererNamespaceKey    = "namespace"
+	CAPIFailedMessageField        = "failureMessage"
+	MAPIFailedMessageField        = "errorMessage"
 )
 
 // machineController watches for Nodes, Machines, MachinePools, MachineSets, and
@@ -639,22 +641,30 @@ func (c *machineController) findScalableResourceProviderIDs(scalableResource *un
 
 	for _, machine := range machines {
 		// Failed Machines
+		// Because the error messages are contained in different fields depending on the API (MAPI or CAPI), we
+		// need to make sure we grab the proper information so that the failure states are evaluated properly.
+		apiVersion := machine.GetAPIVersion()
+		failedMessageField := CAPIFailedMessageField
+		if strings.HasPrefix(apiVersion, openshiftMAPIGroup) {
+			failedMessageField = MAPIFailedMessageField
+		}
+
 		// In some cases it is possible for a machine to have acquired a provider ID from the infrastructure and
 		// then become failed later. We want to ensure that a failed machine is not counted towards the total
 		// number of nodes in the cluster, for this reason we will detect a failed machine first, regardless
 		// of provider ID, and give it a normalized provider ID with failure message prepended.
-		errorMessage, found, err := unstructured.NestedString(machine.UnstructuredContent(), "status", "errorMessage")
+		failureMessage, found, err := unstructured.NestedString(machine.UnstructuredContent(), "status", failedMessageField)
 		if err != nil {
 			return nil, err
 		}
 
 		if found {
-			// Provide a normalized ID to allow the autoscaler to track machines that will never
+			klog.V(4).Infof("status.%s of machine %q is %q", failedMessageField, machine.GetName(), failureMessage)
+			// Provide a fake ID to allow the autoscaler to track machines that will never
 			// become nodes and mark the nodegroup unhealthy after maxNodeProvisionTime.
 			// Fake ID needs to be recognised later and converted into a machine key.
 			// Use an underscore as a separator between namespace and name as it is not a
 			// valid character within a namespace name.
-			klog.V(4).Infof("Status.ErrorMessage of machine %q is %q", machine.GetName(), errorMessage)
 			providerIDs = append(providerIDs, createFailedMachineNormalizedProviderID(machine.GetNamespace(), machine.GetName()))
 			continue
 		}
