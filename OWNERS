@@ -2,13 +2,17 @@
 # To update this file please contact an existing owner and request
 # to be added to the owners-gen input data.
 approvers:
+- JoelSpeed
 - elmiko
-- jkyros
+- enxebre
 - joelsmith
-- maxcao13
 reviewers:
-- elmiko
-- jkyros
-- joelsmith
-- maxcao13
-component: Cluster Autoscaler
+- RadekManak
+- chrischdi
+- damdo
+- mdbooth
+- nrb
+- racheljpg
+- theobarberbany
+component: Cloud Compute
+subcomponent: Cluster Autoscaler
