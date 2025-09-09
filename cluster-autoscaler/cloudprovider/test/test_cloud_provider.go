@@ -352,6 +352,11 @@ func (tcp *TestCloudProvider) Refresh() error {
 	return nil
 }
 
+// IsNodeCandidateForDeletion returns whether the node is a good candidate for deletion.
+func (tcp *TestCloudProvider) IsNodeCandidateForDeletion(node *apiv1.Node) (bool, error) {
+	return true, cloudprovider.ErrNotImplemented
+}
+
 // TestNodeGroup is a node group used by TestCloudProvider.
 type TestNodeGroup struct {
 	sync.Mutex
