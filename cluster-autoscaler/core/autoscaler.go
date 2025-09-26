@@ -93,7 +93,7 @@ func initializeDefaultOptions(opts *coreoptions.AutoscalerOptions, informerFacto
 		opts.RemainingPdbTracker = pdb.NewBasicRemainingPdbTracker()
 	}
 	if opts.CloudProvider == nil {
-		opts.CloudProvider = cloudBuilder.NewCloudProvider(opts.AutoscalingOptions, informerFactory)
+		opts.CloudProvider = cloudBuilder.NewCloudProvider(opts, informerFactory)
 	}
 	if opts.ExpanderStrategy == nil {
 		expanderFactory := factory.NewFactory()
