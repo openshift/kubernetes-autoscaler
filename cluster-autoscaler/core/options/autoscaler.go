@@ -26,6 +26,8 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/expander"
 	"k8s.io/autoscaler/cluster-autoscaler/observers/loopstart"
 	ca_processors "k8s.io/autoscaler/cluster-autoscaler/processors"
+	"k8s.io/autoscaler/cluster-autoscaler/processors/nodes"
+	"k8s.io/autoscaler/cluster-autoscaler/processors/scaledowncandidates"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator/clustersnapshot"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator/drainability/rules"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator/options"
@@ -54,4 +56,8 @@ type AutoscalerOptions struct {
 	ScaleUpOrchestrator    scaleup.Orchestrator
 	DeleteOptions          options.NodeDeleteOptions
 	DrainabilityRules      rules.Rules
+}
+
+func (a *AutoscalerOptions) RegisterScaleDownNodeProcessor(np nodes.ScaleDownNodeProcessor) {
+	a.Processors.ScaleDownNodeProcessor.(*scaledowncandidates.CombinedScaleDownCandidatesProcessor).Register(np)
 }
