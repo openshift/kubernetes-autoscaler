@@ -20,48 +20,20 @@ import (
 	"strings"
 	"time"
 
-	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	cloudBuilder "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/builder"
-	"k8s.io/autoscaler/cluster-autoscaler/config"
 	"k8s.io/autoscaler/cluster-autoscaler/context"
+	coreoptions "k8s.io/autoscaler/cluster-autoscaler/core/options"
 	"k8s.io/autoscaler/cluster-autoscaler/core/scaledown/pdb"
-	"k8s.io/autoscaler/cluster-autoscaler/core/scaleup"
-	"k8s.io/autoscaler/cluster-autoscaler/debuggingsnapshot"
 	"k8s.io/autoscaler/cluster-autoscaler/estimator"
-	"k8s.io/autoscaler/cluster-autoscaler/expander"
 	"k8s.io/autoscaler/cluster-autoscaler/expander/factory"
 	"k8s.io/autoscaler/cluster-autoscaler/observers/loopstart"
 	ca_processors "k8s.io/autoscaler/cluster-autoscaler/processors"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator/clustersnapshot"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator/drainability/rules"
-	"k8s.io/autoscaler/cluster-autoscaler/simulator/options"
-	"k8s.io/autoscaler/cluster-autoscaler/simulator/predicatechecker"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/backoff"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/errors"
 	"k8s.io/client-go/informers"
-	kube_client "k8s.io/client-go/kubernetes"
 )
-
-// AutoscalerOptions is the whole set of options for configuring an autoscaler
-type AutoscalerOptions struct {
-	config.AutoscalingOptions
-	KubeClient             kube_client.Interface
-	InformerFactory        informers.SharedInformerFactory
-	AutoscalingKubeClients *context.AutoscalingKubeClients
-	CloudProvider          cloudprovider.CloudProvider
-	PredicateChecker       predicatechecker.PredicateChecker
-	ClusterSnapshot        clustersnapshot.ClusterSnapshot
-	ExpanderStrategy       expander.Strategy
-	EstimatorBuilder       estimator.EstimatorBuilder
-	Processors             *ca_processors.AutoscalingProcessors
-	LoopStartNotifier      *loopstart.ObserversList
-	Backoff                backoff.Backoff
-	DebuggingSnapshotter   debuggingsnapshot.DebuggingSnapshotter
-	RemainingPdbTracker    pdb.RemainingPdbTracker
-	ScaleUpOrchestrator    scaleup.Orchestrator
-	DeleteOptions          options.NodeDeleteOptions
-	DrainabilityRules      rules.Rules
-}
 
 // Autoscaler is the main component of CA which scales up/down node groups according to its configuration
 // The configuration can be injected at the creation of an autoscaler
@@ -79,7 +51,7 @@ type Autoscaler interface {
 }
 
 // NewAutoscaler creates an autoscaler of an appropriate type according to the parameters
-func NewAutoscaler(opts AutoscalerOptions, informerFactory informers.SharedInformerFactory) (Autoscaler, errors.AutoscalerError) {
+func NewAutoscaler(opts coreoptions.AutoscalerOptions, informerFactory informers.SharedInformerFactory) (Autoscaler, errors.AutoscalerError) {
 	err := initializeDefaultOptions(&opts, informerFactory)
 	if err != nil {
 		return nil, errors.ToAutoscalerError(errors.InternalError, err)
@@ -104,7 +76,7 @@ func NewAutoscaler(opts AutoscalerOptions, informerFactory informers.SharedInfor
 }
 
 // Initialize default options if not provided.
-func initializeDefaultOptions(opts *AutoscalerOptions, informerFactory informers.SharedInformerFactory) error {
+func initializeDefaultOptions(opts *coreoptions.AutoscalerOptions, informerFactory informers.SharedInformerFactory) error {
 	if opts.Processors == nil {
 		opts.Processors = ca_processors.DefaultProcessors(opts.AutoscalingOptions)
 	}
