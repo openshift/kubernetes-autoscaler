@@ -27,6 +27,8 @@ import (
 
 	"github.com/spf13/pflag"
 
+	capacityclient "k8s.io/autoscaler/cluster-autoscaler/capacitybuffer/client"
+	"k8s.io/autoscaler/cluster-autoscaler/capacitybuffer/common"
 	"k8s.io/autoscaler/cluster-autoscaler/config/flags"
 	"k8s.io/autoscaler/cluster-autoscaler/core/scaleup/orchestrator"
 	"k8s.io/autoscaler/cluster-autoscaler/debuggingsnapshot"
@@ -46,12 +48,14 @@ import (
 	"k8s.io/apiserver/pkg/server/mux"
 	"k8s.io/apiserver/pkg/server/routes"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
+	capacitybuffer "k8s.io/autoscaler/cluster-autoscaler/capacitybuffer/controller"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	"k8s.io/autoscaler/cluster-autoscaler/core"
 	"k8s.io/autoscaler/cluster-autoscaler/core/podlistprocessor"
 	"k8s.io/autoscaler/cluster-autoscaler/metrics"
 	"k8s.io/autoscaler/cluster-autoscaler/observers/loopstart"
 	ca_processors "k8s.io/autoscaler/cluster-autoscaler/processors"
+	cbprocessor "k8s.io/autoscaler/cluster-autoscaler/processors/capacitybuffer"
 	"k8s.io/autoscaler/cluster-autoscaler/processors/nodegroupset"
 	"k8s.io/autoscaler/cluster-autoscaler/processors/nodeinfosprovider"
 	"k8s.io/autoscaler/cluster-autoscaler/processors/podinjection"
@@ -169,6 +173,29 @@ func buildAutoscaler(context ctx.Context, debuggingSnapshotter debuggingsnapshot
 		podListProcessor.AddProcessor(provreqProcesor)
 
 		opts.Processors.ScaleUpEnforcer = provreq.NewProvisioningRequestScaleUpEnforcer()
+	}
+
+	var capacitybufferClient *capacityclient.CapacityBufferClient
+	var capacitybufferClientError error
+	if autoscalingOptions.CapacitybufferControllerEnabled {
+		restConfig := kube_util.GetKubeConfig(autoscalingOptions.KubeClientOpts)
+		capacitybufferClient, capacitybufferClientError = capacityclient.NewCapacityBufferClientFromConfig(restConfig)
+		if capacitybufferClientError == nil && capacitybufferClient != nil {
+			nodeBufferController := capacitybuffer.NewDefaultBufferController(capacitybufferClient)
+			go nodeBufferController.Run(make(chan struct{}))
+		}
+	}
+
+	if autoscalingOptions.CapacitybufferPodInjectionEnabled {
+		if capacitybufferClient == nil {
+			restConfig := kube_util.GetKubeConfig(autoscalingOptions.KubeClientOpts)
+			capacitybufferClient, capacitybufferClientError = capacityclient.NewCapacityBufferClientFromConfig(restConfig)
+		}
+		if capacitybufferClientError == nil && capacitybufferClient != nil {
+			bufferPodInjector := cbprocessor.NewCapacityBufferPodListProcessor(capacitybufferClient, []string{common.ActiveProvisioningStrategy})
+			podListProcessor = pods.NewCombinedPodListProcessor([]pods.PodListProcessor{bufferPodInjector, podListProcessor})
+			opts.Processors.ScaleUpStatusProcessor = status.NewCombinedScaleUpStatusProcessor([]status.ScaleUpStatusProcessor{cbprocessor.NewFakePodsScaleUpStatusProcessor(), opts.Processors.ScaleUpStatusProcessor})
+		}
 	}
 
 	if autoscalingOptions.ProactiveScaleupEnabled {
@@ -322,12 +349,13 @@ func main() {
 
 	autoscalingOpts := flags.AutoscalingOptions()
 
-	// If the DRA flag is passed, we need to set the DRA feature gate as well. The selection of scheduler plugins for the default
-	// scheduling profile depends on feature gates, and the DRA plugin is only included if the DRA feature gate is enabled. The DRA
-	// plugin itself also checks the DRA feature gate and doesn't do anything if it's not enabled.
-	if autoscalingOpts.DynamicResourceAllocationEnabled && !featureGate.Enabled(features.DynamicResourceAllocation) {
-		if err := featureGate.SetFromMap(map[string]bool{string(features.DynamicResourceAllocation): true}); err != nil {
-			klog.Fatalf("couldn't enable the DRA feature gate: %v", err)
+	// The DRA feature controls whether the DRA scheduler plugin is selected in scheduler framework. The local DRA flag controls whether
+	// DRA logic is enabled in Cluster Autoscaler. The 2 values should be in sync - enabling DRA logic in CA without selecting the DRA scheduler
+	// plugin doesn't actually do anything, and selecting the DRA scheduler plugin without enabling DRA logic in CA means the plugin is not set up
+	// correctly and can panic.
+	if autoscalingOpts.DynamicResourceAllocationEnabled != featureGate.Enabled(features.DynamicResourceAllocation) {
+		if err := featureGate.SetFromMap(map[string]bool{string(features.DynamicResourceAllocation): autoscalingOpts.DynamicResourceAllocationEnabled}); err != nil {
+			klog.Fatalf("couldn't set the DRA feature gate to %v: %v", autoscalingOpts.DynamicResourceAllocationEnabled, err)
 		}
 	}
 
