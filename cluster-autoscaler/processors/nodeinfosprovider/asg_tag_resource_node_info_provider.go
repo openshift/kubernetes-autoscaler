@@ -24,7 +24,7 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/context"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/errors"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/taints"
-	schedulerframework "k8s.io/kubernetes/pkg/scheduler/framework"
+	"k8s.io/kubernetes/pkg/scheduler/framework"
 )
 
 // AsgTagResourceNodeInfoProvider is a wrapper for MixedTemplateNodeInfoProvider.
@@ -40,8 +40,8 @@ func NewAsgTagResourceNodeInfoProvider(t *time.Duration, forceDaemonSets bool) *
 }
 
 // Process returns the nodeInfos set for this cluster.
-func (p *AsgTagResourceNodeInfoProvider) Process(ctx *context.AutoscalingContext, nodes []*apiv1.Node, daemonsets []*appsv1.DaemonSet, taintConfig taints.TaintConfig, currentTime time.Time) (map[string]*schedulerframework.NodeInfo, errors.AutoscalerError) {
-	nodeInfos, err := p.mixedTemplateNodeInfoProvider.Process(ctx, nodes, daemonsets, taintConfig, currentTime)
+func (p *AsgTagResourceNodeInfoProvider) Process(ctx *context.AutoscalingContext, readyNodes []*apiv1.Node, allNodes []*apiv1.Node, daemonsets []*appsv1.DaemonSet, taintConfig taints.TaintConfig, currentTime time.Time) (map[string]*framework.NodeInfo, errors.AutoscalerError) {
+	nodeInfos, err := p.mixedTemplateNodeInfoProvider.Process(ctx, readyNodes, allNodes, daemonsets, taintConfig, currentTime)
 	if err != nil {
 		return nil, err
 	}

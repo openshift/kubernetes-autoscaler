@@ -29,6 +29,7 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/utils/errors"
 	kube_util "k8s.io/autoscaler/cluster-autoscaler/utils/kubernetes"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/taints"
+	"k8s.io/kubernetes/pkg/scheduler/framework"
 	schedulerframework "k8s.io/kubernetes/pkg/scheduler/framework"
 
 	klog "k8s.io/klog/v2"
@@ -72,7 +73,7 @@ func (p *MixedTemplateNodeInfoProvider) CleanUp() {
 }
 
 // Process returns the nodeInfos set for this cluster
-func (p *MixedTemplateNodeInfoProvider) Process(ctx *context.AutoscalingContext, nodes []*apiv1.Node, daemonsets []*appsv1.DaemonSet, taintConfig taints.TaintConfig, now time.Time) (map[string]*schedulerframework.NodeInfo, errors.AutoscalerError) {
+func (p *MixedTemplateNodeInfoProvider) Process(ctx *context.AutoscalingContext, readyNodes []*apiv1.Node, allNodes []*apiv1.Node, daemonsets []*appsv1.DaemonSet, taintConfig taints.TaintConfig, now time.Time) (map[string]*framework.NodeInfo, errors.AutoscalerError) {
 	// TODO(mwielgus): This returns map keyed by url, while most code (including scheduler) uses node.Name for a key.
 	// TODO(mwielgus): Review error policy - sometimes we may continue with partial errors.
 	result := make(map[string]*schedulerframework.NodeInfo)
@@ -117,7 +118,7 @@ func (p *MixedTemplateNodeInfoProvider) Process(ctx *context.AutoscalingContext,
 		return false, "", nil
 	}
 
-	for _, node := range nodes {
+	for _, node := range readyNodes {
 		// Broken nodes might have some stuff missing. Skipping.
 		if !isNodeGoodTemplateCandidate(node, now) {
 			continue
@@ -172,7 +173,10 @@ func (p *MixedTemplateNodeInfoProvider) Process(ctx *context.AutoscalingContext,
 	}
 
 	// Last resort - unready/unschedulable nodes.
-	for _, node := range nodes {
+	// we want to check not only the ready nodes, but also ready unschedulable nodes.
+	// this needs to combine readyNodes and allNodes due to filtering that occurs at
+	// a higher level.
+	for _, node := range append(readyNodes, allNodes...) {
 		// Allowing broken nodes
 		if isNodeGoodTemplateCandidate(node, now) {
 			continue
