@@ -18,35 +18,18 @@ package clusterapi
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"math/rand"
 	"path"
 	"reflect"
 	"sort"
 	"testing"
-	"time"
 
-	autoscalingv1 "k8s.io/api/autoscaling/v1"
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
-	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/wait"
 	fakediscovery "k8s.io/client-go/discovery/fake"
-	"k8s.io/client-go/dynamic"
-	fakedynamic "k8s.io/client-go/dynamic/fake"
-	"k8s.io/client-go/informers"
-	fakekube "k8s.io/client-go/kubernetes/fake"
-	fakescale "k8s.io/client-go/scale/fake"
 	clientgotesting "k8s.io/client-go/testing"
-	klog "k8s.io/klog/v2"
-
-	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 )
 
 type testControllerShutdownFunc func()
@@ -688,9 +671,10 @@ func TestControllerFindMachine(t *testing.T) {
 		useAnnotation:  true,
 	}}
 
-	test := func(t *testing.T, tc testCase, testConfig *testConfig) {
-		controller, stop := mustCreateTestController(t, testConfig)
-		defer stop()
+	test := func(t *testing.T, tc testCase, testConfig *TestConfig) {
+		controller := NewTestMachineController(t)
+		defer controller.Stop()
+		controller.AddTestConfigs(testConfig)
 
 		machine, err := controller.findMachine(path.Join(tc.namespace, tc.name))
 		if err != nil {
@@ -713,10 +697,14 @@ func TestControllerFindMachine(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.description, func(t *testing.T) {
-			testConfig := createMachineSetTestConfig(RandomString(6), RandomString(6), RandomString(6), 1, map[string]string{
-				nodeGroupMinSizeAnnotationKey: "1",
-				nodeGroupMaxSizeAnnotationKey: "10",
-			}, nil)
+			testConfig := NewTestConfigBuilder().
+				ForMachineSet().
+				WithNodeCount(1).
+				WithAnnotations(map[string]string{
+					nodeGroupMinSizeAnnotationKey: "1",
+					nodeGroupMaxSizeAnnotationKey: "10",
+				}).
+				Build()
 			if tc.name == "" {
 				tc.name = testConfig.machines[0].GetName()
 			}
@@ -741,13 +729,18 @@ func TestControllerFindMachine(t *testing.T) {
 }
 
 func TestControllerFindMachineOwner(t *testing.T) {
-	testConfig := createMachineSetTestConfig(RandomString(6), RandomString(6), RandomString(6), 1, map[string]string{
-		nodeGroupMinSizeAnnotationKey: "1",
-		nodeGroupMaxSizeAnnotationKey: "10",
-	}, nil)
+	testConfig := NewTestConfigBuilder().
+		ForMachineSet().
+		WithNodeCount(1).
+		WithAnnotations(map[string]string{
+			nodeGroupMinSizeAnnotationKey: "1",
+			nodeGroupMaxSizeAnnotationKey: "10",
+		}).
+		Build()
 
-	controller, stop := mustCreateTestController(t, testConfig)
-	defer stop()
+	controller := NewTestMachineController(t)
+	defer controller.Stop()
+	controller.AddTestConfigs(testConfig)
 
 	// Test #1: Lookup succeeds
 	testResult1, err := controller.findMachineOwner(testConfig.machines[0].DeepCopy())
@@ -777,7 +770,7 @@ func TestControllerFindMachineOwner(t *testing.T) {
 	}
 
 	// Test #3: Delete the MachineSet and lookup should fail
-	if err := deleteResource(controller.managementClient, controller.machineSetInformer, controller.machineSetResource, testConfig.machineSet); err != nil {
+	if err := controller.DeleteResource(controller.machineSetInformer, controller.machineSetResource, testConfig.machineSet); err != nil {
 		t.Fatalf("unexpected error, got %v", err)
 	}
 	testResult3, err := controller.findMachineOwner(testConfig.machines[0].DeepCopy())
@@ -790,13 +783,18 @@ func TestControllerFindMachineOwner(t *testing.T) {
 }
 
 func TestControllerFindMachineByProviderID(t *testing.T) {
-	testConfig := createMachineSetTestConfig(RandomString(6), RandomString(6), RandomString(6), 1, map[string]string{
-		nodeGroupMinSizeAnnotationKey: "1",
-		nodeGroupMaxSizeAnnotationKey: "10",
-	}, nil)
+	testConfig := NewTestConfigBuilder().
+		ForMachineSet().
+		WithNodeCount(1).
+		WithAnnotations(map[string]string{
+			nodeGroupMinSizeAnnotationKey: "1",
+			nodeGroupMaxSizeAnnotationKey: "10",
+		}).
+		Build()
 
-	controller, stop := mustCreateTestController(t, testConfig)
-	defer stop()
+	controller := NewTestMachineController(t)
+	defer controller.Stop()
+	controller.AddTestConfigs(testConfig)
 
 	// Remove all the "machine" annotation values on all the
 	// nodes. We want to force findMachineByProviderID() to only
@@ -838,7 +836,7 @@ func TestControllerFindMachineByProviderID(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if err := updateResource(controller.managementClient, controller.machineInformer, controller.machineResource, machine); err != nil {
+	if err := controller.UpdateResource(controller.machineInformer, controller.machineResource, machine); err != nil {
 		t.Fatalf("unexpected error updating machine, got %v", err)
 	}
 
@@ -852,13 +850,18 @@ func TestControllerFindMachineByProviderID(t *testing.T) {
 }
 
 func TestControllerFindNodeByNodeName(t *testing.T) {
-	testConfig := createMachineSetTestConfig(RandomString(6), RandomString(6), RandomString(6), 1, map[string]string{
-		nodeGroupMinSizeAnnotationKey: "1",
-		nodeGroupMaxSizeAnnotationKey: "10",
-	}, nil)
+	testConfig := NewTestConfigBuilder().
+		ForMachineSet().
+		WithNodeCount(1).
+		WithAnnotations(map[string]string{
+			nodeGroupMinSizeAnnotationKey: "1",
+			nodeGroupMaxSizeAnnotationKey: "10",
+		}).
+		Build()
 
-	controller, stop := mustCreateTestController(t, testConfig)
-	defer stop()
+	controller := NewTestMachineController(t)
+	defer controller.Stop()
+	controller.AddTestConfigs(testConfig)
 
 	// Test #1: Verify known node can be found
 	node, err := controller.findNodeByNodeName(testConfig.nodes[0].Name)
@@ -880,11 +883,12 @@ func TestControllerFindNodeByNodeName(t *testing.T) {
 }
 
 func TestControllerListMachinesForScalableResource(t *testing.T) {
-	test := func(t *testing.T, testConfig1 *testConfig, testConfig2 *testConfig) {
-		controller, stop := mustCreateTestController(t, testConfig1)
-		defer stop()
+	test := func(t *testing.T, testConfig1 *TestConfig, testConfig2 *TestConfig) {
+		controller := NewTestMachineController(t)
+		defer controller.Stop()
+		controller.AddTestConfigs(testConfig1)
 
-		if err := addTestConfigs(t, controller, testConfig2); err != nil {
+		if err := controller.AddTestConfigs(testConfig2); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
@@ -952,19 +956,31 @@ func TestControllerListMachinesForScalableResource(t *testing.T) {
 	t.Run("MachineSet", func(t *testing.T) {
 		namespace := RandomString(6)
 		clusterName := RandomString(6)
-		testConfig1 := createMachineSetTestConfig(namespace, clusterName, RandomString(6), 5, map[string]string{
-			nodeGroupMinSizeAnnotationKey: "1",
-			nodeGroupMaxSizeAnnotationKey: "10",
-		}, nil)
+		testConfig1 := NewTestConfigBuilder().
+			ForMachineSet().
+			WithNamespace(namespace).
+			WithClusterName(clusterName).
+			WithNodeCount(5).
+			WithAnnotations(map[string]string{
+				nodeGroupMinSizeAnnotationKey: "1",
+				nodeGroupMaxSizeAnnotationKey: "10",
+			}).
+			Build()
 
 		// Construct a second set of objects and add the machines,
 		// nodes and the additional machineset to the existing set of
 		// test objects in the controller. This gives us two
 		// machinesets, each with their own machines and linked nodes.
-		testConfig2 := createMachineSetTestConfig(namespace, clusterName, RandomString(6), 5, map[string]string{
-			nodeGroupMinSizeAnnotationKey: "1",
-			nodeGroupMaxSizeAnnotationKey: "10",
-		}, nil)
+		testConfig2 := NewTestConfigBuilder().
+			ForMachineSet().
+			WithNamespace(namespace).
+			WithClusterName(clusterName).
+			WithNodeCount(5).
+			WithAnnotations(map[string]string{
+				nodeGroupMinSizeAnnotationKey: "1",
+				nodeGroupMaxSizeAnnotationKey: "10",
+			}).
+			Build()
 
 		test(t, testConfig1, testConfig2)
 	})
@@ -972,28 +988,41 @@ func TestControllerListMachinesForScalableResource(t *testing.T) {
 	t.Run("MachineDeployment", func(t *testing.T) {
 		namespace := RandomString(6)
 		clusterName := RandomString(6)
-		testConfig1 := createMachineDeploymentTestConfig(namespace, clusterName, RandomString(6), 5, map[string]string{
-			nodeGroupMinSizeAnnotationKey: "1",
-			nodeGroupMaxSizeAnnotationKey: "10",
-		}, nil)
+		testConfig1 := NewTestConfigBuilder().
+			ForMachineDeployment().
+			WithNamespace(namespace).
+			WithClusterName(clusterName).
+			WithNodeCount(5).
+			WithAnnotations(map[string]string{
+				nodeGroupMinSizeAnnotationKey: "1",
+				nodeGroupMaxSizeAnnotationKey: "10",
+			}).
+			Build()
 
 		// Construct a second set of objects and add the machines,
 		// nodes, machineset, and the additional machineset to the existing set of
 		// test objects in the controller. This gives us two
 		// machinedeployments, each with their own machineSet, machines and linked nodes.
-		testConfig2 := createMachineDeploymentTestConfig(namespace, clusterName, RandomString(6), 5, map[string]string{
-			nodeGroupMinSizeAnnotationKey: "1",
-			nodeGroupMaxSizeAnnotationKey: "10",
-		}, nil)
+		testConfig2 := NewTestConfigBuilder().
+			ForMachineDeployment().
+			WithNamespace(namespace).
+			WithClusterName(clusterName).
+			WithNodeCount(5).
+			WithAnnotations(map[string]string{
+				nodeGroupMinSizeAnnotationKey: "1",
+				nodeGroupMaxSizeAnnotationKey: "10",
+			}).
+			Build()
 
 		test(t, testConfig1, testConfig2)
 	})
 }
 
 func TestControllerLookupNodeGroupForNonExistentNode(t *testing.T) {
-	test := func(t *testing.T, testConfig *testConfig) {
-		controller, stop := mustCreateTestController(t, testConfig)
-		defer stop()
+	test := func(t *testing.T, testConfig *TestConfig) {
+		controller := NewTestMachineController(t)
+		defer controller.Stop()
+		controller.AddTestConfigs(testConfig)
 
 		node := testConfig.nodes[0].DeepCopy()
 		node.Spec.ProviderID = "does-not-exist"
@@ -1012,31 +1041,40 @@ func TestControllerLookupNodeGroupForNonExistentNode(t *testing.T) {
 	}
 
 	t.Run("MachineSet", func(t *testing.T) {
-		testConfig := createMachineSetTestConfig(RandomString(6), RandomString(6), RandomString(6), 1, map[string]string{
-			nodeGroupMinSizeAnnotationKey: "1",
-			nodeGroupMaxSizeAnnotationKey: "10",
-		}, nil)
+		testConfig := NewTestConfigBuilder().
+			ForMachineSet().
+			WithNodeCount(1).
+			WithAnnotations(map[string]string{
+				nodeGroupMinSizeAnnotationKey: "1",
+				nodeGroupMaxSizeAnnotationKey: "10",
+			}).
+			Build()
 		test(t, testConfig)
 	})
 
 	t.Run("MachineDeployment", func(t *testing.T) {
-		testConfig := createMachineDeploymentTestConfig(RandomString(6), RandomString(6), RandomString(6), 1, map[string]string{
-			nodeGroupMinSizeAnnotationKey: "1",
-			nodeGroupMaxSizeAnnotationKey: "10",
-		}, nil)
+		testConfig := NewTestConfigBuilder().
+			ForMachineDeployment().
+			WithNodeCount(1).
+			WithAnnotations(map[string]string{
+				nodeGroupMinSizeAnnotationKey: "1",
+				nodeGroupMaxSizeAnnotationKey: "10",
+			}).
+			Build()
 		test(t, testConfig)
 	})
 }
 
 func TestControllerNodeGroupForNodeWithMissingMachineOwner(t *testing.T) {
-	test := func(t *testing.T, testConfig *testConfig) {
-		controller, stop := mustCreateTestController(t, testConfig)
-		defer stop()
+	test := func(t *testing.T, testConfig *TestConfig) {
+		controller := NewTestMachineController(t)
+		defer controller.Stop()
+		controller.AddTestConfigs(testConfig)
 
 		machine := testConfig.machines[0].DeepCopy()
 		machine.SetOwnerReferences([]metav1.OwnerReference{})
 
-		if err := updateResource(controller.managementClient, controller.machineInformer, controller.machineResource, machine); err != nil {
+		if err := controller.UpdateResource(controller.machineInformer, controller.machineResource, machine); err != nil {
 			t.Fatalf("unexpected error updating machine, got %v", err)
 		}
 
@@ -1051,35 +1089,48 @@ func TestControllerNodeGroupForNodeWithMissingMachineOwner(t *testing.T) {
 	}
 
 	t.Run("MachineSet", func(t *testing.T) {
-		testConfig := createMachineSetTestConfig(RandomString(6), RandomString(6), RandomString(6), 1, map[string]string{
-			nodeGroupMinSizeAnnotationKey: "1",
-			nodeGroupMaxSizeAnnotationKey: "10",
-		}, nil)
+		testConfig := NewTestConfigBuilder().
+			ForMachineSet().
+			WithNodeCount(1).
+			WithAnnotations(map[string]string{
+				nodeGroupMinSizeAnnotationKey: "1",
+				nodeGroupMaxSizeAnnotationKey: "10",
+			}).
+			Build()
 		test(t, testConfig)
 	})
 
 	t.Run("MachineDeployment", func(t *testing.T) {
-		testConfig := createMachineDeploymentTestConfig(RandomString(6), RandomString(6), RandomString(6), 1, map[string]string{
-			nodeGroupMinSizeAnnotationKey: "1",
-			nodeGroupMaxSizeAnnotationKey: "10",
-		}, nil)
+		testConfig := NewTestConfigBuilder().
+			ForMachineDeployment().
+			WithNodeCount(1).
+			WithAnnotations(map[string]string{
+				nodeGroupMinSizeAnnotationKey: "1",
+				nodeGroupMaxSizeAnnotationKey: "10",
+			}).
+			Build()
 		test(t, testConfig)
 	})
 }
 
 func TestControllerNodeGroupForNodeWithMissingSetMachineOwner(t *testing.T) {
-	testConfig := createMachineDeploymentTestConfig(RandomString(6), RandomString(6), RandomString(6), 1, map[string]string{
-		nodeGroupMinSizeAnnotationKey: "1",
-		nodeGroupMaxSizeAnnotationKey: "10",
-	}, nil)
+	testConfig := NewTestConfigBuilder().
+		ForMachineDeployment().
+		WithNodeCount(1).
+		WithAnnotations(map[string]string{
+			nodeGroupMinSizeAnnotationKey: "1",
+			nodeGroupMaxSizeAnnotationKey: "10",
+		}).
+		Build()
 
-	controller, stop := mustCreateTestController(t, testConfig)
-	defer stop()
+	controller := NewTestMachineController(t)
+	defer controller.Stop()
+	controller.AddTestConfigs(testConfig)
 
 	machineSet := testConfig.machineSet.DeepCopy()
 	machineSet.SetOwnerReferences([]metav1.OwnerReference{})
 
-	if err := updateResource(controller.managementClient, controller.machineSetInformer, controller.machineSetResource, machineSet); err != nil {
+	if err := controller.UpdateResource(controller.machineSetInformer, controller.machineSetResource, machineSet); err != nil {
 		t.Fatalf("unexpected error updating machine, got %v", err)
 	}
 
@@ -1094,9 +1145,10 @@ func TestControllerNodeGroupForNodeWithMissingSetMachineOwner(t *testing.T) {
 }
 
 func TestControllerNodeGroupForNodeWithPositiveScalingBounds(t *testing.T) {
-	test := func(t *testing.T, testConfig *testConfig) {
-		controller, stop := mustCreateTestController(t, testConfig)
-		defer stop()
+	test := func(t *testing.T, testConfig *TestConfig) {
+		controller := NewTestMachineController(t)
+		defer controller.Stop()
+		controller.AddTestConfigs(testConfig)
 
 		ng, err := controller.nodeGroupForNode(testConfig.nodes[0])
 		if err != nil {
@@ -1109,24 +1161,32 @@ func TestControllerNodeGroupForNodeWithPositiveScalingBounds(t *testing.T) {
 	}
 
 	t.Run("MachineSet", func(t *testing.T) {
-		testConfig := createMachineSetTestConfig(RandomString(6), RandomString(6), RandomString(6), 1, map[string]string{
-			nodeGroupMinSizeAnnotationKey: "1",
-			nodeGroupMaxSizeAnnotationKey: "1",
-		}, nil)
+		testConfig := NewTestConfigBuilder().
+			ForMachineSet().
+			WithNodeCount(1).
+			WithAnnotations(map[string]string{
+				nodeGroupMinSizeAnnotationKey: "1",
+				nodeGroupMaxSizeAnnotationKey: "1",
+			}).
+			Build()
 		test(t, testConfig)
 	})
 
 	t.Run("MachineDeployment", func(t *testing.T) {
-		testConfig := createMachineDeploymentTestConfig(RandomString(6), RandomString(6), RandomString(6), 1, map[string]string{
-			nodeGroupMinSizeAnnotationKey: "1",
-			nodeGroupMaxSizeAnnotationKey: "1",
-		}, nil)
+		testConfig := NewTestConfigBuilder().
+			ForMachineDeployment().
+			WithNodeCount(1).
+			WithAnnotations(map[string]string{
+				nodeGroupMinSizeAnnotationKey: "1",
+				nodeGroupMaxSizeAnnotationKey: "1",
+			}).
+			Build()
 		test(t, testConfig)
 	})
 }
 
 func TestControllerNodeGroups(t *testing.T) {
-	assertNodegroupLen := func(t *testing.T, controller *machineController, expected int) {
+	assertNodegroupLen := func(t *testing.T, controller *testMachineController, expected int) {
 		t.Helper()
 		nodegroups, err := controller.nodeGroups()
 		if err != nil {
@@ -1142,8 +1202,8 @@ func TestControllerNodeGroups(t *testing.T) {
 		nodeGroupMaxSizeAnnotationKey: "2",
 	}
 
-	controller, stop := mustCreateTestController(t)
-	defer stop()
+	controller := NewTestMachineController(t)
+	defer controller.Stop()
 
 	namespace := RandomString(6)
 	clusterName := RandomString(6)
@@ -1152,27 +1212,39 @@ func TestControllerNodeGroups(t *testing.T) {
 	assertNodegroupLen(t, controller, 0)
 
 	// Test #2: add 5 machineset-based nodegroups
-	machineSetConfigs := createMachineSetTestConfigs(namespace, clusterName, RandomString(6), 5, 1, annotations, nil)
-	if err := addTestConfigs(t, controller, machineSetConfigs...); err != nil {
+	machineSetConfigs := NewTestConfigBuilder().
+		ForMachineSet().
+		WithNamespace(namespace).
+		WithClusterName(clusterName).
+		WithNodeCount(1).
+		WithAnnotations(annotations).
+		BuildMultiple(5)
+	if err := controller.AddTestConfigs(machineSetConfigs...); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	assertNodegroupLen(t, controller, 5)
 
 	// Test #2: add 2 machinedeployment-based nodegroups
-	machineDeploymentConfigs := createMachineDeploymentTestConfigs(namespace, clusterName, RandomString(6), 2, 1, annotations, nil)
-	if err := addTestConfigs(t, controller, machineDeploymentConfigs...); err != nil {
+	machineDeploymentConfigs := NewTestConfigBuilder().
+		ForMachineDeployment().
+		WithNamespace(namespace).
+		WithClusterName(clusterName).
+		WithNodeCount(1).
+		WithAnnotations(annotations).
+		BuildMultiple(2)
+	if err := controller.AddTestConfigs(machineDeploymentConfigs...); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	assertNodegroupLen(t, controller, 7)
 
 	// Test #3: delete 5 machineset-backed objects
-	if err := deleteTestConfigs(t, controller, machineSetConfigs...); err != nil {
+	if err := controller.DeleteTestConfigs(machineSetConfigs...); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	assertNodegroupLen(t, controller, 2)
 
 	// Test #4: delete 2 machinedeployment-backed objects
-	if err := deleteTestConfigs(t, controller, machineDeploymentConfigs...); err != nil {
+	if err := controller.DeleteTestConfigs(machineDeploymentConfigs...); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	assertNodegroupLen(t, controller, 0)
@@ -1183,15 +1255,27 @@ func TestControllerNodeGroups(t *testing.T) {
 	}
 
 	// Test #5: 5 machineset with minSize=maxSize results in a five nodegroup
-	machineSetConfigs = createMachineSetTestConfigs(namespace, clusterName, RandomString(6), 5, 1, annotations, nil)
-	if err := addTestConfigs(t, controller, machineSetConfigs...); err != nil {
+	machineSetConfigs = NewTestConfigBuilder().
+		ForMachineSet().
+		WithNamespace(namespace).
+		WithClusterName(clusterName).
+		WithNodeCount(1).
+		WithAnnotations(annotations).
+		BuildMultiple(5)
+	if err := controller.AddTestConfigs(machineSetConfigs...); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	assertNodegroupLen(t, controller, 5)
 
 	// Test #6: add 2 machinedeployment with minSize=maxSize
-	machineDeploymentConfigs = createMachineDeploymentTestConfigs(namespace, clusterName, RandomString(6), 2, 1, annotations, nil)
-	if err := addTestConfigs(t, controller, machineDeploymentConfigs...); err != nil {
+	machineDeploymentConfigs = NewTestConfigBuilder().
+		ForMachineDeployment().
+		WithNamespace(namespace).
+		WithClusterName(clusterName).
+		WithNodeCount(1).
+		WithAnnotations(annotations).
+		BuildMultiple(2)
+	if err := controller.AddTestConfigs(machineDeploymentConfigs...); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	assertNodegroupLen(t, controller, 7)
@@ -1202,8 +1286,14 @@ func TestControllerNodeGroups(t *testing.T) {
 	}
 
 	// Test #7: machineset with bad scaling bounds results in an error and no nodegroups
-	machineSetConfigs = createMachineSetTestConfigs(namespace, clusterName, RandomString(6), 5, 1, annotations, nil)
-	if err := addTestConfigs(t, controller, machineSetConfigs...); err != nil {
+	machineSetConfigs = NewTestConfigBuilder().
+		ForMachineSet().
+		WithNamespace(namespace).
+		WithClusterName(clusterName).
+		WithNodeCount(5).
+		WithAnnotations(annotations).
+		BuildMultiple(1)
+	if err := controller.AddTestConfigs(machineSetConfigs...); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if _, err := controller.nodeGroups(); err == nil {
@@ -1211,8 +1301,14 @@ func TestControllerNodeGroups(t *testing.T) {
 	}
 
 	// Test #8: machinedeployment with bad scaling bounds results in an error and no nodegroups
-	machineDeploymentConfigs = createMachineDeploymentTestConfigs(namespace, clusterName, RandomString(6), 2, 1, annotations, nil)
-	if err := addTestConfigs(t, controller, machineDeploymentConfigs...); err != nil {
+	machineDeploymentConfigs = NewTestConfigBuilder().
+		ForMachineDeployment().
+		WithNamespace(namespace).
+		WithClusterName(clusterName).
+		WithNodeCount(2).
+		WithAnnotations(annotations).
+		BuildMultiple(1)
+	if err := controller.AddTestConfigs(machineDeploymentConfigs...); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if _, err := controller.nodeGroups(); err == nil {
@@ -1245,9 +1341,10 @@ func TestControllerNodeGroupsNodeCount(t *testing.T) {
 		expectedNodesPerGroup: 10,
 	}}
 
-	test := func(t *testing.T, tc testCase, testConfigs []*testConfig) {
-		controller, stop := mustCreateTestController(t, testConfigs...)
-		defer stop()
+	test := func(t *testing.T, tc testCase, testConfigs []*TestConfig) {
+		controller := NewTestMachineController(t)
+		defer controller.Stop()
+		controller.AddTestConfigs(testConfigs...)
 
 		nodegroups, err := controller.nodeGroups()
 		if err != nil {
@@ -1275,25 +1372,40 @@ func TestControllerNodeGroupsNodeCount(t *testing.T) {
 
 	t.Run("MachineSet", func(t *testing.T) {
 		for _, tc := range testCases {
-			test(t, tc, createMachineSetTestConfigs(RandomString(6), RandomString(6), RandomString(6), tc.nodeGroups, tc.nodesPerGroup, annotations, nil))
+			testConfigs := NewTestConfigBuilder().
+				ForMachineSet().
+				WithNodeCount(tc.nodesPerGroup).
+				WithAnnotations(annotations).
+				BuildMultiple(tc.nodeGroups)
+			test(t, tc, testConfigs)
 		}
 	})
 
 	t.Run("MachineDeployment", func(t *testing.T) {
 		for _, tc := range testCases {
-			test(t, tc, createMachineDeploymentTestConfigs(RandomString(6), RandomString(6), RandomString(6), tc.nodeGroups, tc.nodesPerGroup, annotations, nil))
+			testConfigs := NewTestConfigBuilder().
+				ForMachineDeployment().
+				WithNodeCount(tc.nodesPerGroup).
+				WithAnnotations(annotations).
+				BuildMultiple(tc.nodeGroups)
+			test(t, tc, testConfigs)
 		}
 	})
 }
 
 func TestControllerFindMachineFromNodeAnnotation(t *testing.T) {
-	testConfig := createMachineSetTestConfig(RandomString(6), RandomString(6), RandomString(6), 1, map[string]string{
-		nodeGroupMinSizeAnnotationKey: "1",
-		nodeGroupMaxSizeAnnotationKey: "10",
-	}, nil)
+	testConfig := NewTestConfigBuilder().
+		ForMachineSet().
+		WithNodeCount(1).
+		WithAnnotations(map[string]string{
+			nodeGroupMinSizeAnnotationKey: "1",
+			nodeGroupMaxSizeAnnotationKey: "10",
+		}).
+		Build()
 
-	controller, stop := mustCreateTestController(t, testConfig)
-	defer stop()
+	controller := NewTestMachineController(t)
+	defer controller.Stop()
+	controller.AddTestConfigs(testConfig)
 
 	// Remove all the provider ID values on all the machines. We
 	// want to force findMachineByProviderID() to fallback to
@@ -1301,7 +1413,7 @@ func TestControllerFindMachineFromNodeAnnotation(t *testing.T) {
 	for _, machine := range testConfig.machines {
 		unstructured.RemoveNestedField(machine.Object, "spec", "providerID")
 
-		if err := updateResource(controller.managementClient, controller.machineInformer, controller.machineResource, machine); err != nil {
+		if err := controller.UpdateResource(controller.machineInformer, controller.machineResource, machine); err != nil {
 			t.Fatalf("unexpected error updating machine, got %v", err)
 		}
 	}
@@ -1335,13 +1447,18 @@ func TestControllerFindMachineFromNodeAnnotation(t *testing.T) {
 }
 
 func TestControllerMachineSetNodeNamesWithoutLinkage(t *testing.T) {
-	testConfig := createMachineSetTestConfig(RandomString(6), RandomString(6), RandomString(6), 3, map[string]string{
-		nodeGroupMinSizeAnnotationKey: "1",
-		nodeGroupMaxSizeAnnotationKey: "10",
-	}, nil)
+	testConfig := NewTestConfigBuilder().
+		ForMachineSet().
+		WithNodeCount(3).
+		WithAnnotations(map[string]string{
+			nodeGroupMinSizeAnnotationKey: "1",
+			nodeGroupMaxSizeAnnotationKey: "10",
+		}).
+		Build()
 
-	controller, stop := mustCreateTestController(t, testConfig)
-	defer stop()
+	controller := NewTestMachineController(t)
+	defer controller.Stop()
+	controller.AddTestConfigs(testConfig)
 
 	// Remove all linkage between node and machine.
 	for i := range testConfig.machines {
@@ -1350,7 +1467,7 @@ func TestControllerMachineSetNodeNamesWithoutLinkage(t *testing.T) {
 		unstructured.RemoveNestedField(machine.Object, "spec", "providerID")
 		unstructured.RemoveNestedField(machine.Object, "status", "nodeRef")
 
-		if err := updateResource(controller.managementClient, controller.machineInformer, controller.machineResource, machine); err != nil {
+		if err := controller.UpdateResource(controller.machineInformer, controller.machineResource, machine); err != nil {
 			t.Fatalf("unexpected error updating machine, got %v", err)
 		}
 	}
@@ -1384,13 +1501,18 @@ func TestControllerMachineSetNodeNamesWithoutLinkage(t *testing.T) {
 }
 
 func TestControllerMachineSetNodeNamesUsingProviderID(t *testing.T) {
-	testConfig := createMachineSetTestConfig(RandomString(6), RandomString(6), RandomString(6), 3, map[string]string{
-		nodeGroupMinSizeAnnotationKey: "1",
-		nodeGroupMaxSizeAnnotationKey: "10",
-	}, nil)
+	testConfig := NewTestConfigBuilder().
+		ForMachineSet().
+		WithNodeCount(3).
+		WithAnnotations(map[string]string{
+			nodeGroupMinSizeAnnotationKey: "1",
+			nodeGroupMaxSizeAnnotationKey: "10",
+		}).
+		Build()
 
-	controller, stop := mustCreateTestController(t, testConfig)
-	defer stop()
+	controller := NewTestMachineController(t)
+	defer controller.Stop()
+	controller.AddTestConfigs(testConfig)
 
 	nodegroups, err := controller.nodeGroups()
 	if err != nil {
@@ -1423,13 +1545,18 @@ func TestControllerMachineSetNodeNamesUsingProviderID(t *testing.T) {
 }
 
 func TestControllerMachineSetNodeNamesUsingStatusNodeRefName(t *testing.T) {
-	testConfig := createMachineSetTestConfig(RandomString(6), RandomString(6), RandomString(6), 3, map[string]string{
-		nodeGroupMinSizeAnnotationKey: "1",
-		nodeGroupMaxSizeAnnotationKey: "10",
-	}, nil)
+	testConfig := NewTestConfigBuilder().
+		ForMachineSet().
+		WithNodeCount(3).
+		WithAnnotations(map[string]string{
+			nodeGroupMinSizeAnnotationKey: "1",
+			nodeGroupMaxSizeAnnotationKey: "10",
+		}).
+		Build()
 
-	controller, stop := mustCreateTestController(t, testConfig)
-	defer stop()
+	controller := NewTestMachineController(t)
+	defer controller.Stop()
+	controller.AddTestConfigs(testConfig)
 
 	// Remove all the provider ID values on all the machines. We
 	// want to force machineSetNodeNames() to fallback to
@@ -1439,7 +1566,7 @@ func TestControllerMachineSetNodeNamesUsingStatusNodeRefName(t *testing.T) {
 
 		unstructured.RemoveNestedField(machine.Object, "spec", "providerID")
 
-		if err := updateResource(controller.managementClient, controller.machineInformer, controller.machineResource, machine); err != nil {
+		if err := controller.UpdateResource(controller.machineInformer, controller.machineResource, machine); err != nil {
 			t.Fatalf("unexpected error updating machine, got %v", err)
 		}
 	}
@@ -1513,10 +1640,14 @@ func TestControllerGetAPIVersion(t *testing.T) {
 }
 
 func TestControllerGetAPIVersionGroupWithMachineDeployments(t *testing.T) {
-	testConfig := createMachineDeploymentTestConfig(RandomString(6), RandomString(6), RandomString(6), 1, map[string]string{
-		nodeGroupMinSizeAnnotationKey: "1",
-		nodeGroupMaxSizeAnnotationKey: "1",
-	}, nil)
+	testConfig := NewTestConfigBuilder().
+		ForMachineDeployment().
+		WithNodeCount(1).
+		WithAnnotations(map[string]string{
+			nodeGroupMinSizeAnnotationKey: "1",
+			nodeGroupMaxSizeAnnotationKey: "1",
+		}).
+		Build()
 	t.Setenv(CAPIGroupEnvVar, customCAPIGroup)
 
 	testConfig.machineDeployment.SetAPIVersion(fmt.Sprintf("%s/v1beta1", customCAPIGroup))
@@ -1526,8 +1657,9 @@ func TestControllerGetAPIVersionGroupWithMachineDeployments(t *testing.T) {
 		machine.SetAPIVersion(fmt.Sprintf("%s/v1beta1", customCAPIGroup))
 	}
 
-	controller, stop := mustCreateTestController(t, testConfig)
-	defer stop()
+	controller := NewTestMachineController(t)
+	defer controller.Stop()
+	controller.AddTestConfigs(testConfig)
 
 	machineDeployments, err := controller.managementClient.Resource(controller.machineDeploymentResource).Namespace(testConfig.spec.namespace).
 		List(context.TODO(), metav1.ListOptions{})
@@ -1756,23 +1888,10 @@ func TestMachineKeyFromFailedProviderID(t *testing.T) {
 	}
 }
 
-const CharSet = "0123456789abcdefghijklmnopqrstuvwxyz"
-
-var rnd = rand.New(rand.NewSource(time.Now().UnixNano()))
-
-// RandomString returns a random alphanumeric string.
-func RandomString(n int) string {
-	result := make([]byte, n)
-	for i := range result {
-		result[i] = CharSet[rnd.Intn(len(CharSet))]
-	}
-	return string(result)
-}
-
 func Test_machineController_allowedByAutoDiscoverySpecs(t *testing.T) {
 	for _, tc := range []struct {
 		name               string
-		testSpec           testSpec
+		testSpec           TestSpec
 		autoDiscoverySpecs []*clusterAPIAutoDiscoveryConfig
 		additionalLabels   map[string]string
 		shouldMatch        bool
@@ -1851,9 +1970,15 @@ func Test_machineController_allowedByAutoDiscoverySpecs(t *testing.T) {
 }
 
 func Test_machineController_listScalableResources(t *testing.T) {
-	uniqueMDConfig := createMachineDeploymentTestConfig(RandomString(6), RandomString(6), RandomString(6), 1, nil, nil)
+	uniqueMDConfig := NewTestConfigBuilder().
+		ForMachineDeployment().
+		WithNodeCount(1).
+		Build()
 
-	mdTestConfigs := createMachineDeploymentTestConfigs(RandomString(6), RandomString(6), RandomString(6), 5, 1, nil, nil)
+	mdTestConfigs := NewTestConfigBuilder().
+		ForMachineDeployment().
+		WithNodeCount(1).
+		BuildMultiple(5)
 	mdTestConfigs = append(mdTestConfigs, uniqueMDConfig)
 
 	allMachineDeployments := make([]*unstructured.Unstructured, 0, len(mdTestConfigs))
@@ -1861,9 +1986,15 @@ func Test_machineController_listScalableResources(t *testing.T) {
 		allMachineDeployments = append(allMachineDeployments, mdTestConfigs[i].machineDeployment)
 	}
 
-	uniqueMSConfig := createMachineSetTestConfig(RandomString(6), RandomString(6), RandomString(6), 1, nil, nil)
+	uniqueMSConfig := NewTestConfigBuilder().
+		ForMachineSet().
+		WithNodeCount(1).
+		Build()
 
-	msTestConfigs := createMachineSetTestConfigs(RandomString(6), RandomString(6), RandomString(6), 5, 1, nil, nil)
+	msTestConfigs := NewTestConfigBuilder().
+		ForMachineSet().
+		WithNodeCount(1).
+		BuildMultiple(5)
 	msTestConfigs = append(msTestConfigs, uniqueMSConfig)
 
 	allMachineSets := make([]*unstructured.Unstructured, 0, len(msTestConfigs))
@@ -1933,8 +2064,9 @@ func Test_machineController_listScalableResources(t *testing.T) {
 		wantErr: false,
 	}} {
 		t.Run(tc.name, func(t *testing.T) {
-			c, stop := mustCreateTestController(t, allTestConfigs...)
-			defer stop()
+			c := NewTestMachineController(t)
+			defer c.Stop()
+			c.AddTestConfigs(allTestConfigs...)
 			c.autoDiscoverySpecs = tc.autoDiscoverySpecs
 
 			got, err := c.listScalableResources()
@@ -1963,26 +2095,42 @@ func Test_machineController_listScalableResources(t *testing.T) {
 }
 
 func Test_machineController_nodeGroupForNode(t *testing.T) {
-	uniqueMDConfig := createMachineDeploymentTestConfig(RandomString(6), RandomString(6), RandomString(6), 1, map[string]string{
-		nodeGroupMinSizeAnnotationKey: "1",
-		nodeGroupMaxSizeAnnotationKey: "10",
-	}, nil)
+	uniqueMDConfig := NewTestConfigBuilder().
+		ForMachineDeployment().
+		WithNodeCount(1).
+		WithAnnotations(map[string]string{
+			nodeGroupMinSizeAnnotationKey: "1",
+			nodeGroupMaxSizeAnnotationKey: "10",
+		}).
+		Build()
 
-	mdTestConfigs := createMachineDeploymentTestConfigs(RandomString(6), RandomString(6), RandomString(6), 5, 1, map[string]string{
-		nodeGroupMinSizeAnnotationKey: "1",
-		nodeGroupMaxSizeAnnotationKey: "10",
-	}, nil)
+	mdTestConfigs := NewTestConfigBuilder().
+		ForMachineDeployment().
+		WithNodeCount(1).
+		WithAnnotations(map[string]string{
+			nodeGroupMinSizeAnnotationKey: "1",
+			nodeGroupMaxSizeAnnotationKey: "10",
+		}).
+		BuildMultiple(5)
 	mdTestConfigs = append(mdTestConfigs, uniqueMDConfig)
 
-	uniqueMSConfig := createMachineSetTestConfig(RandomString(6), RandomString(6), RandomString(6), 1, map[string]string{
-		nodeGroupMinSizeAnnotationKey: "1",
-		nodeGroupMaxSizeAnnotationKey: "10",
-	}, nil)
+	uniqueMSConfig := NewTestConfigBuilder().
+		ForMachineSet().
+		WithNodeCount(1).
+		WithAnnotations(map[string]string{
+			nodeGroupMinSizeAnnotationKey: "1",
+			nodeGroupMaxSizeAnnotationKey: "10",
+		}).
+		Build()
 
-	msTestConfigs := createMachineSetTestConfigs(RandomString(6), RandomString(6), RandomString(6), 5, 1, map[string]string{
-		nodeGroupMinSizeAnnotationKey: "1",
-		nodeGroupMaxSizeAnnotationKey: "10",
-	}, nil)
+	msTestConfigs := NewTestConfigBuilder().
+		ForMachineSet().
+		WithNodeCount(1).
+		WithAnnotations(map[string]string{
+			nodeGroupMinSizeAnnotationKey: "1",
+			nodeGroupMaxSizeAnnotationKey: "10",
+		}).
+		BuildMultiple(5)
 	msTestConfigs = append(msTestConfigs, uniqueMSConfig)
 
 	allTestConfigs := append(mdTestConfigs, msTestConfigs...)
@@ -2031,8 +2179,9 @@ func Test_machineController_nodeGroupForNode(t *testing.T) {
 		wantErr:          false,
 	}} {
 		t.Run(tc.name, func(t *testing.T) {
-			c, stop := mustCreateTestController(t, allTestConfigs...)
-			defer stop()
+			c := NewTestMachineController(t)
+			defer c.Stop()
+			c.AddTestConfigs(allTestConfigs...)
 			c.autoDiscoverySpecs = tc.autoDiscoverySpecs
 
 			got, err := c.nodeGroupForNode(tc.node)
@@ -2059,15 +2208,23 @@ func Test_machineController_nodeGroupForNode(t *testing.T) {
 }
 
 func Test_machineController_nodeGroups(t *testing.T) {
-	uniqueMDConfig := createMachineDeploymentTestConfig(RandomString(6), RandomString(6), RandomString(6), 1, map[string]string{
-		nodeGroupMinSizeAnnotationKey: "1",
-		nodeGroupMaxSizeAnnotationKey: "10",
-	}, nil)
+	uniqueMDConfig := NewTestConfigBuilder().
+		ForMachineDeployment().
+		WithNodeCount(1).
+		WithAnnotations(map[string]string{
+			nodeGroupMinSizeAnnotationKey: "1",
+			nodeGroupMaxSizeAnnotationKey: "10",
+		}).
+		Build()
 
-	mdTestConfigs := createMachineDeploymentTestConfigs(RandomString(6), RandomString(6), RandomString(6), 5, 1, map[string]string{
-		nodeGroupMinSizeAnnotationKey: "1",
-		nodeGroupMaxSizeAnnotationKey: "10",
-	}, nil)
+	mdTestConfigs := NewTestConfigBuilder().
+		ForMachineDeployment().
+		WithNodeCount(1).
+		WithAnnotations(map[string]string{
+			nodeGroupMinSizeAnnotationKey: "1",
+			nodeGroupMaxSizeAnnotationKey: "10",
+		}).
+		BuildMultiple(5)
 	mdTestConfigs = append(mdTestConfigs, uniqueMDConfig)
 
 	allMachineDeployments := make([]*unstructured.Unstructured, 0, len(mdTestConfigs))
@@ -2075,15 +2232,23 @@ func Test_machineController_nodeGroups(t *testing.T) {
 		allMachineDeployments = append(allMachineDeployments, mdTestConfigs[i].machineDeployment)
 	}
 
-	uniqueMSConfig := createMachineSetTestConfig(RandomString(6), RandomString(6), RandomString(6), 1, map[string]string{
-		nodeGroupMinSizeAnnotationKey: "1",
-		nodeGroupMaxSizeAnnotationKey: "10",
-	}, nil)
+	uniqueMSConfig := NewTestConfigBuilder().
+		ForMachineSet().
+		WithNodeCount(1).
+		WithAnnotations(map[string]string{
+			nodeGroupMinSizeAnnotationKey: "1",
+			nodeGroupMaxSizeAnnotationKey: "10",
+		}).
+		Build()
 
-	msTestConfigs := createMachineSetTestConfigs(RandomString(6), RandomString(6), RandomString(6), 5, 1, map[string]string{
-		nodeGroupMinSizeAnnotationKey: "1",
-		nodeGroupMaxSizeAnnotationKey: "10",
-	}, nil)
+	msTestConfigs := NewTestConfigBuilder().
+		ForMachineSet().
+		WithNodeCount(1).
+		WithAnnotations(map[string]string{
+			nodeGroupMinSizeAnnotationKey: "1",
+			nodeGroupMaxSizeAnnotationKey: "10",
+		}).
+		BuildMultiple(5)
 	msTestConfigs = append(msTestConfigs, uniqueMSConfig)
 
 	allMachineSets := make([]*unstructured.Unstructured, 0, len(msTestConfigs))
@@ -2153,8 +2318,9 @@ func Test_machineController_nodeGroups(t *testing.T) {
 		wantErr:                   false,
 	}} {
 		t.Run(tc.name, func(t *testing.T) {
-			c, stop := mustCreateTestController(t, allTestConfigs...)
-			defer stop()
+			c := NewTestMachineController(t)
+			defer c.Stop()
+			c.AddTestConfigs(allTestConfigs...)
 			c.autoDiscoverySpecs = tc.autoDiscoverySpecs
 
 			got, err := c.nodeGroups()

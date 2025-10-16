@@ -469,6 +469,17 @@ func (o *ScaleUpOrchestrator) ComputeExpansionOption(
 	}
 
 	option.SimilarNodeGroups = o.ComputeSimilarNodeGroups(nodeGroup, nodeInfos, schedulablePodGroups, now)
+	if option.SimilarNodeGroups != nil {
+		// if similar node groups are found, log about them
+		similarNodeGroupIds := make([]string, 0)
+		for _, sng := range option.SimilarNodeGroups {
+			similarNodeGroupIds = append(similarNodeGroupIds, sng.Id())
+		}
+		klog.V(5).Infof("Found %d similar node groups: %v", len(option.SimilarNodeGroups), similarNodeGroupIds)
+	} else if o.autoscalingContext.BalanceSimilarNodeGroups {
+		// if no similar node groups are found and the flag is enabled, log about it
+		klog.V(5).Info("No similar node groups found")
+	}
 
 	estimateStart := time.Now()
 	expansionEstimator := o.estimatorBuilder(
@@ -704,6 +715,7 @@ func (o *ScaleUpOrchestrator) balanceScaleUps(
 ) ([]nodegroupset.ScaleUpInfo, errors.AutoscalerError) {
 	// Recompute similar node groups in case they need to be updated
 	similarNodeGroups := o.ComputeSimilarNodeGroups(nodeGroup, nodeInfos, schedulablePodGroups, now)
+
 	if similarNodeGroups != nil {
 		// if similar node groups are found, log about them
 		similarNodeGroupIds := make([]string, 0)
