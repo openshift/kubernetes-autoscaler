@@ -16,7 +16,7 @@
 # Verifies git commits starting from predefined prefix.
 
 upstreamurl=https://github.com/kubernetes/autoscaler
-upstreambranch=cluster-autoscaler-release-1.33
+upstreambranch=cluster-autoscaler-release-1.34
 upstream=''
 # default to checking most recent commit only if not run by CI pipeline
 check_base="${PULL_BASE_SHA:-HEAD^}"

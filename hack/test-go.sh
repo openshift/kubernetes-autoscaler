@@ -141,7 +141,12 @@ if [[ -n "${junit_report}" ]]; then
     # we don't care if the `go test` fails in this pipe, as we want to generate the report and summarize the output anyway
     set +o pipefail
 
-    go test ${gotest_flags} ${test_packages} 2>"${test_error_file}" | tee "${JUNIT_REPORT_OUTPUT}"
+echo Printing environment
+set
+echo Done printing environment
+    echo go test ${gotest_flags} ${test_packages}
+
+    /usr/lib/golang/bin/go test ${gotest_flags} ${test_packages} 2>"${test_error_file}" | tee "${JUNIT_REPORT_OUTPUT}"
 
     test_return_code="${PIPESTATUS[0]}"
 
