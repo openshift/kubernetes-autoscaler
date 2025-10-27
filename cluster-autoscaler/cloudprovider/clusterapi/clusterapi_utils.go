@@ -53,6 +53,8 @@ const (
 	labelsKey       = "capacity.cluster-autoscaler.kubernetes.io/labels"
 	taintsKey       = "capacity.cluster-autoscaler.kubernetes.io/taints" // not currently used on OpenShift
 
+	machineDeploymentRevisionAnnotation = "machinedeployment.clusters.x-k8s.io/revision"
+	machineDeploymentNameLabel          = "cluster.x-k8s.io/deployment-name"
 	// UnknownArch is used if the Architecture is Unknown
 	UnknownArch SystemArchitecture = ""
 	// Amd64 is used if the Architecture is x86_64
