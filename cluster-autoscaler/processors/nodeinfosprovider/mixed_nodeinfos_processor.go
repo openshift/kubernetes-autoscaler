@@ -78,6 +78,18 @@ func (p *MixedTemplateNodeInfoProvider) Process(ctx *context.AutoscalingContext,
 	result := make(map[string]*schedulerframework.NodeInfo)
 	seenGroups := make(map[string]bool)
 
+	// sort nodes into those good and bad candidates for templates. the bad candidates will be processed
+	// at the end of this function as a last resort for a node info template.
+	goodCandidates := make([]*apiv1.Node, 0)
+	badCandidates := make([]*apiv1.Node, 0)
+	for _, node := range nodes {
+		if isNodeGoodTemplateCandidate(node, now) {
+			goodCandidates = append(goodCandidates, node)
+		} else {
+			badCandidates = append(badCandidates, node)
+		}
+	}
+
 	podsForNodes, err := getPodsForNodes(ctx.ListerRegistry)
 	if err != nil {
 		return map[string]*schedulerframework.NodeInfo{}, err
@@ -117,11 +129,7 @@ func (p *MixedTemplateNodeInfoProvider) Process(ctx *context.AutoscalingContext,
 		return false, "", nil
 	}
 
-	for _, node := range nodes {
-		// Broken nodes might have some stuff missing. Skipping.
-		if !isNodeGoodTemplateCandidate(node, now) {
-			continue
-		}
+	for _, node := range goodCandidates {
 		added, id, typedErr := processNode(node)
 		if typedErr != nil {
 			return map[string]*schedulerframework.NodeInfo{}, typedErr
@@ -172,11 +180,7 @@ func (p *MixedTemplateNodeInfoProvider) Process(ctx *context.AutoscalingContext,
 	}
 
 	// Last resort - unready/unschedulable nodes.
-	for _, node := range nodes {
-		// Allowing broken nodes
-		if isNodeGoodTemplateCandidate(node, now) {
-			continue
-		}
+	for _, node := range badCandidates {
 		added, _, typedErr := processNode(node)
 		if typedErr != nil {
 			return map[string]*schedulerframework.NodeInfo{}, typedErr

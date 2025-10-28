@@ -905,6 +905,7 @@ The following startup parameters are supported for cluster autoscaler:
 | `debugging-snapshot-enabled` | Whether the debugging snapshot of cluster autoscaler feature is enabled. | false
 | `node-delete-delay-after-taint` | How long to wait before deleting a node after tainting it. | 5 seconds
 | `enable-provisioning-requests` | Whether the clusterautoscaler will be handling the ProvisioningRequest CRs. | false
+| `scale-from-unschedulable` | Should CA ignore a node's .spec.unschedulable field when creating a node template for considering to scale a node group. | false |
 
 # Troubleshooting
 
