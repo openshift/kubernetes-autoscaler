@@ -115,6 +115,9 @@ func SanitizeNode(node *apiv1.Node, nodeGroup string, taintConfig taints.TaintCo
 			newNode.Labels[k] = nodeName
 		}
 	}
+	if taintConfig.ShouldScaleFromUnschedulable() {
+		newNode.Spec.Unschedulable = false
+	}
 	newNode.Name = nodeName
 	newNode.Spec.Taints = taints.SanitizeTaints(newNode.Spec.Taints, taintConfig)
 	return newNode, nil
