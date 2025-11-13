@@ -331,7 +331,7 @@ func getNode(t *testing.T, client kube_client.Interface, name string) *apiv1.Nod
 
 func buildFakeClient(t *testing.T, nodes ...*apiv1.Node) *fake.Clientset {
 	t.Helper()
-	fakeClient := fake.NewSimpleClientset()
+	fakeClient := fake.NewClientset()
 
 	for _, node := range nodes {
 		_, err := fakeClient.CoreV1().Nodes().Create(context.TODO(), node, metav1.CreateOptions{})
