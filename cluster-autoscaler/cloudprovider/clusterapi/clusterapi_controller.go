@@ -649,7 +649,7 @@ func (c *machineController) findScalableResourceProviderIDs(scalableResource *un
 		// then become failed later. We want to ensure that a failed machine is not counted towards the total
 		// number of nodes in the cluster, for this reason we will detect a failed machine first, regardless
 		// of provider ID, and give it a normalized provider ID with failure message prepended.
-		errorMessage, found, err := unstructured.NestedString(machine.UnstructuredContent(), "status", "errorMessage")
+		failureMessage, found, err := unstructured.NestedString(machine.UnstructuredContent(), "status", "failureMessage")
 		if err != nil {
 			return nil, err
 		}
@@ -660,7 +660,7 @@ func (c *machineController) findScalableResourceProviderIDs(scalableResource *un
 			// Fake ID needs to be recognised later and converted into a machine key.
 			// Use an underscore as a separator between namespace and name as it is not a
 			// valid character within a namespace name.
-			klog.V(4).Infof("Status.ErrorMessage of machine %q is %q", machine.GetName(), errorMessage)
+			klog.V(4).Infof("Status.FailureMessage of machine %q is %q", machine.GetName(), failureMessage)
 			providerIDs = append(providerIDs, createFailedMachineNormalizedProviderID(machine.GetNamespace(), machine.GetName()))
 			continue
 		}
@@ -847,27 +847,6 @@ func (c *machineController) listMachinesForScalableResource(r *unstructured.Unst
 	default:
 		return nil, fmt.Errorf("unknown scalable resource kind %s", r.GetKind())
 	}
-}
-
-func (c *machineController) listMachineSetsForMachineDeployment(r *unstructured.Unstructured) ([]*unstructured.Unstructured, error) {
-	selector := labels.SelectorFromSet(map[string]string{
-		machineDeploymentNameLabel: r.GetName(),
-	})
-	objs, err := c.machineSetInformer.Lister().ByNamespace(r.GetNamespace()).List(selector)
-	if err != nil {
-		return nil, fmt.Errorf("unable to list MachineSets for MachineDeployment %s: %w", r.GetName(), err)
-	}
-
-	results := make([]*unstructured.Unstructured, 0, len(objs))
-	for _, x := range objs {
-		u, ok := x.(*unstructured.Unstructured)
-		if !ok {
-			return nil, fmt.Errorf("expected unstructured resource from lister, not %T", x)
-		}
-		results = append(results, u.DeepCopy())
-	}
-
-	return results, nil
 }
 
 func (c *machineController) listScalableResources() ([]*unstructured.Unstructured, error) {

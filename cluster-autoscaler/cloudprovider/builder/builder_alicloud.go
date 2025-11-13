@@ -22,7 +22,7 @@ package builder
 import (
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/alicloud"
-	coreoptions "k8s.io/autoscaler/cluster-autoscaler/core/options"
+	"k8s.io/autoscaler/cluster-autoscaler/config"
 	"k8s.io/client-go/informers"
 )
 
@@ -34,7 +34,7 @@ var AvailableCloudProviders = []string{
 // DefaultCloudProvider for alicloud-only build is alicloud.
 const DefaultCloudProvider = cloudprovider.AlicloudProviderName
 
-func buildCloudProvider(opts *coreoptions.AutoscalerOptions, do cloudprovider.NodeGroupDiscoveryOptions, rl *cloudprovider.ResourceLimiter, _ informers.SharedInformerFactory) cloudprovider.CloudProvider {
+func buildCloudProvider(opts config.AutoscalingOptions, do cloudprovider.NodeGroupDiscoveryOptions, rl *cloudprovider.ResourceLimiter, _ informers.SharedInformerFactory) cloudprovider.CloudProvider {
 	switch opts.CloudProviderName {
 	case cloudprovider.AlicloudProviderName:
 		return alicloud.BuildAlicloud(opts, do, rl)

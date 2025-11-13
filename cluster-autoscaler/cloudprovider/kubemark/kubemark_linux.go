@@ -32,7 +32,6 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	"k8s.io/autoscaler/cluster-autoscaler/config"
 	"k8s.io/autoscaler/cluster-autoscaler/config/dynamic"
-	coreoptions "k8s.io/autoscaler/cluster-autoscaler/core/options"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator/framework"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/errors"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/gpu"
@@ -343,7 +342,7 @@ func buildNodeGroup(value string, kubemarkController *kubemark.KubemarkControlle
 }
 
 // BuildKubemark builds Kubemark cloud provider.
-func BuildKubemark(opts *coreoptions.AutoscalerOptions, do cloudprovider.NodeGroupDiscoveryOptions, rl *cloudprovider.ResourceLimiter) cloudprovider.CloudProvider {
+func BuildKubemark(opts config.AutoscalingOptions, do cloudprovider.NodeGroupDiscoveryOptions, rl *cloudprovider.ResourceLimiter) cloudprovider.CloudProvider {
 	externalConfig, err := rest.InClusterConfig()
 	if err != nil {
 		klog.Fatalf("Failed to get kubeclient config for external cluster: %v", err)
