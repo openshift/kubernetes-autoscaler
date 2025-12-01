@@ -29,33 +29,18 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/autoscaler/cluster-autoscaler/utils/units"
 )
 
 const (
-	// the following constants are used for scaling from zero
-	// they are split into two sections to represent the values which have been historically used
-	// by openshift, and the values which have been added in the upstream.
-	// we are keeping the historical prefixes "machine.openshift.io" while we develop a solution
-	// which will allow the usage of either prefix, while preferring the upstream prefix "capacity.clsuter-autoscaler.kuberenetes.io".
-	deprecatedCpuKey      = "machine.openshift.io/vCPU"
-	deprecatedMemoryKey   = "machine.openshift.io/memoryMb"
-	deprecatedGpuCountKey = "machine.openshift.io/GPU"
-	deprecatedMaxPodsKey  = "machine.openshift.io/maxPods"
-	// Upstream preferred annotations for scaling from zero.
-	cpuKey      = "capacity.cluster-autoscaler.kubernetes.io/cpu"
-	memoryKey   = "capacity.cluster-autoscaler.kubernetes.io/memory"
-	gpuCountKey = "capacity.cluster-autoscaler.kubernetes.io/gpu-count"
-	gpuTypeKey  = "capacity.cluster-autoscaler.kubernetes.io/gpu-type"
-	maxPodsKey  = "capacity.cluster-autoscaler.kubernetes.io/maxPods"
-	// the following constants keep the upstream prefix so that we do not introduce separate values into the openshift api
+	cpuKey          = "capacity.cluster-autoscaler.kubernetes.io/cpu"
+	memoryKey       = "capacity.cluster-autoscaler.kubernetes.io/memory"
 	diskCapacityKey = "capacity.cluster-autoscaler.kubernetes.io/ephemeral-disk"
+	gpuTypeKey      = "capacity.cluster-autoscaler.kubernetes.io/gpu-type"
+	gpuCountKey     = "capacity.cluster-autoscaler.kubernetes.io/gpu-count"
+	maxPodsKey      = "capacity.cluster-autoscaler.kubernetes.io/maxPods"
+	taintsKey       = "capacity.cluster-autoscaler.kubernetes.io/taints"
 	labelsKey       = "capacity.cluster-autoscaler.kubernetes.io/labels"
 	draDriverKey    = "capacity.cluster-autoscaler.kubernetes.io/dra-driver"
-	taintsKey       = "capacity.cluster-autoscaler.kubernetes.io/taints" // not currently used on OpenShift
-
-	machineDeploymentRevisionAnnotation = "machinedeployment.clusters.x-k8s.io/revision"
-	machineDeploymentNameLabel          = "cluster.x-k8s.io/deployment-name"
 	// UnknownArch is used if the Architecture is Unknown
 	UnknownArch SystemArchitecture = ""
 	// Amd64 is used if the Architecture is x86_64
@@ -73,9 +58,13 @@ const (
 	// GpuDeviceType is used if DRA device is GPU
 	GpuDeviceType = "gpu"
 
-	// TODO: update machine API operator to match CAPI annotation so this can be inferred dynamically by getMachineDeleteAnnotationKey i.e ${apigroup}/delete-machine
-	// https://github.com/openshift/machine-api-operator/blob/128c5c90918c009172c6d24d5715888e0e1d59e4/pkg/controller/machineset/delete_policy.go#L34
-	oldMachineDeleteAnnotationKey = "machine.openshift.io/cluster-api-delete-machine"
+	// Cluster API constants, copied from cluster-api/api/core/v1beta1/machine_types.go
+	// nodeRoleLabelPrefix is one of the CAPI managed Node label prefixes.
+	nodeRoleLabelPrefix = "node-role.kubernetes.io"
+	// nodeRestrictionLabelDomain is one of the CAPI managed Node label domains.
+	nodeRestrictionLabelDomain = "node-restriction.kubernetes.io"
+	// managedNodeLabelDomain is one of the CAPI managed Node label domains.
+	managedNodeLabelDomain = "node.cluster.x-k8s.io"
 )
 
 var (
@@ -259,7 +248,6 @@ func parseKey(annotations map[string]string, key string) (resource.Quantity, err
 	if val, exists := annotations[key]; exists && val != "" {
 		return resource.ParseQuantity(val)
 	}
-
 	return zeroQuantity.DeepCopy(), nil
 }
 
@@ -275,39 +263,11 @@ func parseIntKey(annotations map[string]string, key string) (resource.Quantity, 
 }
 
 func parseCPUCapacity(annotations map[string]string) (resource.Quantity, error) {
-	// Checking both sets of annotations. If the upstream annotation doesn't exist,
-	// get the value of the deprecated one. If neither exist, return nil.
-	if val, err := parseKey(annotations, cpuKey); val != zeroQuantity && err == nil {
-		return val, nil
-	} else if err != nil {
-		return zeroQuantity.DeepCopy(), fmt.Errorf("value %v from annotation %q is unexpected: %v", val, cpuKey, err)
-	}
-	// If we don't find the old annotation, parseKey returns zeroQuantity.
-	return parseKey(annotations, deprecatedCpuKey)
+	return parseKey(annotations, cpuKey)
 }
 
 func parseMemoryCapacity(annotations map[string]string) (resource.Quantity, error) {
-	// The value for the deprecatedMemoryKey is expected to be an integer representing Mebibytes. e.g. "1024".
-	// https://www.iec.ch/si/binary.htm
-	//
-	// Checking both sets of annotations. If the upstream annotation doesn't exist,
-	// get the value of the deprecated one. If neither exist, return nil.
-	if val, err := parseKey(annotations, memoryKey); val != zeroQuantity && err == nil {
-		return val, nil
-	} else if err != nil {
-		return zeroQuantity.DeepCopy(), fmt.Errorf("value %v from annotation %q expected to be an integer: %v", val, memoryKey, err)
-	}
-
-	if val, found := annotations[deprecatedMemoryKey]; found && val != "" {
-		valInt, err := strconv.ParseInt(val, 10, 0)
-		if err != nil {
-			return zeroQuantity.DeepCopy(), fmt.Errorf("value %q from annotation %q expected to be an integer: %v", val, deprecatedMemoryKey, err)
-		}
-		// Convert from Mebibytes to bytes
-		return *resource.NewQuantity(valInt*units.MiB, resource.DecimalSI), nil
-	}
-
-	return zeroQuantity.DeepCopy(), nil
+	return parseKey(annotations, memoryKey)
 }
 
 func parseEphemeralDiskCapacity(annotations map[string]string) (resource.Quantity, error) {
@@ -315,16 +275,7 @@ func parseEphemeralDiskCapacity(annotations map[string]string) (resource.Quantit
 }
 
 func parseGPUCount(annotations map[string]string) (resource.Quantity, error) {
-	// Checking both sets of annotations. If the upstream annotation doesn't exist,
-	// get the value of the deprecated one. If neither exist, return nil.
-	if val, err := parseIntKey(annotations, gpuCountKey); val != zeroQuantity && err == nil {
-		return val, nil
-	} else if err != nil {
-		return zeroQuantity.DeepCopy(), fmt.Errorf("value %v from annotation %q is unexpected: %v", val, gpuCountKey, err)
-	}
-
-	// If we don't find the old annotation, parseIntKey returns zeroQuantity.
-	return parseIntKey(annotations, deprecatedGpuCountKey)
+	return parseIntKey(annotations, gpuCountKey)
 }
 
 // The GPU type is not currently considered by the autoscaler when planning
@@ -339,16 +290,7 @@ func parseGPUType(annotations map[string]string) string {
 }
 
 func parseMaxPodsCapacity(annotations map[string]string) (resource.Quantity, error) {
-	// Checking both sets of annotations. If the upstream annotation doesn't exist,
-	// get the value of the deprecated one. If neither exist, return nil.
-	if val, err := parseIntKey(annotations, maxPodsKey); val != zeroQuantity && err == nil {
-		return val, nil
-	} else if err != nil {
-		return zeroQuantity.DeepCopy(), fmt.Errorf("value %v from annotation %q expected to be an integer: %v", val, maxPodsKey, err)
-	}
-
-	// If we don't find the old annotation, parseIntKey returns zeroQuantity.
-	return parseIntKey(annotations, deprecatedMaxPodsKey)
+	return parseIntKey(annotations, maxPodsKey)
 }
 
 func parseDRADriver(annotations map[string]string) string {
@@ -470,4 +412,34 @@ func GetDefaultScaleFromZeroArchitecture() SystemArchitecture {
 		systemArchitecture = &arch
 	})
 	return *systemArchitecture
+}
+
+// getManagedNodeLabelsFromLabels returns a map of labels that will be propagated
+// to nodes based on the Cluster API metadata propagation rules.
+func getManagedNodeLabelsFromLabels(labels map[string]string) map[string]string {
+	// TODO elmiko, add a user configuration to inject a string with their `--additional-sync-machine-labels` string.
+	// ref: https://cluster-api.sigs.k8s.io/reference/api/metadata-propagation#machine
+	managedLabels := map[string]string{}
+	for key, value := range labels {
+		if isManagedLabel(key) {
+			managedLabels[key] = value
+		}
+
+	}
+
+	return managedLabels
+}
+
+func isManagedLabel(key string) bool {
+	dnsSubdomainOrName := strings.Split(key, "/")[0]
+	if dnsSubdomainOrName == nodeRoleLabelPrefix {
+		return true
+	}
+	if dnsSubdomainOrName == nodeRestrictionLabelDomain || strings.HasSuffix(dnsSubdomainOrName, "."+nodeRestrictionLabelDomain) {
+		return true
+	}
+	if dnsSubdomainOrName == managedNodeLabelDomain || strings.HasSuffix(dnsSubdomainOrName, "."+managedNodeLabelDomain) {
+		return true
+	}
+	return false
 }

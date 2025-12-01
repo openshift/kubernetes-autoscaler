@@ -52,7 +52,7 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/utho"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/volcengine"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/vultr"
-	coreoptions "k8s.io/autoscaler/cluster-autoscaler/core/options"
+	"k8s.io/autoscaler/cluster-autoscaler/config"
 	"k8s.io/client-go/informers"
 )
 
@@ -94,7 +94,7 @@ var AvailableCloudProviders = []string{
 // DefaultCloudProvider is GCE.
 const DefaultCloudProvider = cloudprovider.GceProviderName
 
-func buildCloudProvider(opts *coreoptions.AutoscalerOptions,
+func buildCloudProvider(opts config.AutoscalingOptions,
 	do cloudprovider.NodeGroupDiscoveryOptions,
 	rl *cloudprovider.ResourceLimiter,
 	informerFactory informers.SharedInformerFactory) cloudprovider.CloudProvider {

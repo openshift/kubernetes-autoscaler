@@ -47,7 +47,7 @@ var _ = UpdaterE2eDescribe("Updater", func() {
 		statusUpdater := status.NewUpdater(
 			f.ClientSet,
 			status.AdmissionControllerStatusName,
-			utils.VpaNamespace,
+			status.AdmissionControllerStatusNamespace,
 			statusUpdateInterval,
 			"e2e test",
 		)
@@ -56,7 +56,7 @@ var _ = UpdaterE2eDescribe("Updater", func() {
 			// Status is created outside the test namespace.
 			ginkgo.By("Deleting the Admission Controller status")
 			close(stopCh)
-			err := f.ClientSet.CoordinationV1().Leases(utils.VpaNamespace).
+			err := f.ClientSet.CoordinationV1().Leases(status.AdmissionControllerStatusNamespace).
 				Delete(context.TODO(), status.AdmissionControllerStatusName, metav1.DeleteOptions{})
 			gomega.Expect(err).NotTo(gomega.HaveOccurred())
 		}()
@@ -77,7 +77,7 @@ var _ = UpdaterE2eDescribe("Updater", func() {
 		statusUpdater := status.NewUpdater(
 			f.ClientSet,
 			status.AdmissionControllerStatusName,
-			utils.VpaNamespace,
+			status.AdmissionControllerStatusNamespace,
 			statusUpdateInterval,
 			"e2e test",
 		)
@@ -86,7 +86,7 @@ var _ = UpdaterE2eDescribe("Updater", func() {
 			// Status is created outside the test namespace.
 			ginkgo.By("Deleting the Admission Controller status")
 			close(stopCh)
-			err := f.ClientSet.CoordinationV1().Leases(utils.VpaNamespace).
+			err := f.ClientSet.CoordinationV1().Leases(status.AdmissionControllerStatusNamespace).
 				Delete(context.TODO(), status.AdmissionControllerStatusName, metav1.DeleteOptions{})
 			gomega.Expect(err).NotTo(gomega.HaveOccurred())
 		}()
@@ -107,7 +107,7 @@ var _ = UpdaterE2eDescribe("Updater", func() {
 		statusUpdater := status.NewUpdater(
 			f.ClientSet,
 			status.AdmissionControllerStatusName,
-			utils.VpaNamespace,
+			status.AdmissionControllerStatusNamespace,
 			statusUpdateInterval,
 			"e2e test",
 		)
@@ -116,7 +116,7 @@ var _ = UpdaterE2eDescribe("Updater", func() {
 			// Status is created outside the test namespace.
 			ginkgo.By("Deleting the Admission Controller status")
 			close(stopCh)
-			err := f.ClientSet.CoordinationV1().Leases(utils.VpaNamespace).
+			err := f.ClientSet.CoordinationV1().Leases(status.AdmissionControllerStatusNamespace).
 				Delete(context.TODO(), status.AdmissionControllerStatusName, metav1.DeleteOptions{})
 			gomega.Expect(err).NotTo(gomega.HaveOccurred())
 		}()
@@ -148,7 +148,7 @@ var _ = UpdaterE2eDescribe("Updater", func() {
 		statusUpdater := status.NewUpdater(
 			f.ClientSet,
 			status.AdmissionControllerStatusName,
-			utils.VpaNamespace,
+			status.AdmissionControllerStatusNamespace,
 			statusUpdateInterval,
 			"e2e test",
 		)
@@ -157,7 +157,7 @@ var _ = UpdaterE2eDescribe("Updater", func() {
 			// Status is created outside the test namespace.
 			ginkgo.By("Deleting the Admission Controller status")
 			close(stopCh)
-			err := f.ClientSet.CoordinationV1().Leases(utils.VpaNamespace).
+			err := f.ClientSet.CoordinationV1().Leases(status.AdmissionControllerStatusNamespace).
 				Delete(context.TODO(), status.AdmissionControllerStatusName, metav1.DeleteOptions{})
 			gomega.Expect(err).NotTo(gomega.HaveOccurred())
 		}()
@@ -179,7 +179,7 @@ var _ = UpdaterE2eDescribe("Updater", func() {
 		statusUpdater := status.NewUpdater(
 			f.ClientSet,
 			status.AdmissionControllerStatusName,
-			utils.VpaNamespace,
+			status.AdmissionControllerStatusNamespace,
 			statusUpdateInterval,
 			"e2e test",
 		)
@@ -188,7 +188,7 @@ var _ = UpdaterE2eDescribe("Updater", func() {
 			// Status is created outside the test namespace.
 			ginkgo.By("Deleting the Admission Controller status")
 			close(stopCh)
-			err := f.ClientSet.CoordinationV1().Leases(utils.VpaNamespace).
+			err := f.ClientSet.CoordinationV1().Leases(status.AdmissionControllerStatusNamespace).
 				Delete(context.TODO(), status.AdmissionControllerStatusName, metav1.DeleteOptions{})
 			gomega.Expect(err).NotTo(gomega.HaveOccurred())
 		}()

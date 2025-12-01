@@ -19,7 +19,6 @@ package clusterapi
 import (
 	"context"
 	"fmt"
-	"reflect"
 	"testing"
 	"time"
 
@@ -259,96 +258,6 @@ func TestReplicas(t *testing.T) {
 	})
 }
 
-func TestTaints(t *testing.T) {
-	initialReplicas := 1
-
-	expectedTaints := []v1.Taint{
-		{Key: "test", Effect: v1.TaintEffectNoSchedule, Value: "test"},
-		{Key: "test-no-value", Effect: v1.TaintEffectNoSchedule},
-	}
-	expectedTaintsWithAnnotations := []v1.Taint{
-		{Key: "test", Effect: v1.TaintEffectNoSchedule, Value: "test"},
-		{Key: "test-no-value", Effect: v1.TaintEffectNoSchedule},
-		{Key: "key1", Effect: v1.TaintEffectNoSchedule, Value: "value1"},
-		{Key: "key2", Effect: v1.TaintEffectNoExecute, Value: "value2"},
-	}
-	taintAnnotation := "key1=value1:NoSchedule,key2=value2:NoExecute"
-
-	test := func(t *testing.T, testConfig *TestConfig) {
-		controller := NewTestMachineController(t)
-		defer controller.Stop()
-		controller.AddTestConfigs(testConfig)
-
-		testResource := testConfig.machineSet
-		if testConfig.machineDeployment != nil {
-			testResource = testConfig.machineDeployment
-		}
-
-		sr, err := newUnstructuredScalableResource(controller.machineController, testResource)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		taints := sr.Taints()
-
-		if !reflect.DeepEqual(taints, expectedTaints) {
-			t.Errorf("expected %v, got: %v", expectedTaints, taints)
-		}
-
-		srAnnotations := sr.unstructured.GetAnnotations()
-		if srAnnotations == nil {
-			srAnnotations = make(map[string]string)
-		}
-
-		srAnnotations[taintsKey] = taintAnnotation
-		sr.unstructured.SetAnnotations(srAnnotations)
-
-		taints = sr.Taints()
-
-		if !reflect.DeepEqual(taints, expectedTaintsWithAnnotations) {
-			t.Errorf("expected %v, got: %v", expectedTaintsWithAnnotations, taints)
-		}
-	}
-
-	t.Run("MachineSet", func(t *testing.T) {
-		testConfig := NewTestConfigBuilder().
-			ForMachineSet().
-			WithNodeCount(initialReplicas).
-			WithTaints([]interface{}{
-				map[string]interface{}{
-					"key":    "test",
-					"value":  "test",
-					"effect": "NoSchedule",
-				},
-				map[string]interface{}{
-					"key":    "test-no-value",
-					"effect": "NoSchedule",
-				},
-			}).
-			Build()
-		test(t, testConfig)
-	})
-
-	t.Run("MachineDeployment", func(t *testing.T) {
-		testConfig := NewTestConfigBuilder().
-			ForMachineDeployment().
-			WithNodeCount(initialReplicas).
-			WithTaints([]interface{}{
-				map[string]interface{}{
-					"key":    "test",
-					"value":  "test",
-					"effect": "NoSchedule",
-				},
-				map[string]interface{}{
-					"key":    "test-no-value",
-					"effect": "NoSchedule",
-				},
-			}).
-			Build()
-		test(t, testConfig)
-	})
-}
-
 func TestSetSizeAndReplicas(t *testing.T) {
 	initialReplicas := 1
 	updatedReplicas := 5
@@ -416,20 +325,13 @@ func TestSetSizeAndReplicas(t *testing.T) {
 	})
 }
 
-// This test now tests both the upstream and downstream annotation values while we support them both.
 func TestAnnotations(t *testing.T) {
 	cpuQuantity := resource.MustParse("2")
+	memQuantity := resource.MustParse("1024Mi")
 	diskQuantity := resource.MustParse("100Gi")
-	memQuantity := resource.MustParse("1024")
 	gpuQuantity := resource.MustParse("1")
 	maxPodsQuantity := resource.MustParse("42")
-	// Note, the first two taints comes from the spec of the machine template, the rest from the annotations.
-	expectedTaints := []v1.Taint{
-		{Key: "test", Effect: v1.TaintEffectNoSchedule, Value: "test"},
-		{Key: "test-no-value", Effect: v1.TaintEffectNoSchedule},
-		{Key: "key1", Effect: v1.TaintEffectNoSchedule, Value: "value1"},
-		{Key: "key2", Effect: v1.TaintEffectNoExecute, Value: "value2"},
-	}
+	expectedTaints := []v1.Taint{{Key: "key1", Effect: v1.TaintEffectNoSchedule, Value: "value1"}, {Key: "key2", Effect: v1.TaintEffectNoExecute, Value: "value2"}}
 	testNodeName := "test-node"
 	draDriver := "test-driver"
 	expectedResourceSlice := &resourceapi.ResourceSlice{
@@ -528,17 +430,6 @@ func TestAnnotations(t *testing.T) {
 			ForMachineSet().
 			WithNodeCount(1).
 			WithAnnotations(annotations).
-			WithTaints([]interface{}{
-				map[string]interface{}{
-					"key":    "test",
-					"value":  "test",
-					"effect": "NoSchedule",
-				},
-				map[string]interface{}{
-					"key":    "test-no-value",
-					"effect": "NoSchedule",
-				},
-			}).
 			Build()
 		test(t, testConfig, testConfig.machineSet)
 	})
@@ -548,17 +439,6 @@ func TestAnnotations(t *testing.T) {
 			ForMachineDeployment().
 			WithNodeCount(1).
 			WithAnnotations(annotations).
-			WithTaints([]interface{}{
-				map[string]interface{}{
-					"key":    "test",
-					"value":  "test",
-					"effect": "NoSchedule",
-				},
-				map[string]interface{}{
-					"key":    "test-no-value",
-					"effect": "NoSchedule",
-				},
-			}).
 			Build()
 		test(t, testConfig, testConfig.machineDeployment)
 	})
@@ -575,7 +455,7 @@ func TestCanScaleFromZero(t *testing.T) {
 			"can scale from zero",
 			map[string]string{
 				cpuKey:    "1",
-				memoryKey: "1024",
+				memoryKey: "1024Mi",
 			},
 			nil,
 			true,
@@ -583,7 +463,7 @@ func TestCanScaleFromZero(t *testing.T) {
 		{
 			"with missing CPU info cannot scale from zero",
 			map[string]string{
-				memoryKey: "1024",
+				memoryKey: "1024Mi",
 			},
 			nil,
 			false,
@@ -631,7 +511,7 @@ func TestCanScaleFromZero(t *testing.T) {
 			"with both annotations and capacity in machine template can scale from zero",
 			map[string]string{
 				cpuKey:    "1",
-				memoryKey: "1024",
+				memoryKey: "1024Mi",
 			},
 			map[string]string{
 				cpuStatusKey:    "1",

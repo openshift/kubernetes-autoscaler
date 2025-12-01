@@ -30,7 +30,6 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/ovhcloud/sdk"
 	"k8s.io/autoscaler/cluster-autoscaler/config"
-	coreoptions "k8s.io/autoscaler/cluster-autoscaler/core/options"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/errors"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/gpu"
 )
@@ -60,7 +59,7 @@ type OVHCloudProvider struct {
 }
 
 // BuildOVHcloud builds the OVHcloud provider.
-func BuildOVHcloud(opts *coreoptions.AutoscalerOptions, do cloudprovider.NodeGroupDiscoveryOptions, rl *cloudprovider.ResourceLimiter) cloudprovider.CloudProvider {
+func BuildOVHcloud(opts config.AutoscalingOptions, do cloudprovider.NodeGroupDiscoveryOptions, rl *cloudprovider.ResourceLimiter) cloudprovider.CloudProvider {
 	// Open cloud provider folder
 	var configFile io.ReadCloser
 	if opts.CloudConfig != "" {
@@ -83,7 +82,7 @@ func BuildOVHcloud(opts *coreoptions.AutoscalerOptions, do cloudprovider.NodeGro
 	provider := &OVHCloudProvider{
 		manager: manager,
 
-		autoscalingOptions: opts.AutoscalingOptions,
+		autoscalingOptions: opts,
 		discoveryOptions:   do,
 		resourceLimiter:    rl,
 	}
