@@ -471,3 +471,33 @@ func GetDefaultScaleFromZeroArchitecture() SystemArchitecture {
 	})
 	return *systemArchitecture
 }
+
+// getManagedNodeLabelsFromLabels returns a map of labels that will be propagated
+// to nodes based on the Cluster API metadata propagation rules.
+func getManagedNodeLabelsFromLabels(labels map[string]string) map[string]string {
+	// TODO elmiko, add a user configuration to inject a string with their `--additional-sync-machine-labels` string.
+	// ref: https://cluster-api.sigs.k8s.io/reference/api/metadata-propagation#machine
+	managedLabels := map[string]string{}
+	for key, value := range labels {
+		if isManagedLabel(key) {
+			managedLabels[key] = value
+		}
+
+	}
+
+	return managedLabels
+}
+
+func isManagedLabel(key string) bool {
+	dnsSubdomainOrName := strings.Split(key, "/")[0]
+	if dnsSubdomainOrName == nodeRoleLabelPrefix {
+		return true
+	}
+	if dnsSubdomainOrName == nodeRestrictionLabelDomain || strings.HasSuffix(dnsSubdomainOrName, "."+nodeRestrictionLabelDomain) {
+		return true
+	}
+	if dnsSubdomainOrName == managedNodeLabelDomain || strings.HasSuffix(dnsSubdomainOrName, "."+managedNodeLabelDomain) {
+		return true
+	}
+	return false
+}

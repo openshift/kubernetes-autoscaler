@@ -66,12 +66,13 @@ type testConfigBuilder struct {
 // NewTestConfigBuilder returns a builder for dynamically constructing mock ClusterAPI resources for testing.
 func NewTestConfigBuilder() *testConfigBuilder {
 	return &testConfigBuilder{
-		namespace:   RandomString(6),
-		clusterName: RandomString(6),
-		namePrefix:  RandomString(6),
-		nodeCount:   0,
-		annotations: nil,
-		capacity:    nil,
+		namespace:     RandomString(6),
+		clusterName:   RandomString(6),
+		namePrefix:    RandomString(6),
+		nodeCount:     0,
+		annotations:   nil,
+		capacity:      nil,
+		managedLabels: nil,
 	}
 }
 
@@ -206,6 +207,19 @@ func (b *testConfigBuilder) WithCapacity(c map[string]string) *testConfigBuilder
 	return b
 }
 
+func (b *testConfigBuilder) WithManagedLabels(l map[string]string) *testConfigBuilder {
+	if l == nil {
+		// explicitly setting managed labels to nil
+		b.managedLabels = nil
+	} else {
+		if b.managedLabels == nil {
+			b.managedLabels = map[string]string{}
+		}
+		maps.Insert(b.managedLabels, maps.All(l))
+	}
+	return b
+}
+
 // TestConfig contains clusterspecific information about a single test configuration.
 type TestConfig struct {
 	spec              *TestSpec
@@ -265,6 +279,12 @@ func createTestConfigs(specs ...TestSpec) []*TestConfig {
 
 		config.machineSet.SetAnnotations(make(map[string]string))
 
+		if spec.managedLabels != nil {
+			if err := unstructured.SetNestedStringMap(config.machineSet.Object, spec.managedLabels, "spec", "template", "spec", "metadata", "labels"); err != nil {
+				panic(err)
+			}
+		}
+
 		if !spec.rootIsMachineDeployment {
 			config.machineSet.SetAnnotations(spec.annotations)
 		} else {
@@ -315,6 +335,12 @@ func createTestConfigs(specs ...TestSpec) []*TestConfig {
 				},
 			}
 			config.machineSet.SetOwnerReferences(ownerRefs)
+
+			if spec.managedLabels != nil {
+				if err := unstructured.SetNestedStringMap(config.machineDeployment.Object, spec.managedLabels, "spec", "template", "spec", "metadata", "labels"); err != nil {
+					panic(err)
+				}
+			}
 		}
 		config.machineSet.SetLabels(machineSetLabels)
 		if err := unstructured.SetNestedStringMap(config.machineSet.Object, machineSetLabels, "spec", "selector", "matchLabels"); err != nil {
@@ -385,6 +411,7 @@ func createTestSpec(namespace, clusterName, name string, nodeCount int, isMachin
 	return TestSpec{
 		annotations:             annotations,
 		capacity:                capacity,
+		managedLabels:           managedLabels,
 		machineDeploymentName:   name,
 		machineSetName:          name,
 		clusterName:             clusterName,
