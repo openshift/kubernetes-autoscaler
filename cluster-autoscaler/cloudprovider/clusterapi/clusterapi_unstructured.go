@@ -35,7 +35,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation"
-	gpuapis "k8s.io/autoscaler/cluster-autoscaler/utils/gpu"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	klog "k8s.io/klog/v2"
 	"k8s.io/utils/ptr"
 )
@@ -170,7 +170,6 @@ func (r unstructuredScalableResource) UnmarkMachineForDeletion(machine *unstruct
 
 	annotations := u.GetAnnotations()
 	delete(annotations, machineDeleteAnnotationKey)
-	delete(annotations, oldMachineDeleteAnnotationKey)
 	u.SetAnnotations(annotations)
 	_, updateErr := r.controller.managementClient.Resource(r.controller.machineResource).Namespace(u.GetNamespace()).Update(context.TODO(), u, metav1.UpdateOptions{})
 
@@ -191,7 +190,6 @@ func (r unstructuredScalableResource) MarkMachineForDeletion(machine *unstructur
 	}
 
 	annotations[machineDeleteAnnotationKey] = time.Now().String()
-	annotations[oldMachineDeleteAnnotationKey] = time.Now().String()
 	u.SetAnnotations(annotations)
 
 	_, updateErr := r.controller.managementClient.Resource(r.controller.machineResource).Namespace(u.GetNamespace()).Update(context.TODO(), u, metav1.UpdateOptions{})
@@ -200,80 +198,46 @@ func (r unstructuredScalableResource) MarkMachineForDeletion(machine *unstructur
 }
 
 func (r unstructuredScalableResource) Labels() map[string]string {
-	labels := make(map[string]string, 0)
+	allLabels := map[string]string{}
 
-	newlabels, found, err := unstructured.NestedStringMap(r.unstructured.Object, "spec", "template", "spec", "metadata", "labels")
-	if err != nil {
-		return nil
-	}
-	if found {
-		for k, v := range newlabels {
-			labels[k] = v
-		}
+	// get the managed labels from the scalable resource, if they exist.
+	if labels, found, err := unstructured.NestedStringMap(r.unstructured.UnstructuredContent(), "spec", "template", "spec", "metadata", "labels"); found && err == nil {
+		managedLabels := getManagedNodeLabelsFromLabels(labels)
+		allLabels = cloudprovider.JoinStringMaps(allLabels, managedLabels)
 	}
 
+	// annotation labels are supplied as an override to other values, we process them last.
 	annotations := r.unstructured.GetAnnotations()
 	// annotation value of the form "key1=value1,key2=value2"
 	if val, found := annotations[labelsKey]; found {
-		newlabels := strings.Split(val, ",")
-		for _, label := range newlabels {
+		labels := strings.Split(val, ",")
+		annotationLabels := make(map[string]string, len(labels))
+		for _, label := range labels {
 			split := strings.SplitN(label, "=", 2)
 			if len(split) == 2 {
-				labels[split[0]] = split[1]
+				annotationLabels[split[0]] = split[1]
 			}
 		}
+		allLabels = cloudprovider.JoinStringMaps(allLabels, annotationLabels)
 	}
-
-	return labels
+	return allLabels
 }
 
 func (r unstructuredScalableResource) Taints() []apiv1.Taint {
-	taints := make([]apiv1.Taint, 0)
-
-	newtaints, found, err := unstructured.NestedSlice(r.unstructured.Object, "spec", "template", "spec", "taints")
-	if err != nil {
-		return nil
-	}
-	if found {
-		for _, t := range newtaints {
-			if t := unstructuredToTaint(t); t != nil {
-				taints = append(taints, *t)
-			} else {
-				klog.Warningf("Unable to convert of type %T data to taint: %+v", t, t)
-				continue
-			}
-		}
-	}
-
 	annotations := r.unstructured.GetAnnotations()
 	// annotation value the form of "key1=value1:condition,key2=value2:condition"
 	if val, found := annotations[taintsKey]; found {
-		newtaints := strings.Split(val, ",")
-		for _, taintStr := range newtaints {
+		taints := strings.Split(val, ",")
+		ret := make([]apiv1.Taint, 0, len(taints))
+		for _, taintStr := range taints {
 			taint, err := parseTaint(taintStr)
 			if err == nil {
-				taints = append(taints, taint)
+				ret = append(ret, taint)
 			}
 		}
+		return ret
 	}
-
-	return taints
-}
-
-func unstructuredToTaint(unstructuredTaintInterface interface{}) *corev1.Taint {
-	unstructuredTaint := unstructuredTaintInterface.(map[string]interface{})
-	if unstructuredTaint == nil {
-		return nil
-	}
-
-	taint := &corev1.Taint{}
-	taint.Key = unstructuredTaint["key"].(string)
-	// value is optional and could be nil if not present
-	if unstructuredTaint["value"] != nil {
-		taint.Value = unstructuredTaint["value"].(string)
-	}
-	taint.Effect = corev1.TaintEffect(unstructuredTaint["effect"].(string))
-	return taint
+	return nil
 }
 
 // A node group can scale from zero if it can inform about the CPU and memory
@@ -326,9 +290,9 @@ func (r unstructuredScalableResource) InstanceCapacity() (map[corev1.ResourceNam
 	if err != nil {
 		return nil, err
 	}
-	if !gpuCount.IsZero() {
-		// OpenShift does not yet use the gpu-type annotation, and assumes nvidia gpu
-		capacityAnnotations[gpuapis.ResourceNvidiaGPU] = gpuCount
+	gpuType := r.InstanceGPUTypeAnnotation()
+	if !gpuCount.IsZero() && gpuType != "" {
+		capacityAnnotations[corev1.ResourceName(gpuType)] = gpuCount
 	}
 
 	maxPods, err := r.InstanceMaxPodsCapacityAnnotation()

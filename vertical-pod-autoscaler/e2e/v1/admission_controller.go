@@ -894,9 +894,6 @@ var _ = AdmissionControllerE2eDescribe("Admission-controller", ginkgo.Label("FG:
 	})
 
 	ginkgo.It("reloads the webhook leaf and CA certificate", func(ctx ginkgo.SpecContext) {
-		// TODO(maxcao13): We need to carry patch this to skip this on OpenShift
-		ginkgo.Skip("Skipping test on OpenShift because we don't deploy VPA with these certs")
-
 		ginkgo.By("Retrieving alternative certificates")
 		c := f.ClientSet
 		e2eCertsSecret, err := c.CoreV1().Secrets(metav1.NamespaceSystem).Get(ctx, "vpa-e2e-certs", metav1.GetOptions{})

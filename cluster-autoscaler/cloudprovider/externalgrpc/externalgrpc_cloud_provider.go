@@ -30,12 +30,14 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
+
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/externalgrpc/protos"
-	coreoptions "k8s.io/autoscaler/cluster-autoscaler/core/options"
+	"k8s.io/autoscaler/cluster-autoscaler/config"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/errors"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/gpu"
 	klog "k8s.io/klog/v2"
@@ -162,6 +164,9 @@ func (m *pricingModel) NodePrice(node *apiv1.Node, startTime time.Time, endTime 
 		Node:      externalGrpcNode(node),
 		StartTime: &start,
 		EndTime:   &end,
+
+		StartTimestamp: timestamppb.New(startTime),
+		EndTimestamp:   timestamppb.New(endTime),
 	})
 	if err != nil {
 		st, ok := status.FromError(err)
@@ -182,10 +187,20 @@ func (m *pricingModel) PodPrice(pod *apiv1.Pod, startTime time.Time, endTime tim
 	klog.V(5).Infof("Performing gRPC call PricingPodPrice for pod %v", pod.Name)
 	start := metav1.NewTime(startTime)
 	end := metav1.NewTime(endTime)
+
+	podBytes, err := pod.Marshal()
+	if err != nil {
+		return 0, err
+	}
+
 	res, err := m.client.PricingPodPrice(ctx, &protos.PricingPodPriceRequest{
 		Pod:       pod,
 		StartTime: &start,
 		EndTime:   &end,
+
+		PodBytes:       podBytes,
+		StartTimestamp: timestamppb.New(startTime),
+		EndTimestamp:   timestamppb.New(endTime),
 	})
 	if err != nil {
 		st, ok := status.FromError(err)
@@ -318,7 +333,7 @@ func (e *externalGrpcCloudProvider) Refresh() error {
 
 // BuildExternalGrpc builds the externalgrpc cloud provider.
 func BuildExternalGrpc(
-	opts *coreoptions.AutoscalerOptions,
+	opts config.AutoscalingOptions,
 	do cloudprovider.NodeGroupDiscoveryOptions,
 	rl *cloudprovider.ResourceLimiter,
 ) cloudprovider.CloudProvider {

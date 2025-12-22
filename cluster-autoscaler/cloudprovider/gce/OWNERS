@@ -1,0 +1,13 @@
+approvers:
+- towca
+- x13n
+- yaroslava-serdiuk
+- BigDarkClown
+reviewers:
+- towca
+- x13n
+- yaroslava-serdiuk
+- BigDarkClown
+
+labels:
+- area/provider/gce

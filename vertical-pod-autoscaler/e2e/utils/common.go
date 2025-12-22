@@ -20,7 +20,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"time"
 
 	ginkgo "github.com/onsi/ginkgo/v2"
@@ -45,6 +44,8 @@ const (
 
 	// RecommenderDeploymentName is VPA recommender deployment name
 	RecommenderDeploymentName = "vpa-recommender"
+	// RecommenderNamespace is namespace to deploy VPA recommender
+	RecommenderNamespace = "kube-system"
 	// PollInterval is interval for polling
 	PollInterval = 10 * time.Second
 	// PollTimeout is timeout for polling
@@ -55,18 +56,6 @@ const (
 	// DefaultHamsterBackoffLimit is BackoffLimit of hamster app
 	DefaultHamsterBackoffLimit = int32(10)
 )
-
-var (
-	// VpaNamespace is namespace to deploy VPA components.
-	// Can be overridden via VPA_NAMESPACE environment variable.
-	VpaNamespace = "kube-system"
-)
-
-func init() {
-	if ns := os.Getenv("VPA_NAMESPACE"); ns != "" {
-		VpaNamespace = ns
-	}
-}
 
 // HamsterTargetRef is CrossVersionObjectReference of hamster app
 var HamsterTargetRef = &autoscaling.CrossVersionObjectReference{
