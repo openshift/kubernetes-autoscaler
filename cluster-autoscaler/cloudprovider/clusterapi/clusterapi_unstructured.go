@@ -231,7 +231,7 @@ func (r *unstructuredScalableResource) Labels() map[string]string {
 	return allLabels
 }
 
-func (r unstructuredScalableResource) Taints() []apiv1.Taint {
+func (r *unstructuredScalableResource) Taints() []apiv1.Taint {
 	taints := make([]apiv1.Taint, 0)
 
 	newtaints, found, err := unstructured.NestedSlice(r.unstructured.Object, "spec", "template", "spec", "taints")
