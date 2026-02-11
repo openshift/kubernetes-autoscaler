@@ -1,5 +1,5 @@
-//go:build !gce && !aws && !azure && !kubemark && !alicloud && !magnum && !digitalocean && !clusterapi && !huaweicloud && !ionoscloud && !linode && !hetzner && !bizflycloud && !brightbox && !equinixmetal && !oci && !vultr && !tencentcloud && !scaleway && !externalgrpc && !civo && !rancher && !volcengine && !baiducloud && !cherry && !cloudstack && !exoscale && !kamatera && !ovhcloud && !kwok && !utho && !coreweave
-// +build !gce,!aws,!azure,!kubemark,!alicloud,!magnum,!digitalocean,!clusterapi,!huaweicloud,!ionoscloud,!linode,!hetzner,!bizflycloud,!brightbox,!equinixmetal,!oci,!vultr,!tencentcloud,!scaleway,!externalgrpc,!civo,!rancher,!volcengine,!baiducloud,!cherry,!cloudstack,!exoscale,!kamatera,!ovhcloud,!kwok,!utho,!coreweave
+//go:build !gce && !aws && !azure && !kubemark && !alicloud && !magnum && !digitalocean && !clusterapi && !huaweicloud && !ionoscloud && !linode && !hetzner && !bizflycloud && !brightbox && !equinixmetal && !oci && !vultr && !tencentcloud && !scaleway && !externalgrpc && !civo && !rancher && !volcengine && !baiducloud && !cherry && !cloudstack && !exoscale && !kamatera && !ovhcloud && !kwok && !utho && !coreweave && !openshift
+// +build !gce,!aws,!azure,!kubemark,!alicloud,!magnum,!digitalocean,!clusterapi,!huaweicloud,!ionoscloud,!linode,!hetzner,!bizflycloud,!brightbox,!equinixmetal,!oci,!vultr,!tencentcloud,!scaleway,!externalgrpc,!civo,!rancher,!volcengine,!baiducloud,!cherry,!cloudstack,!exoscale,!kamatera,!ovhcloud,!kwok,!utho,!coreweave,!openshift
 
 /*
 Copyright The Kubernetes Authors.
@@ -22,12 +22,14 @@ package router
 import (
 	// Blank import to register a cloudprovider outside main or test package.
 	// This is by design.
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	_ "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/alicloud"
 	_ "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/aws"
 	_ "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/azure"
 	_ "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/baiducloud"
 	_ "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/bizflycloud"
 	_ "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/brightbox"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/builder"
 	_ "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/cherryservers"
 	_ "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/civo"
 	_ "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/cloudstack"
@@ -47,6 +49,7 @@ import (
 	_ "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/linode"
 	_ "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/magnum"
 	_ "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/oci/instancepools"
+	_ "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/openshift"
 	_ "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/ovhcloud"
 	_ "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/rancher"
 	_ "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/scaleway"
@@ -54,11 +57,6 @@ import (
 	_ "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/utho"
 	_ "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/volcengine"
 	_ "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/vultr"
-)
-
-import (
-	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
-	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/builder"
 )
 
 func init() {
