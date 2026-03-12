@@ -43,10 +43,11 @@ const (
 	gpuCountKey = "machine.openshift.io/GPU"
 	maxPodsKey  = "machine.openshift.io/maxPods"
 	// the following constants keep the upstream prefix so that we do not introduce separate values into the openshift api
-	diskCapacityKey = "capacity.cluster-autoscaler.kubernetes.io/ephemeral-disk"
-	labelsKey       = "capacity.cluster-autoscaler.kubernetes.io/labels"
-	gpuTypeKey      = "capacity.cluster-autoscaler.kubernetes.io/gpu-type" // not currently used on OpenShift
-	taintsKey       = "capacity.cluster-autoscaler.kubernetes.io/taints"   // not currently used on OpenShift
+	diskCapacityKey          = "capacity.cluster-autoscaler.kubernetes.io/ephemeral-disk"
+	labelsKey                = "capacity.cluster-autoscaler.kubernetes.io/labels"
+	gpuTypeKey               = "capacity.cluster-autoscaler.kubernetes.io/gpu-type" // not currently used on OpenShift
+	taintsKey                = "capacity.cluster-autoscaler.kubernetes.io/taints"   // not currently used on OpenShift
+	resourcePausedAnnotation = "cluster.x-k8s.io/paused"
 
 	// UnknownArch is used if the Architecture is Unknown
 	UnknownArch SystemArchitecture = ""
