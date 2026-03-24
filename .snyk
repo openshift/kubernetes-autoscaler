@@ -39,3 +39,8 @@ exclude:
     - "cluster-autoscaler/cloudprovider/vultr/**"
     # ensure we don't get aws artifacts in the unpacked sources
     - "**/cluster-autoscaler/cloudprovider/aws/**"
+    # hack and tool scripts are developer-only utilities, not shipped in production images
+    - "hack/**"
+    - "**/hack/**"
+    - "tools/**"
+    - "**/tools/**"
