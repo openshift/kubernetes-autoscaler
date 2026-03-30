@@ -101,6 +101,7 @@ func TestProviderConstructorProperties(t *testing.T) {
 		t.Fatalf("expected 0 GPU types, got %d", got)
 	}
 }
+
 func BenchmarkNodeGroups(b *testing.B) {
 	resourceLimits := cloudprovider.ResourceLimiter{}
 	annotations := map[string]string{
