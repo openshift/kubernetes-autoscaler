@@ -28,7 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 
-	v1 "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/apis/autoscaling.k8s.io/v1"
+	vpaautoscalingv1 "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/apis/autoscaling.k8s.io/v1"
 	vpa_fake "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/client/clientset/versioned/fake"
 	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/recommender/logic"
 	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/recommender/model"
@@ -48,7 +48,7 @@ func TestProcessUpdateVPAsConcurrency(t *testing.T) {
 
 	vpaCount := 1000
 	vpas := make(map[model.VpaID]*model.Vpa, vpaCount)
-	apiObjectVPAs := make([]*v1.VerticalPodAutoscaler, vpaCount)
+	apiObjectVPAs := make([]*vpaautoscalingv1.VerticalPodAutoscaler, vpaCount)
 	fakedClient := make([]runtime.Object, vpaCount)
 
 	for i := range vpaCount {
@@ -97,15 +97,13 @@ func TestProcessUpdateVPAsConcurrency(t *testing.T) {
 	defer cnt.Observe()
 
 	// Create a channel to send VPA updates to workers
-	vpaUpdates := make(chan *v1.VerticalPodAutoscaler, len(apiObjectVPAs))
+	vpaUpdates := make(chan *vpaautoscalingv1.VerticalPodAutoscaler, len(apiObjectVPAs))
 
-	var counter int64
+	var counter atomic.Int64
 
 	// Start workers
 	for range updateWorkerCount {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for observedVpa := range vpaUpdates {
 				key := model.VpaID{
 					Namespace: observedVpa.Namespace,
@@ -117,12 +115,12 @@ func TestProcessUpdateVPAsConcurrency(t *testing.T) {
 					return
 				}
 
-				atomic.AddInt64(&counter, 1)
+				counter.Add(1)
 
 				processVPAUpdate(r, vpa, observedVpa)
 				cnt.Add(vpa)
 			}
-		}()
+		})
 	}
 
 	// Send VPA updates to the workers
@@ -133,7 +131,7 @@ func TestProcessUpdateVPAsConcurrency(t *testing.T) {
 	close(vpaUpdates)
 	wg.Wait()
 
-	assert.Equal(t, int64(vpaCount), atomic.LoadInt64(&counter), "Not all VPAs were processed")
+	assert.Equal(t, int64(vpaCount), counter.Load(), "Not all VPAs were processed")
 }
 
 // TestConcurrentAccessToSameVPA tests multiple goroutines updating the same VPA's conditions and recommendations
@@ -198,7 +196,7 @@ func TestConcurrentAccessToSameVPA(t *testing.T) {
 
 	err = r.clusterState.AddOrUpdateVpa(apiVpa, parsedSelector)
 	assert.NoError(t, err, "Failed to add or update VPA in cluster state")
-	r.clusterState.SetObservedVPAs([]*v1.VerticalPodAutoscaler{apiVpa})
+	r.clusterState.SetObservedVPAs([]*vpaautoscalingv1.VerticalPodAutoscaler{apiVpa})
 
 	// Now simulate multiple workers ALL processing the SAME VPA concurrently
 	// This is the exact scenario that caused the production crash
@@ -206,11 +204,11 @@ func TestConcurrentAccessToSameVPA(t *testing.T) {
 	iterations := 100
 	var wg sync.WaitGroup
 
-	for w := 0; w < workerCount; w++ {
+	for w := range workerCount {
 		wg.Add(1)
 		go func(workerID int) {
 			defer wg.Done()
-			for i := 0; i < iterations; i++ {
+			for range iterations {
 				// Each worker processes the same VPA
 				processVPAUpdate(r, vpa, apiVpa)
 			}
@@ -253,11 +251,11 @@ func TestConcurrentVPAMethodAccess(t *testing.T) {
 	iterations := 100
 	var wg sync.WaitGroup
 
-	for w := 0; w < workerCount; w++ {
+	for w := range workerCount {
 		wg.Add(1)
 		go func(workerID int) {
 			defer wg.Done()
-			for i := 0; i < iterations; i++ {
+			for i := range iterations {
 				// Create a recommendation
 				rec := test.Recommendation().
 					WithContainer(containerNames[i%len(containerNames)]).
@@ -270,7 +268,7 @@ func TestConcurrentVPAMethodAccess(t *testing.T) {
 				_ = vpa.AsStatus()
 				_ = vpa.HasRecommendation()
 				_ = vpa.HasMatchedPods()
-				_ = vpa.ConditionActive(v1.RecommendationProvided)
+				_ = vpa.ConditionActive(vpaautoscalingv1.RecommendationProvided)
 			}
 		}(w)
 	}
@@ -282,7 +280,7 @@ func TestConcurrentVPAMethodAccess(t *testing.T) {
 // by having multiple workers process overlapping sets of VPAs.
 func TestUpdateVPAsRaceCondition(t *testing.T) {
 	vpaCount := 20
-	apiObjectVPAs := make([]*v1.VerticalPodAutoscaler, vpaCount)
+	apiObjectVPAs := make([]*vpaautoscalingv1.VerticalPodAutoscaler, vpaCount)
 	fakedClient := make([]runtime.Object, vpaCount)
 
 	for i := range vpaCount {
@@ -320,12 +318,10 @@ func TestUpdateVPAsRaceCondition(t *testing.T) {
 	iterations := 10
 	var wg sync.WaitGroup
 
-	for i := 0; i < iterations; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range iterations {
+		wg.Go(func() {
 			r.UpdateVPAs()
-		}()
+		})
 	}
 
 	wg.Wait()

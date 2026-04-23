@@ -34,7 +34,6 @@ var (
 )
 
 func TestMergeAggregateContainerState(t *testing.T) {
-
 	containersInitialAggregateState := ContainerNameToAggregateStateMap{}
 	containersInitialAggregateState["test"] = NewAggregateContainerState()
 	vpa := NewVpa(VpaID{}, nil, anyTime)
@@ -221,7 +220,7 @@ func TestUpdateRecommendation(t *testing.T) {
 
 func TestUseAggregationIfMatching(t *testing.T) {
 	modeOff := vpa_types.UpdateModeOff
-	modeAuto := vpa_types.UpdateModeAuto
+	modeRecreate := vpa_types.UpdateModeRecreate
 	scalingModeAuto := vpa_types.ContainerScalingModeAuto
 	scalingModeOff := vpa_types.ContainerScalingModeOff
 	cases := []struct {
@@ -248,11 +247,11 @@ func TestUseAggregationIfMatching(t *testing.T) {
 			name:                        "New matching aggregation",
 			aggregations:                []string{"test-container"},
 			vpaSelector:                 testSelectorStr,
-			updateMode:                  &modeAuto,
+			updateMode:                  &modeRecreate,
 			container:                   "second-container",
 			containerLabels:             testLabels,
 			expectedNeedsRecommendation: map[string]bool{"test-container": true, "second-container": true},
-			expectedUpdateMode:          &modeAuto,
+			expectedUpdateMode:          &modeRecreate,
 		}, {
 			name:                        "Existing matching aggregation",
 			aggregations:                []string{"test-container"},
@@ -266,7 +265,7 @@ func TestUseAggregationIfMatching(t *testing.T) {
 			name:                        "Aggregation not matching",
 			aggregations:                []string{"test-container"},
 			vpaSelector:                 testSelectorStr,
-			updateMode:                  &modeAuto,
+			updateMode:                  &modeRecreate,
 			container:                   "second-container",
 			containerLabels:             map[string]string{"different": "labels"},
 			expectedNeedsRecommendation: map[string]bool{"test-container": true},
@@ -283,11 +282,11 @@ func TestUseAggregationIfMatching(t *testing.T) {
 					},
 				},
 			},
-			updateMode:                  &modeAuto,
+			updateMode:                  &modeRecreate,
 			container:                   "second-container",
 			containerLabels:             testLabels,
 			expectedNeedsRecommendation: map[string]bool{"second-container": false, "test-container": true},
-			expectedUpdateMode:          &modeAuto,
+			expectedUpdateMode:          &modeRecreate,
 		}, {
 			name:         "New matching aggregation with default scaling mode Off",
 			aggregations: []string{"test-container"},
@@ -300,11 +299,11 @@ func TestUseAggregationIfMatching(t *testing.T) {
 					},
 				},
 			},
-			updateMode:                  &modeAuto,
+			updateMode:                  &modeRecreate,
 			container:                   "second-container",
 			containerLabels:             testLabels,
 			expectedNeedsRecommendation: map[string]bool{"second-container": false, "test-container": false},
-			expectedUpdateMode:          &modeAuto,
+			expectedUpdateMode:          &modeRecreate,
 		}, {
 			name:         "New matching aggregation with scaling mode Off with default Auto",
 			aggregations: []string{"test-container"},
@@ -321,11 +320,11 @@ func TestUseAggregationIfMatching(t *testing.T) {
 					},
 				},
 			},
-			updateMode:                  &modeAuto,
+			updateMode:                  &modeRecreate,
 			container:                   "second-container",
 			containerLabels:             testLabels,
 			expectedNeedsRecommendation: map[string]bool{"second-container": false, "test-container": true},
-			expectedUpdateMode:          &modeAuto,
+			expectedUpdateMode:          &modeRecreate,
 		}, {
 			name:         "New matching aggregation with scaling mode Auto with default Off",
 			aggregations: []string{"test-container"},
@@ -342,11 +341,11 @@ func TestUseAggregationIfMatching(t *testing.T) {
 					},
 				},
 			},
-			updateMode:                  &modeAuto,
+			updateMode:                  &modeRecreate,
 			container:                   "second-container",
 			containerLabels:             testLabels,
 			expectedNeedsRecommendation: map[string]bool{"second-container": true, "test-container": false},
-			expectedUpdateMode:          &modeAuto,
+			expectedUpdateMode:          &modeRecreate,
 		},
 	}
 	for _, tc := range cases {

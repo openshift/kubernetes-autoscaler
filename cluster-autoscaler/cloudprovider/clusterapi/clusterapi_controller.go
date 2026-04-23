@@ -611,6 +611,36 @@ func getAPIGroupPreferredVersion(client discovery.DiscoveryInterface, APIGroup s
 	return "", fmt.Errorf("failed to find API group %q", APIGroup)
 }
 
+// getKindPreferredVersion returns the first version in apiGroup that serves the given Kind.
+// In CAPI v1beta2, infrastructureRef only carries apiGroup (no apiVersion), so the
+// group-level preferred version may not match what the infra provider actually serves.
+func getKindPreferredVersion(client discovery.DiscoveryInterface, apiGroup, kind string) (string, error) {
+	groupList, err := client.ServerGroups()
+	if err != nil {
+		return "", fmt.Errorf("failed to get ServerGroups: %v", err)
+	}
+
+	for _, group := range groupList.Groups {
+		if group.Name != apiGroup {
+			continue
+		}
+		for _, v := range group.Versions {
+			resourceList, err := client.ServerResourcesForGroupVersion(v.GroupVersion)
+			if err != nil {
+				return "", fmt.Errorf("failed to get resources for %s: %v", v.GroupVersion, err)
+			}
+			for _, r := range resourceList.APIResources {
+				if r.Kind == kind {
+					return v.Version, nil
+				}
+			}
+		}
+		return "", fmt.Errorf("kind %q not found in any version of group %q", kind, apiGroup)
+	}
+
+	return "", fmt.Errorf("failed to find API group %q", apiGroup)
+}
+
 func (c *machineController) scalableResourceProviderIDs(scalableResource *unstructured.Unstructured) ([]string, error) {
 	if scalableResource.GetKind() == machinePoolKind {
 		return c.findMachinePoolProviderIDs(scalableResource)
@@ -649,7 +679,7 @@ func (c *machineController) findScalableResourceProviderIDs(scalableResource *un
 		// then become failed later. We want to ensure that a failed machine is not counted towards the total
 		// number of nodes in the cluster, for this reason we will detect a failed machine first, regardless
 		// of provider ID, and give it a normalized provider ID with failure message prepended.
-		errorMessage, found, err := unstructured.NestedString(machine.UnstructuredContent(), "status", "errorMessage")
+		failureMessage, found, err := unstructured.NestedString(machine.UnstructuredContent(), "status", "failureMessage")
 		if err != nil {
 			return nil, err
 		}
@@ -660,7 +690,7 @@ func (c *machineController) findScalableResourceProviderIDs(scalableResource *un
 			// Fake ID needs to be recognised later and converted into a machine key.
 			// Use an underscore as a separator between namespace and name as it is not a
 			// valid character within a namespace name.
-			klog.V(4).Infof("Status.ErrorMessage of machine %q is %q", machine.GetName(), errorMessage)
+			klog.V(4).Infof("Status.FailureMessage of machine %q is %q", machine.GetName(), failureMessage)
 			providerIDs = append(providerIDs, createFailedMachineNormalizedProviderID(machine.GetNamespace(), machine.GetName()))
 			continue
 		}

@@ -6,8 +6,15 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "vertical-pod-autoscaler.updater.labels" . | nindent 4 }}
+  {{- with .Values.updater.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 spec:
-  replicas: {{ .Values.updater.replicas }}
+  {{- with .Values.updater.replicas }}
+  replicas: {{ . }}
+  {{- end }}
+  revisionHistoryLimit: {{ .Values.updater.revisionHistoryLimit }}
   selector:
     matchLabels:
       {{- include "vertical-pod-autoscaler.updater.selectorLabels" . | nindent 6 }}
@@ -32,6 +39,21 @@ spec:
       securityContext:
         {{ toYaml . | nindent 8 | trim }}
       {{- end }}
+      {{- with .Values.updater.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      {{- with .Values.updater.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.updater.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.updater.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: updater
           image: {{ include "vertical-pod-autoscaler.updater.image" . }}
@@ -42,16 +64,16 @@ spec:
                 fieldRef:
                   fieldPath: metadata.namespace
           args:
-          - --v=4
-          - --stderrthreshold=info
-          {{- if eq (include "vertical-pod-autoscaler.updater.leaderElectionEnabled" .) "true" }}
-          - --leader-elect=true
-          - --leader-elect-resource-namespace={{ .Values.updater.leaderElection.resourceNamespace | default .Release.Namespace }}
-          - --leader-elect-resource-name={{ .Values.updater.leaderElection.resourceName }}
-          - --leader-elect-lease-duration={{ .Values.updater.leaderElection.leaseDuration }}
-          - --leader-elect-renew-deadline={{ .Values.updater.leaderElection.renewDeadline }}
-          - --leader-elect-retry-period={{ .Values.updater.leaderElection.retryPeriod }}
-          {{- end }}
+            - --v=4
+            - --stderrthreshold=info
+            {{- if eq (include "vertical-pod-autoscaler.updater.leaderElectionEnabled" .) "true" }}
+            - --leader-elect=true
+            - --leader-elect-resource-namespace={{ .Values.updater.leaderElection.resourceNamespace | default .Release.Namespace }}
+            - --leader-elect-resource-name={{ .Values.updater.leaderElection.resourceName }}
+            - --leader-elect-lease-duration={{ .Values.updater.leaderElection.leaseDuration }}
+            - --leader-elect-renew-deadline={{ .Values.updater.leaderElection.renewDeadline }}
+            - --leader-elect-retry-period={{ .Values.updater.leaderElection.retryPeriod }}
+            {{- end }}
           {{- with .Values.updater.extraArgs }}
             {{- toYaml . | nindent 12 }}
           {{- end }}

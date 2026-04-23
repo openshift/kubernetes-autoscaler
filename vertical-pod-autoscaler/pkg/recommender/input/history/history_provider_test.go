@@ -18,7 +18,7 @@ package history
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -53,6 +53,8 @@ func getDefaultPrometheusHistoryProviderConfigForTest() PrometheusHistoryProvide
 		CtrPodNameLabel:        "pod_name",
 		CtrNameLabel:           "name",
 		CadvisorMetricsJobName: "kubernetes-cadvisor",
+		CPUMetricName:          "container_cpu_usage_seconds_total",
+		MemoryMetricName:       "container_memory_working_set_bytes",
 	}
 }
 
@@ -177,7 +179,7 @@ func TestPrometheusError(t *testing.T) {
 		prometheusClient: &mockClient,
 	}
 	mockClient.On("QueryRange", mock.Anything, mock.AnythingOfType("string"), mock.AnythingOfType("v1.Range")).Return().Times(2).Return(
-		nil, fmt.Errorf("bla"))
+		nil, errors.New("bla"))
 	_, err := historyProvider.GetClusterHistory()
 	assert.NotNil(t, err)
 }
@@ -410,6 +412,5 @@ func TestPrometheusAuth(t *testing.T) {
 
 		assert.Nil(t, err)
 		assert.Equal(t, capturedRequest.Header.Get("Authorization"), "Basic cHJvbV91c2VyOnByb21fcGFzc3dvcmQ=") // "prom_user:prom_password"
-
 	})
 }
