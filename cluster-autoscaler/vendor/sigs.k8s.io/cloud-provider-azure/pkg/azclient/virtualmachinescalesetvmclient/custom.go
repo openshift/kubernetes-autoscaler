@@ -22,7 +22,7 @@ import (
 	"sync"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/to"
-	armcompute "github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/compute/armcompute/v5"
+	armcompute "github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/compute/armcompute/v6"
 
 	"sigs.k8s.io/cloud-provider-azure/pkg/azclient/utils"
 )
@@ -117,4 +117,9 @@ func (client *Client) ListVMInstanceView(ctx context.Context, resourceGroupName 
 		result = append(result, nextResult.Value...)
 	}
 	return result, nil
+}
+
+// AttachDetachDataDisks attaches or detaches a list of managed data disks to/from a VM.
+func (client *Client) AttachDetachDataDisks(ctx context.Context, resourceGroupName, VMScaleSetName, instanceID string, parameters armcompute.AttachDetachDataDisksRequest) (*armcompute.VirtualMachineScaleSetVMsClientAttachDetachDataDisksResponse, error) {
+	return utils.NewPollerWrapper(client.VirtualMachineScaleSetVMsClient.BeginAttachDetachDataDisks(ctx, resourceGroupName, VMScaleSetName, instanceID, parameters, nil)).WaitforPollerResp(ctx)
 }

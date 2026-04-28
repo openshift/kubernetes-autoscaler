@@ -13,6 +13,8 @@ commonLabels: {}
 rbac:
   # If `true`, create `ClusterRole` & `ClusterRoleBinding` resources to enable access to the Kubernetes API.
   create: true
+  # extraRules -- Additional rules to add to the ClusterRole
+  extraRules: []
 
 podSecurityContext:
   runAsNonRoot: true
@@ -22,6 +24,10 @@ containerSecurityContext: {}
 
 admissionController:
   enabled: true
+
+  # Annotations to add to the Admission Controller deployment.
+  annotations: {}
+
   image:
     # Image repository for the Admission Controller default container.
     repository: registry.k8s.io/autoscaling/vpa-admission-controller
@@ -50,6 +56,9 @@ admissionController:
   # Number of Admission Controller replicas to create.
   replicas: 2
 
+  # The number of old history revisions to retain to allow rollback.
+  revisionHistoryLimit: 10
+
   # Labels to add to the Admission Controller pod.
   podLabels: {}
 
@@ -75,23 +84,92 @@ admissionController:
   nodeSelector: {}
 
   # Affinity for pod assignment.
-  affinity: {}
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchExpressions:
+            - key: app.kubernetes.io/component
+              operator: In
+              values:
+              - admission-controller
+          topologyKey: kubernetes.io/hostname
 
   # List of node taints to tolerate.
   tolerations: []
 
+  # admissionController.registerWebhook -- Whether to register webhook via the application itself or via Helm. Set to false when using Helm-managed webhook. Security issue: granting delete on mutatingwebhookconfigurations is a potential security risk as it allows the admission controller to remove any webhook configurations.
+  registerWebhook: false
+
+  # admissionController.hostNetwork -- Enable host network for the admission controller pod. Set to true when the pod needs direct access to the host's network namespace. Note: this bypasses Kubernetes network isolation and may cause port conflicts if multiple replicas run on the same node.
+  hostNetwork: false
+
+  certGen:
+    enabled: true
+    image:
+      # admissionController.certGen.image.repository -- An image that contains certgen for creating certificates.
+      repository: registry.k8s.io/ingress-nginx/kube-webhook-certgen
+      # admissionController.certGen.image.tag -- An image tag for the admissionController.certGen.image.repository image.
+      tag: v20231011-8b53cabe0
+      # admissionController.certGen.image.pullPolicy -- The pull policy for the certgen image. Recommend not changing this
+      pullPolicy: IfNotPresent
+       # admissionController.certGen.env -- Additional environment variables to be added to the certgen container. Format is KEY: Value format
+    env: {}
+    # admissionController.certGen.resources -- The resources block for the certgen pod
+    resources: {}
+    # admissionController.certGen.podSecurityContext -- The securityContext block for the certgen pod(s)
+    podSecurityContext:
+      runAsNonRoot: true
+      runAsUser: 65534
+      seccompProfile:
+        type: RuntimeDefault
+    # admissionController.certGen.securityContext -- The securityContext block for the certgen container(s)
+    securityContext:
+      readOnlyRootFilesystem: true
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop:
+          - ALL
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
+
+  mutatingWebhookConfiguration:
+    # admissionController.mutatingWebhookConfiguration.annotations -- Additional annotations for the MutatingWebhookConfiguration
+    annotations: {}
+    # admissionController.mutatingWebhookConfiguration.failurePolicy -- The failurePolicy for the mutating webhook. Allowed values are: Ignore, Fail
+    failurePolicy: Ignore
+    # admissionController.mutatingWebhookConfiguration.namespaceSelector -- The namespaceSelector controls which namespaces are affected by the webhook
+    namespaceSelector: {}
+    # admissionController.mutatingWebhookConfiguration.objectSelector -- The objectSelector can filter objects on e.g. labels
+    objectSelector: {}
+    # admissionController.mutatingWebhookConfiguration.timeoutSeconds -- Sets the amount of time the API server will wait on a response from the webhook service
+    timeoutSeconds: 5
+
+
   tls:
+    # If true, Helm will generate the TLS secret using genCA/genSignedCert
+    create: false
+    # Name of the TLS secret
     secretName: vpa-tls-certs
     caCert: ""
     cert: ""
     key: ""
-    existingSecret: ""
 
   volumes:
     - name: tls-certs
       secret:
         defaultMode: 420
         secretName: vpa-tls-certs
+        items:
+          - key: ca
+            path: caCert.pem
+          - key: cert
+            path: serverCert.pem
+          - key: key
+            path: serverKey.pem
 
   volumeMounts:
     - name: tls-certs
@@ -108,8 +186,16 @@ admissionController:
     maxUnavailable:
     # maxUnavailable: 1
 
+  # name of priorityclass for scheduling
+  priorityClassName:
+  # priorityClassName : high-priority
+
 recommender:
   enabled: true
+
+  # Annotations to add to the Recommender deployment.
+  annotations: {}
+
   image:
     # Image repository for the Recommender default container.
     repository: registry.k8s.io/autoscaling/vpa-recommender
@@ -128,6 +214,9 @@ recommender:
 
   # Number of Recommender replicas to create.
   replicas: 2
+
+  # The number of old history revisions to retain to allow rollback.
+  revisionHistoryLimit: 10
 
   # Labels to add to the Recommender pod.
   podLabels: {}
@@ -154,7 +243,18 @@ recommender:
   nodeSelector: {}
 
   # Affinity rules for scheduling the Recommender.
-  affinity: {}
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchExpressions:
+            - key: app.kubernetes.io/component
+              operator: In
+              values:
+              - recommender
+          topologyKey: kubernetes.io/hostname
 
   # Tolerations for scheduling the Recommender.
   tolerations: []
@@ -186,8 +286,15 @@ recommender:
     maxUnavailable:
     # maxUnavailable: 1
 
+  # name of priorityclass for scheduling
+  priorityClassName:
+  # priorityClassName : high-priority
+
 updater:
   enabled: true
+
+  # Annotations to add to the Updater deployment.
+  annotations: {}
 
   # Additional args for the updater
   extraArgs: []
@@ -203,6 +310,9 @@ updater:
   # Number of Updater replicas to create.
   replicas: 2
 
+  # The number of old history revisions to retain to allow rollback.
+  revisionHistoryLimit: 10
+
   # Labels to add to the Updater pod.
   podLabels: {}
 
@@ -215,7 +325,27 @@ updater:
     labels: {}
     # Annotations to add to the Updater service account.
     annotations: {}
-  
+
+  # Affinity rules for scheduling the Updater.
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchExpressions:
+            - key: app.kubernetes.io/component
+              operator: In
+              values:
+              - updater
+          topologyKey: kubernetes.io/hostname
+
+  # Node selector labels for scheduling the Updater.
+  nodeSelector: {}
+
+  # Tolerations for scheduling the Updater.
+  tolerations: []
+
   # Leader election configuration for the Updater.
   # When running multiple replicas, leader election ensures only one instance is actively processing.
   leaderElection:
@@ -250,3 +380,7 @@ updater:
     # requests:
     #   cpu: 50m
     #   memory: 200Mi
+
+  # name of priorityclass for scheduling
+  priorityClassName:
+  # priorityClassName : high-priority

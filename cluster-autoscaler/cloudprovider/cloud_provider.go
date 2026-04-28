@@ -68,6 +68,8 @@ const (
 	HuaweicloudProviderName = "huaweicloud"
 	// IonoscloudProviderName gets the provider name of ionoscloud
 	IonoscloudProviderName = "ionoscloud"
+	// OpenShiftProviderName gets the provider name of openshift
+	OpenShiftProviderName = "openshift"
 	// OracleCloudProviderName gets the provider name of oci
 	OracleCloudProviderName = "oci"
 	// OVHcloudProviderName gets the provider name of ovhcloud
@@ -370,7 +372,7 @@ func ContainsCustomResources(resources []string) bool {
 	return false
 }
 
-// NodeGroupListToMapById returns a map of node group ID to nonode group
+// NodeGroupListToMapById returns a map of node group ID to node group
 func NodeGroupListToMapById(nodeGroups []NodeGroup) map[string]NodeGroup {
 	result := make(map[string]NodeGroup)
 	for _, nodeGroup := range nodeGroups {

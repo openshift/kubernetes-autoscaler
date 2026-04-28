@@ -1,0 +1,624 @@
+/*
+Copyright 2020 The Kubernetes Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package openshift
+
+import (
+	"fmt"
+	"path"
+	"strings"
+	"sync"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/discovery"
+	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/dynamic/dynamicinformer"
+	"k8s.io/client-go/informers"
+	kubeinformers "k8s.io/client-go/informers"
+	kubeclient "k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/scale"
+	"k8s.io/client-go/tools/cache"
+	klog "k8s.io/klog/v2"
+
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
+)
+
+const (
+	machineProviderIDIndex = "machineProviderIDIndex"
+	nodeProviderIDIndex    = "nodeProviderIDIndex"
+	resourceNameMachine    = "machines"
+	resourceNameMachineSet = "machinesets"
+	deletingMachinePrefix  = "deleting-machine-"
+	failedMachinePrefix    = "failed-machine-"
+	pendingMachinePrefix   = "pending-machine-"
+	machineSetKind         = "MachineSet"
+	machineKind            = "Machine"
+)
+
+// machineController watches for Nodes, Machines, and MachineSets
+// as they are added, updated and deleted on the
+// cluster. Additionally, it adds indices to the node informers to
+// satisfy lookup by node.Spec.ProviderID.
+type machineController struct {
+	// TODO after MAPI works
+	// clusterapiProvider        cloudprovider.CloudProvider
+	workloadInformerFactory   kubeinformers.SharedInformerFactory
+	managementInformerFactory dynamicinformer.DynamicSharedInformerFactory
+	machineInformer           informers.GenericInformer
+	machineSetInformer        informers.GenericInformer
+	nodeInformer              cache.SharedIndexInformer
+	managementClient          dynamic.Interface
+	managementScaleClient     scale.ScalesGetter
+	managementDiscoveryClient discovery.DiscoveryInterface
+	machineSetResource        schema.GroupVersionResource
+	machineResource           schema.GroupVersionResource
+	accessLock                sync.Mutex
+	// stopChannel is used for running the shared informers, and for starting
+	// informers associated with infrastructure machine templates that are
+	// discovered during operation.
+	stopChannel <-chan struct{}
+}
+
+func indexMachineByProviderID(obj interface{}) ([]string, error) {
+	u, ok := obj.(*unstructured.Unstructured)
+	if !ok {
+		return nil, nil
+	}
+
+	providerID, found, err := unstructured.NestedString(u.UnstructuredContent(), "spec", "providerID")
+	if err != nil || !found {
+		return nil, nil
+	}
+	if providerID == "" {
+		return nil, nil
+	}
+
+	return []string{string(normalizedProviderString(providerID))}, nil
+}
+
+func indexNodeByProviderID(obj interface{}) ([]string, error) {
+	if node, ok := obj.(*corev1.Node); ok {
+		if node.Spec.ProviderID != "" {
+			return []string{string(normalizedProviderString(node.Spec.ProviderID))}, nil
+		}
+		return []string{}, nil
+	}
+	return []string{}, nil
+}
+
+// findMachine looks up a machine by the ID which is stored in the index as <namespace>/<name>.
+func (c *machineController) findMachine(id string) (*unstructured.Unstructured, error) {
+	return c.findResourceByKey(c.machineInformer.Informer().GetStore(), id)
+}
+
+func (c *machineController) findMachineSet(id string) (*unstructured.Unstructured, error) {
+	return c.findResourceByKey(c.machineSetInformer.Informer().GetStore(), id)
+}
+
+func (c *machineController) findResourceByKey(store cache.Store, key string) (*unstructured.Unstructured, error) {
+	item, exists, err := store.GetByKey(key)
+	if err != nil {
+		return nil, err
+	}
+
+	if !exists {
+		return nil, nil
+	}
+
+	u, ok := item.(*unstructured.Unstructured)
+	if !ok {
+		return nil, fmt.Errorf("internal error; unexpected type: %T", item)
+	}
+
+	return u.DeepCopy(), nil
+}
+
+// findMachineOwner returns the machine set owner for machine, or nil
+// if there is no owner. A DeepCopy() of the object is returned on
+// success.
+func (c *machineController) findMachineOwner(machine *unstructured.Unstructured) (*unstructured.Unstructured, error) {
+	machineOwnerRef := machineOwnerRef(machine)
+	if machineOwnerRef == nil {
+		return nil, nil
+	}
+
+	return c.findMachineSet(fmt.Sprintf("%s/%s", machine.GetNamespace(), machineOwnerRef.Name))
+}
+
+// run starts shared informers and waits for the informer cache to
+// synchronize.
+func (c *machineController) run() error {
+	c.workloadInformerFactory.Start(c.stopChannel)
+	c.managementInformerFactory.Start(c.stopChannel)
+
+	syncFuncs := []cache.InformerSynced{
+		c.nodeInformer.HasSynced,
+		c.machineInformer.Informer().HasSynced,
+		c.machineSetInformer.Informer().HasSynced,
+	}
+
+	klog.V(4).Infof("waiting for caches to sync")
+	if !cache.WaitForCacheSync(c.stopChannel, syncFuncs...) {
+		return fmt.Errorf("syncing caches failed")
+	}
+
+	return nil
+}
+
+func (c *machineController) findScalableResourceByProviderID(providerID normalizedProviderID) (*unstructured.Unstructured, error) {
+	// Check for a MachineSet.
+	machine, err := c.findMachineByProviderID(providerID)
+	if err != nil {
+		return nil, err
+	}
+	if machine == nil {
+		return nil, nil
+	}
+	machineSet, err := c.findMachineOwner(machine)
+	if err != nil {
+		return nil, err
+	}
+	if machineSet == nil {
+		return nil, nil
+	}
+
+	return machineSet, nil
+}
+
+// findMachineByProviderID finds machine matching providerID. A
+// DeepCopy() of the object is returned on success.
+func (c *machineController) findMachineByProviderID(providerID normalizedProviderID) (*unstructured.Unstructured, error) {
+	objs, err := c.machineInformer.Informer().GetIndexer().ByIndex(machineProviderIDIndex, string(providerID))
+	if err != nil {
+		return nil, err
+	}
+
+	switch n := len(objs); {
+	case n > 1:
+		return nil, fmt.Errorf("internal error; expected len==1, got %v", n)
+	case n == 1:
+		u, ok := objs[0].(*unstructured.Unstructured)
+		if !ok {
+			return nil, fmt.Errorf("internal error; unexpected type %T", objs[0])
+		}
+		return u.DeepCopy(), nil
+	}
+
+	if isDeletingMachineProviderID(providerID) {
+		return c.findMachine(machineKeyFromDeletingMachineProviderID(providerID))
+	}
+	if isFailedMachineProviderID(providerID) {
+		return c.findMachine(machineKeyFromFailedProviderID(providerID))
+	}
+	if isPendingMachineProviderID(providerID) {
+		return c.findMachine(machineKeyFromPendingMachineProviderID(providerID))
+	}
+
+	// If the machine object has no providerID--maybe actuator
+	// does not set this value (e.g., OpenStack)--then first
+	// lookup the node using ProviderID. If that is successful
+	// then the machine can be found using the annotation (should
+	// it exist).
+	node, err := c.findNodeByProviderID(providerID)
+	if err != nil {
+		return nil, err
+	}
+	if node == nil {
+		return nil, nil
+	}
+
+	machineID := node.Annotations[machineAnnotationKey]
+	ns := node.Annotations[clusterNamespaceAnnotationKey]
+	return c.findMachine(path.Join(ns, machineID))
+}
+
+func createDeletingMachineNormalizedProviderID(namespace, name string) string {
+	return fmt.Sprintf("%s%s_%s", deletingMachinePrefix, namespace, name)
+}
+
+func isDeletingMachineProviderID(providerID normalizedProviderID) bool {
+	return strings.HasPrefix(string(providerID), deletingMachinePrefix)
+}
+
+func machineKeyFromDeletingMachineProviderID(providerID normalizedProviderID) string {
+	namespaceName := strings.TrimPrefix(string(providerID), deletingMachinePrefix)
+	return strings.Replace(namespaceName, "_", "/", 1)
+}
+
+// createPendingMachineProviderID creates a providerID for a machine that is pending
+func createPendingMachineProviderID(namespace, name string) string {
+	return fmt.Sprintf("%s%s_%s", pendingMachinePrefix, namespace, name)
+}
+
+func isPendingMachineProviderID(providerID normalizedProviderID) bool {
+	return strings.HasPrefix(string(providerID), pendingMachinePrefix)
+}
+
+func machineKeyFromPendingMachineProviderID(providerID normalizedProviderID) string {
+	namespaceName := strings.TrimPrefix(string(providerID), pendingMachinePrefix)
+	return strings.Replace(namespaceName, "_", "/", 1)
+}
+
+func createFailedMachineNormalizedProviderID(namespace, name string) string {
+	return fmt.Sprintf("%s%s_%s", failedMachinePrefix, namespace, name)
+}
+
+func isFailedMachineProviderID(providerID normalizedProviderID) bool {
+	return strings.HasPrefix(string(providerID), failedMachinePrefix)
+}
+
+func machineKeyFromFailedProviderID(providerID normalizedProviderID) string {
+	namespaceName := strings.TrimPrefix(string(providerID), failedMachinePrefix)
+	return strings.Replace(namespaceName, "_", "/", 1)
+}
+
+// isProviderIDNormalized determines whether a node's providerID is the standard
+// providerID assigned by the cloud provider, or if it has
+// been modified by the CAS CAPI provider to indicate deleting, pending, or failed
+func isProviderIDNormalized(providerID normalizedProviderID) bool {
+	return !isDeletingMachineProviderID(providerID) &&
+		!isPendingMachineProviderID(providerID) &&
+		!isFailedMachineProviderID(providerID)
+}
+
+// findNodeByNodeName finds the Node object keyed by name.. Returns
+// nil if it cannot be found. A DeepCopy() of the object is returned
+// on success.
+func (c *machineController) findNodeByNodeName(name string) (*corev1.Node, error) {
+	item, exists, err := c.nodeInformer.GetIndexer().GetByKey(name)
+	if err != nil {
+		return nil, err
+	}
+
+	if !exists {
+		return nil, nil
+	}
+
+	node, ok := item.(*corev1.Node)
+	if !ok {
+		return nil, fmt.Errorf("internal error; unexpected type %T", item)
+	}
+
+	return node.DeepCopy(), nil
+}
+
+// newMachineController constructs a controller that watches Nodes,
+// Machines, and MachineSets as they are added, updated, and deleted on
+// the cluster.
+func newMachineController(
+	// TODO after MAPI works
+	// clusterapiProvider cloudprovider.CloudProvider,
+	managementClient dynamic.Interface,
+	workloadClient kubeclient.Interface,
+	managementDiscoveryClient discovery.DiscoveryInterface,
+	managementScaleClient scale.ScalesGetter,
+	discoveryOpts cloudprovider.NodeGroupDiscoveryOptions,
+	stopChannel chan struct{},
+) (*machineController, error) {
+	workloadInformerFactory := kubeinformers.NewSharedInformerFactory(workloadClient, 0)
+
+	managementInformerFactory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(managementClient, 0, machineAPINamespace, nil)
+
+	klog.Infof("Using version %q for API group %q", MAPIVersion, MAPIGroup)
+
+	gvrMachineSet := schema.GroupVersionResource{
+		Group:    MAPIGroup,
+		Version:  MAPIVersion,
+		Resource: resourceNameMachineSet,
+	}
+	machineSetInformer := managementInformerFactory.ForResource(gvrMachineSet)
+	if _, err := machineSetInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{}); err != nil {
+		return nil, fmt.Errorf("failed to add event handler for resource %q: %v", resourceNameMachineSet, err)
+	}
+
+	gvrMachine := schema.GroupVersionResource{
+		Group:    MAPIGroup,
+		Version:  MAPIVersion,
+		Resource: resourceNameMachine,
+	}
+	machineInformer := managementInformerFactory.ForResource(gvrMachine)
+	if _, err := machineInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{}); err != nil {
+		return nil, fmt.Errorf("failed to add event handler for resource %q: %v", resourceNameMachine, err)
+	}
+
+	nodeInformer := workloadInformerFactory.Core().V1().Nodes().Informer()
+	if _, err := nodeInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{}); err != nil {
+		return nil, fmt.Errorf("failed to add event handler for resource %q: %v", "nodes", err)
+	}
+
+	if err := machineInformer.Informer().GetIndexer().AddIndexers(cache.Indexers{
+		machineProviderIDIndex: indexMachineByProviderID,
+	}); err != nil {
+		return nil, fmt.Errorf("cannot add machine indexer: %v", err)
+	}
+
+	if err := nodeInformer.GetIndexer().AddIndexers(cache.Indexers{
+		nodeProviderIDIndex: indexNodeByProviderID,
+	}); err != nil {
+		return nil, fmt.Errorf("cannot add node indexer: %v", err)
+	}
+
+	return &machineController{
+		// TODO after MAPI works
+		// clusterapiProvider:          clusterapiProvider,
+		workloadInformerFactory:   workloadInformerFactory,
+		managementInformerFactory: managementInformerFactory,
+		machineInformer:           machineInformer,
+		machineSetInformer:        machineSetInformer,
+		nodeInformer:              nodeInformer,
+		managementClient:          managementClient,
+		managementScaleClient:     managementScaleClient,
+		managementDiscoveryClient: managementDiscoveryClient,
+		machineSetResource:        gvrMachineSet,
+		machineResource:           gvrMachine,
+		stopChannel:               stopChannel,
+	}, nil
+}
+
+func (c *machineController) findScalableResourceProviderIDs(scalableResource *unstructured.Unstructured) ([]string, error) {
+	var providerIDs []string
+
+	machines, err := c.listMachinesForScalableResource(scalableResource)
+	if err != nil {
+		return nil, fmt.Errorf("error listing machines: %v", err)
+	}
+
+	for _, machine := range machines {
+		// Failed Machines
+		// In some cases it is possible for a machine to have acquired a provider ID from the infrastructure and
+		// then become failed later. We want to ensure that a failed machine is not counted towards the total
+		// number of nodes in the cluster, for this reason we will detect a failed machine first, regardless
+		// of provider ID, and give it a normalized provider ID with failure message prepended.
+		errorMessage, found, err := unstructured.NestedString(machine.UnstructuredContent(), "status", "errorMessage")
+		if err != nil {
+			return nil, err
+		}
+
+		if found {
+			// Provide a normalized ID to allow the autoscaler to track machines that will never
+			// become nodes and mark the nodegroup unhealthy after maxNodeProvisionTime.
+			// Fake ID needs to be recognised later and converted into a machine key.
+			// Use an underscore as a separator between namespace and name as it is not a
+			// valid character within a namespace name.
+			klog.V(4).Infof("Status.ErrorMessage of machine %q is %q", machine.GetName(), errorMessage)
+			providerIDs = append(providerIDs, createFailedMachineNormalizedProviderID(machine.GetNamespace(), machine.GetName()))
+			continue
+		}
+
+		// Deleting Machines
+		// Machines that are in deleting state should be identified so that in scenarios where the core
+		// autoscaler would like to adjust the size of a node group, we can give a proper count and
+		// be able to filter machines in that state, regardless of whether they are still active nodes in the cluster.
+		// We give these machines normalized provider IDs to aid in the filtering process.
+		if !machine.GetDeletionTimestamp().IsZero() {
+			klog.V(4).Infof("Machine %q has a non-zero deletion timestamp", machine.GetName())
+			providerIDs = append(providerIDs, createDeletingMachineNormalizedProviderID(machine.GetNamespace(), machine.GetName()))
+			continue
+		}
+
+		// Pending Machines
+		// Machines that do not yet have an associated node reference are considering to be pending. These
+		// nodes need to be filtered so that in a case where a machine is not becoming a node, or the instance
+		// lifecycle has changed during provisioning (eg spot instance going away), or the core autoscaler has
+		// decided that the node is not needed.
+		// Look for a node reference in the status, a machine without a node reference, and that is also not
+		// in failed or deleting state, has not yet become a node, and should be marked as pending.
+		// We give these machines normalized provider IDs to aid in the filtering process.
+		_, found, err = unstructured.NestedFieldCopy(machine.UnstructuredContent(), "status", "nodeRef")
+		if err != nil {
+			return nil, err
+		}
+
+		if !found {
+			klog.V(4).Infof("Status.NodeRef of machine %q is currently nil", machine.GetName())
+			providerIDs = append(providerIDs, createPendingMachineProviderID(machine.GetNamespace(), machine.GetName()))
+			continue
+		}
+
+		// Running Machines
+		// We have filtered out the machines in failed, deleting, and pending states. We now check the provider
+		// ID and potentially the node reference details. It is ok for a machine not to have a provider ID as
+		// not all CAPI provider implement this field, but a machine in running state should have a valid
+		// node reference. If a provider ID is present, we add that to the list as we know it is not failed,
+		// deleting, or pending. If an empty provider ID is present, we check the node details to ensure that
+		// the machine references a valid node.
+		providerID, found, err := unstructured.NestedString(machine.UnstructuredContent(), "spec", "providerID")
+		if err != nil {
+			return nil, err
+		}
+
+		if found {
+			if providerID != "" {
+				// Machine has a provider ID, add it to the list
+				providerIDs = append(providerIDs, providerID)
+				continue
+			}
+		}
+
+		klog.Warningf("Machine %q has no providerID", machine.GetName())
+
+		// Begin checking to determine if the node reference is valid
+		nodeRefKind, found, err := unstructured.NestedString(machine.UnstructuredContent(), "status", "nodeRef", "kind")
+		if err != nil {
+			return nil, err
+		}
+
+		if found && nodeRefKind != "Node" {
+			klog.Errorf("Status.NodeRef of machine %q does not reference a node (rather %q)", machine.GetName(), nodeRefKind)
+			continue
+		}
+
+		nodeRefName, found, err := unstructured.NestedString(machine.UnstructuredContent(), "status", "nodeRef", "name")
+		if err != nil {
+			return nil, err
+		}
+
+		if found {
+			node, err := c.findNodeByNodeName(nodeRefName)
+			if err != nil {
+				return nil, fmt.Errorf("unknown node %q", nodeRefName)
+			}
+
+			// A node has been found that corresponds to this machine, since we know that this machine has
+			// an empty provider ID, we add the provider ID from the node to the list.
+			if node != nil {
+				providerIDs = append(providerIDs, node.Spec.ProviderID)
+			}
+		}
+	}
+
+	klog.V(4).Infof("nodegroup %s has %d nodes: %v", scalableResource.GetName(), len(providerIDs), providerIDs)
+	return providerIDs, nil
+}
+
+func (c *machineController) nodeGroups() ([]cloudprovider.NodeGroup, error) {
+	scalableResources, err := c.listScalableResources()
+	if err != nil {
+		return nil, err
+	}
+
+	nodegroups := make([]cloudprovider.NodeGroup, 0, len(scalableResources))
+
+	for _, r := range scalableResources {
+		ng, err := newNodeGroupFromScalableResource(c, r)
+		if err != nil {
+			return nil, err
+		}
+
+		if ng != nil {
+			nodegroups = append(nodegroups, ng)
+			klog.V(4).Infof("discovered node group: %s", ng.Debug())
+		}
+	}
+	return nodegroups, nil
+}
+
+func (c *machineController) nodeGroupForNode(node *corev1.Node) (*nodegroup, error) {
+	scalableResource, err := c.findScalableResourceByProviderID(normalizedProviderString(node.Spec.ProviderID))
+	if err != nil {
+		return nil, err
+	}
+	if scalableResource == nil {
+		return nil, nil
+	}
+
+	nodegroup, err := newNodeGroupFromScalableResource(c, scalableResource)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build nodegroup for node %q: %v", node.Name, err)
+	}
+
+	// the nodegroup will be nil if it doesn't meet the scaling requirements
+	if nodegroup == nil {
+		return nil, nil
+	}
+
+	klog.V(4).Infof("node %q is in nodegroup %q", node.Name, nodegroup.Id())
+	return nodegroup, nil
+}
+
+// findNodeByProviderID find the Node object keyed by provideID.
+// Returns nil if it cannot be found. A DeepCopy() of the object is
+// returned on success.
+func (c *machineController) findNodeByProviderID(providerID normalizedProviderID) (*corev1.Node, error) {
+	objs, err := c.nodeInformer.GetIndexer().ByIndex(nodeProviderIDIndex, string(providerID))
+	if err != nil {
+		return nil, err
+	}
+
+	switch n := len(objs); {
+	case n == 0:
+		return nil, nil
+	case n > 1:
+		return nil, fmt.Errorf("internal error; expected len==1, got %v", n)
+	}
+
+	node, ok := objs[0].(*corev1.Node)
+	if !ok {
+		return nil, fmt.Errorf("internal error; unexpected type %T", objs[0])
+	}
+
+	return node.DeepCopy(), nil
+}
+
+func (c *machineController) listMachinesForScalableResource(r *unstructured.Unstructured) ([]*unstructured.Unstructured, error) {
+	switch r.GetKind() {
+	case machineSetKind:
+		unstructuredSelector, found, err := unstructured.NestedMap(r.UnstructuredContent(), "spec", "selector")
+		if err != nil {
+			return nil, err
+		}
+
+		if !found {
+			return nil, fmt.Errorf("expected field spec.selector on scalable resource type")
+		}
+
+		labelSelector := &metav1.LabelSelector{}
+		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(unstructuredSelector, labelSelector); err != nil {
+			return nil, err
+		}
+
+		selector, err := metav1.LabelSelectorAsSelector(labelSelector)
+		if err != nil {
+			return nil, err
+		}
+
+		return listResources(c.machineInformer.Lister().ByNamespace(r.GetNamespace()), clusterNameFromResource(r), selector)
+	default:
+		return nil, fmt.Errorf("unknown scalable resource kind %s", r.GetKind())
+	}
+}
+
+func (c *machineController) listScalableResources() ([]*unstructured.Unstructured, error) {
+	scalableResources, err := c.listResources(c.machineSetInformer.Lister())
+	if err != nil {
+		return nil, err
+	}
+
+	return scalableResources, nil
+}
+
+func (c *machineController) listResources(lister cache.GenericLister) ([]*unstructured.Unstructured, error) {
+	return listResources(lister.ByNamespace(machineAPINamespace), "", labels.Everything())
+}
+
+func listResources(lister cache.GenericNamespaceLister, clusterName string, selector labels.Selector) ([]*unstructured.Unstructured, error) {
+	objs, err := lister.List(selector)
+	if err != nil {
+		return nil, err
+	}
+
+	results := make([]*unstructured.Unstructured, 0, len(objs))
+	for _, x := range objs {
+		u, ok := x.(*unstructured.Unstructured)
+		if !ok {
+			return nil, fmt.Errorf("expected unstructured resource from lister, not %T", x)
+		}
+
+		// if clusterName is not empty and the clusterName does not match the resource, do not return it as part of the results
+		if clusterName != "" && clusterNameFromResource(u) != clusterName {
+			continue
+		}
+
+		results = append(results, u.DeepCopy())
+	}
+
+	return results, nil
+}

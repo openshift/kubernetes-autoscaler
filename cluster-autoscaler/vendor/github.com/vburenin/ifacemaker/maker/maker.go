@@ -6,8 +6,8 @@ import (
 	"go/doc"
 	"go/parser"
 	"go/token"
-	"io/ioutil"
 	"log"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -63,7 +63,6 @@ func GetTypeDeclarationName(decl ast.Decl) string {
 			return ""
 		}
 		typeName = typeSpec.Name.Name
-		break // assuming first value is the good one.
 	}
 
 	return typeName
@@ -118,6 +117,15 @@ func GetReceiverType(fd *ast.FuncDecl) (ast.Expr, error) {
 	return fd.Recv.List[0].Type, nil
 }
 
+// reMatchTypename matches any of the following to extract the <type>:
+//
+//	*<type>
+//	[]<type>
+//	[]*<type>
+//	map[<keyType>]<type>
+//	map[<keyType>]*<type>
+var reMatchTypename = regexp.MustCompile(`^(\[\]|\*|\[\]\*|map\[\w+\]|map\[\w+\]\*)(\w+)$`)
+
 // FormatFieldList takes in the source code
 // as a []byte and a FuncDecl parameters or
 // return values as a FieldList.
@@ -136,12 +144,26 @@ func FormatFieldList(src []byte, fl *ast.FieldList, pkgName string, declaredType
 			names[i] = n.Name
 		}
 		t := string(src[l.Type.Pos()-1 : l.Type.End()-1])
+		t2 := t
+		// Try to match <modifier><type>. If matched variable `match` will look like this for t=="[]Category":
+		// match[0][0] = "[]Category"
+		// match[0][1] = "[]"
+		// match[0][2] = "Category"
+		match := reMatchTypename.FindAllStringSubmatch(t, -1)
+		if match != nil {
+			// Set `t` so it will compare correctly with `dt.Name` below
+			t2 = match[0][2]
+		}
 
-		if declaredTypes != nil {
-			for _, dt := range declaredTypes {
-				if t == dt.Name && pkgName != dt.Package {
-					// The type of this field is the same as one declared in the source package,
-					// and the source package is not the same as the destination package.
+		for _, dt := range declaredTypes {
+			if t2 == dt.Name && pkgName != dt.Package {
+				// The type of this field is the same as one declared in the source package,
+				// and the source package is not the same as the destination package.
+				if match != nil {
+					// Add back `*`, `[]`, `[]*`, `map[<type>]` or `map[<type>]*` if there was a
+					// match.
+					t = match[0][1] + dt.Fullname()
+				} else {
 					t = dt.Fullname()
 				}
 			}
@@ -196,7 +218,11 @@ func MakeInterface(comment, pkgName, ifaceName, ifaceComment string, methods []s
 		"",
 	)
 	if len(ifaceComment) > 0 {
-		output = append(output, fmt.Sprintf("// %s", strings.Replace(ifaceComment, "\n", "\n// ", -1)))
+		prefix := "// "
+		if strings.HasPrefix(ifaceComment, "go:generate") {
+			prefix = "//"
+		}
+		output = append(output, fmt.Sprintf("%s%s", prefix, strings.Replace(ifaceComment, "\n", "\n// ", -1)))
 	}
 	output = append(output, fmt.Sprintf("type %s interface {", ifaceName))
 	output = append(output, methods...)
@@ -241,7 +267,7 @@ func ParseDeclaredTypes(src []byte) (declaredTypes []declaredType) {
 // not, the imports not used will be removed later using the
 // 'imports' pkg If anything goes wrong, this method will
 // fatally stop the execution
-func ParseStruct(src []byte, structName string, copyDocs bool, copyTypeDocs bool, pkgName string, declaredTypes []declaredType, importModule string) (methods []Method, imports []string, typeDoc string) {
+func ParseStruct(src []byte, structName string, copyDocs bool, copyTypeDocs bool, pkgName string, declaredTypes []declaredType, importModule string, withNotExported bool) (methods []Method, imports []string, typeDoc string) {
 	fset := token.NewFileSet()
 	a, err := parser.ParseFile(fset, "", src, parser.ParseComments)
 	if err != nil {
@@ -252,7 +278,7 @@ func ParseStruct(src []byte, structName string, copyDocs bool, copyTypeDocs bool
 		if i.Name != nil {
 			imports = append(imports, fmt.Sprintf("%s %s", i.Name.String(), i.Path.Value))
 		} else {
-			imports = append(imports, fmt.Sprintf("%s", i.Path.Value))
+			imports = append(imports, i.Path.Value)
 		}
 	}
 
@@ -262,7 +288,7 @@ func ParseStruct(src []byte, structName string, copyDocs bool, copyTypeDocs bool
 
 	for _, d := range a.Decls {
 		if a, fd := GetReceiverTypeName(src, d); a == structName {
-			if !fd.Name.IsExported() {
+			if !withNotExported && !fd.Name.IsExported() {
 				continue
 			}
 			params := FormatFieldList(src, fd.Type.Params, pkgName, declaredTypes)
@@ -298,16 +324,30 @@ func ParseStruct(src []byte, structName string, copyDocs bool, copyTypeDocs bool
 
 // MakeOptions contains options for the Make function.
 type MakeOptions struct {
-	Files          []string
-	StructType     string
-	Comment        string
-	PkgName        string
-	IfaceName      string
-	IfaceComment   string
-	ImportModule   string
-	CopyDocs       bool
-	CopyTypeDoc    bool
-	ExcludeMethods []string
+	Files           []string
+	StructType      string
+	Comment         string
+	PkgName         string
+	IfaceName       string
+	IfaceComment    string
+	ImportModule    string
+	CopyDocs        bool
+	CopyTypeDoc     bool
+	ExcludeMethods  []string
+	WithNotExported bool
+}
+
+// validateStructType checks input struct type against the parsed declared
+// types and returns true when present
+func validateStructType(types []declaredType, stType string) bool {
+	for _, v := range types {
+		if strings.EqualFold(v.Name, stType) {
+			return true
+		}
+
+	}
+	return false
+
 }
 
 func Make(options MakeOptions) ([]byte, error) {
@@ -325,17 +365,26 @@ func Make(options MakeOptions) ([]byte, error) {
 
 	// First pass on all files to find declared types
 	for _, f := range options.Files {
-		src, err := ioutil.ReadFile(f)
+		b, err := os.ReadFile(f)
 		if err != nil {
-			return nil, err
+			return []byte{}, err
 		}
-		types := ParseDeclaredTypes(src)
+		types := ParseDeclaredTypes(b)
+
+		// Track if we've seen the input Struct type
 		for _, t := range types {
 			if _, ok := tset[t.Fullname()]; !ok {
 				allDeclaredTypes = append(allDeclaredTypes, t)
 				tset[t.Fullname()] = struct{}{}
 			}
 		}
+	}
+
+	// Validate at least one file contains the input struct Type
+	if !validateStructType(allDeclaredTypes, options.StructType) {
+		return []byte{},
+			fmt.Errorf("%q structtype not found in input files",
+				options.StructType)
 	}
 
 	excludedMethods := make(map[string]struct{}, len(options.ExcludeMethods))
@@ -345,11 +394,11 @@ func Make(options MakeOptions) ([]byte, error) {
 
 	// Second pass to build up the interface
 	for _, f := range options.Files {
-		src, err := ioutil.ReadFile(f)
+		src, err := os.ReadFile(f)
 		if err != nil {
 			return nil, err
 		}
-		methods, imports, parsedTypeDoc := ParseStruct(src, options.StructType, options.CopyDocs, options.CopyTypeDoc, options.PkgName, allDeclaredTypes, options.ImportModule)
+		methods, imports, parsedTypeDoc := ParseStruct(src, options.StructType, options.CopyDocs, options.CopyTypeDoc, options.PkgName, allDeclaredTypes, options.ImportModule, options.WithNotExported)
 		for _, m := range methods {
 			if _, ok := excludedMethods[m.Name]; ok {
 				continue
