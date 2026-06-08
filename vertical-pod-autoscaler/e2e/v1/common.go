@@ -216,7 +216,7 @@ func SetupHamsterContainer(cpu, memory string) apiv1.Container {
 
 	return apiv1.Container{
 		Name:  "hamster",
-		Image: "registry.k8s.io/e2e-test-images/busybox:1.37.0-2",
+		Image: "registry.k8s.io/ubuntu-slim:0.14",
 		Resources: apiv1.ResourceRequirements{
 			Requests: apiv1.ResourceList{
 				apiv1.ResourceCPU:    cpuQuantity,

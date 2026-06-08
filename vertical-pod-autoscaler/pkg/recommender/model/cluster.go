@@ -306,8 +306,8 @@ func (cluster *clusterState) AddOrUpdateVpa(apiObject *vpa_types.VerticalPodAuto
 	}
 	vpa.TargetRef = apiObject.Spec.TargetRef
 	vpa.Annotations = annotationsMap
-	vpa.SetConditionsMap(conditionsMap)
-	vpa.SetRecommendationDirect(currentRecommendation)
+	vpa.Conditions = conditionsMap
+	vpa.Recommendation = currentRecommendation
 	vpa.SetUpdateMode(apiObject.Spec.UpdatePolicy)
 	vpa.SetResourcePolicy(apiObject.Spec.ResourcePolicy)
 	vpa.SetAPIVersion(apiObject.GetObjectKind().GroupVersionKind().Version)
@@ -473,10 +473,7 @@ func (cluster *clusterState) getContributiveAggregateStateKeys(ctx context.Conte
 func (cluster *clusterState) RecordRecommendation(vpa *Vpa, now time.Time) error {
 	cluster.mutex.Lock()
 	defer cluster.mutex.Unlock()
-	// TODO(jkyros): Today the VPA critical sections don't try to grab the cluster mutex, but
-	// if anyone ever changes it so they do we'd deadlock. This makes me a little nervous, but
-	// if I don't fix this one, we'll fail the race tests
-	if vpa.HasRecommendation() {
+	if vpa.Recommendation != nil && len(vpa.Recommendation.ContainerRecommendations) > 0 {
 		delete(cluster.emptyVPAs, vpa.ID)
 		return nil
 	}

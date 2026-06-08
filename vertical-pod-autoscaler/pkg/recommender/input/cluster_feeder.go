@@ -243,10 +243,6 @@ func (feeder *clusterStateFeeder) InitFromHistoryProvider(historyProvider histor
 						ContainerUsageSample: sample,
 						Container:            containerID,
 					}); err != nil {
-					// Ignore missing "POD" containers returned by prometheus adapter
-					if _, isKeyError := err.(model.KeyError); isKeyError && containerName == "POD" {
-						continue
-					}
 					klog.V(0).InfoS("Failed to add sample", "sample", sample, "error", err)
 				}
 			}
@@ -448,9 +444,9 @@ func (feeder *clusterStateFeeder) LoadVPAs(ctx context.Context) {
 
 			for _, condition := range conditions {
 				if condition.delete {
-					feeder.clusterState.VPAs()[vpaID].DeleteCondition(condition.conditionType)
+					delete(feeder.clusterState.VPAs()[vpaID].Conditions, condition.conditionType)
 				} else {
-					feeder.clusterState.VPAs()[vpaID].SetCondition(condition.conditionType, true, "", condition.message)
+					feeder.clusterState.VPAs()[vpaID].Conditions.Set(condition.conditionType, true, "", condition.message)
 				}
 			}
 		}
@@ -521,7 +517,7 @@ func (feeder *clusterStateFeeder) LoadRealTimeMetrics(ctx context.Context) {
 		for _, sample := range newContainerUsageSamplesWithKey(containerMetrics) {
 			if err := feeder.clusterState.AddSample(sample); err != nil {
 				// Not all pod states are tracked in memory saver mode.
-				if _, isKeyError := err.(model.KeyError); isKeyError && (feeder.memorySaveMode || sample.Container.ContainerName == "POD") {
+				if _, isKeyError := err.(model.KeyError); isKeyError && feeder.memorySaveMode {
 					continue
 				}
 				klog.V(0).InfoS("Error adding metric sample", "sample", sample, "error", err)
