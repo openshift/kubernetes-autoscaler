@@ -18,6 +18,7 @@ package input
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -25,7 +26,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/mock/gomock"
 	autoscalingv1 "k8s.io/api/autoscaling/v1"
-	v1 "k8s.io/api/core/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -105,8 +106,26 @@ func (cs *fakeClusterState) AddSample(sample *model.ContainerUsageSampleWithKey)
 	return nil
 }
 
-func (cs *fakeClusterState) AddOrUpdatePod(podID model.PodID, _ labels.Set, _ v1.PodPhase) {
+func (cs *fakeClusterState) AddOrUpdatePod(podID model.PodID, _ labels.Set, _ corev1.PodPhase) {
 	cs.addedPods = append(cs.addedPods, podID)
+	if cs.stubbedPods == nil {
+		cs.stubbedPods = make(map[model.PodID]*model.PodState)
+	}
+	if cs.stubbedPods[podID] == nil {
+		cs.stubbedPods[podID] = &model.PodState{
+			ID:         podID,
+			Containers: make(map[string]*model.ContainerState),
+		}
+	}
+}
+
+func (cs *fakeClusterState) SetInitContainers(podID model.PodID, initContainers []string) error {
+	pod, podExists := cs.stubbedPods[podID]
+	if !podExists || pod == nil {
+		return model.NewKeyError(podID)
+	}
+	pod.InitContainers = append([]string(nil), initContainers...)
+	return nil
 }
 
 func (cs *fakeClusterState) Pods() map[model.PodID]*model.PodState {
@@ -117,12 +136,11 @@ func (cs *fakeClusterState) VPAs() map[model.VpaID]*model.Vpa {
 	return cs.stubbedVPAs
 }
 
-func (cs *fakeClusterState) StateMapSize() int {
+func (*fakeClusterState) StateMapSize() int {
 	return 0
 }
 
 func TestLoadVPAs(t *testing.T) {
-
 	type testCase struct {
 		name                                string
 		selector                            labels.Selector
@@ -142,7 +160,7 @@ func TestLoadVPAs(t *testing.T) {
 		{
 			name:                      "no selector",
 			selector:                  nil,
-			fetchSelectorError:        fmt.Errorf("targetRef not defined"),
+			fetchSelectorError:        errors.New("targetRef not defined"),
 			expectedSelector:          labels.Nothing(),
 			expectedConfigUnsupported: &unsupportedConditionTextFromFetcher,
 			expectedConfigDeprecated:  nil,
@@ -234,7 +252,7 @@ func TestLoadVPAs(t *testing.T) {
 			},
 			expectedConfigUnsupported:           &unsupportedConditionMudaMudaMuda,
 			expectedVpaFetch:                    true,
-			findTopMostWellKnownOrScalableError: fmt.Errorf("muda muda muda"),
+			findTopMostWellKnownOrScalableError: errors.New("muda muda muda"),
 		},
 		{
 			name:               "top-level target ref",
@@ -331,7 +349,6 @@ func TestLoadVPAs(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-
 		t.Run(tc.name, func(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			defer ctrl.Finish()
@@ -399,7 +416,6 @@ func TestLoadVPAs(t *testing.T) {
 			} else {
 				assert.NotContains(t, conditions, vpa_types.ConfigUnsupported)
 			}
-
 		})
 	}
 }
@@ -486,6 +502,19 @@ func TestClusterStateFeeder_LoadPods_ContainerTracking(t *testing.T) {
 	assert.Equal(t, len(feeder.clusterState.Pods()[podWithoutInitContainersID].Containers), 2)
 	assert.Equal(t, len(feeder.clusterState.Pods()[podWithoutInitContainersID].InitContainers), 0)
 
+	// Re-loading the same pods must not cause the init container list to grow.
+	// This guards against a regression where LoadPods appended to the existing
+	// slice on every invocation, leading to unbounded growth over time.
+	feeder.LoadPods()
+	feeder.LoadPods()
+
+	assert.Equal(t, len(feeder.clusterState.Pods()), 2)
+	assert.Equal(t, len(feeder.clusterState.Pods()[podWithInitContainersID].InitContainers), 2)
+	assert.ElementsMatch(t,
+		[]string{"init1", "init2"},
+		feeder.clusterState.Pods()[podWithInitContainersID].InitContainers,
+	)
+	assert.Equal(t, len(feeder.clusterState.Pods()[podWithoutInitContainersID].InitContainers), 0)
 }
 
 func TestClusterStateFeeder_LoadPods_MemorySaverMode(t *testing.T) {
@@ -795,7 +824,6 @@ func TestFilterVPAs(t *testing.T) {
 }
 
 func TestFilterVPAsIgnoreNamespaces(t *testing.T) {
-
 	vpa1 := &vpa_types.VerticalPodAutoscaler{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: "namespace1",
@@ -862,7 +890,7 @@ func TestCanCleanupCheckpoints(t *testing.T) {
 	client := fake.NewClientset()
 	namespace := "testNamespace"
 
-	_, err := client.CoreV1().Namespaces().Create(tctx, &v1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}}, metav1.CreateOptions{})
+	_, err := client.CoreV1().Namespaces().Create(tctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}}, metav1.CreateOptions{})
 	assert.NoError(t, err)
 
 	vpaBuilder := test.VerticalPodAutoscaler().WithContainer("container").WithNamespace(namespace).WithTargetRef(&autoscalingv1.CrossVersionObjectReference{

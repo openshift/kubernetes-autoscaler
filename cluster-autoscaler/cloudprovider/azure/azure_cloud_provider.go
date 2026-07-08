@@ -25,11 +25,20 @@ import (
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/builder"
 	coreoptions "k8s.io/autoscaler/cluster-autoscaler/core/options"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/errors"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/gpu"
+	"k8s.io/client-go/informers"
 	klog "k8s.io/klog/v2"
 )
+
+func init() {
+	builder.RegisterCloudProvider(cloudprovider.AzureProviderName, func(opts *coreoptions.AutoscalerOptions, do cloudprovider.NodeGroupDiscoveryOptions, rl *cloudprovider.ResourceLimiter, informerFactory informers.SharedInformerFactory) cloudprovider.CloudProvider {
+		return BuildAzure(opts, do, rl)
+	})
+	builder.SetDefaultCloudProvider(cloudprovider.AzureProviderName)
+}
 
 const (
 	// GPULabel is the label added to nodes with GPU resource.
@@ -120,21 +129,17 @@ func (azure *AzureCloudProvider) NodeGroupForNode(node *apiv1.Node) (cloudprovid
 	}
 
 	klog.V(6).Infof("NodeGroupForNode: ref.Name %s", ref.Name)
-	return azure.azureManager.GetNodeGroupForInstance(ref)
+	ng, err := azure.azureManager.GetNodeGroupForInstance(ref)
+	if err != nil {
+		return nil, err
+	}
+	if ng == nil {
+		return nil, nil
+	}
+	return ng, nil
 }
 
 // HasInstance returns whether a given node has a corresponding instance in this cloud provider.
-//
-// Used to prevent undercount of existing VMs (taint-based overcount of deleted VMs),
-// and so should not return false, nil (no instance) if uncertain; return error instead.
-// (Think "has instance for sure, else error".) Returning an error causes fallback to taint-based
-// determination; use ErrNotImplemented for silent fallback, any other error will be logged.
-//
-// Expected behavior (should work for VMSS Uniform/Flex, and VMs):
-// -  exists            : return true, nil
-// - !exists            : return *,    ErrNotImplemented (could use custom error for autoscaled nodes)
-// - unimplemented case : return *,    ErrNotImplemented
-// - any other error    : return *,    error
 func (azure *AzureCloudProvider) HasInstance(node *apiv1.Node) (bool, error) {
 	if node.Spec.ProviderID == "" {
 		return false, fmt.Errorf("ProviderID for node: %s is empty, skipped", node.Name)

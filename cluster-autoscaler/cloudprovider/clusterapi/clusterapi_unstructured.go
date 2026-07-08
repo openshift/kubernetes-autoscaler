@@ -27,7 +27,6 @@ import (
 	"time"
 
 	"github.com/pkg/errors"
-	apiv1 "k8s.io/api/core/v1"
 	corev1 "k8s.io/api/core/v1"
 	resourceapi "k8s.io/api/resource/v1"
 	storagev1 "k8s.io/api/storage/v1"
@@ -38,7 +37,6 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
-	gpuapis "k8s.io/autoscaler/cluster-autoscaler/utils/gpu"
 	klog "k8s.io/klog/v2"
 	"k8s.io/utils/ptr"
 )
@@ -175,7 +173,6 @@ func (r *unstructuredScalableResource) UnmarkMachineForDeletion(machine *unstruc
 
 	annotations := u.GetAnnotations()
 	delete(annotations, machineDeleteAnnotationKey)
-	delete(annotations, oldMachineDeleteAnnotationKey)
 	u.SetAnnotations(annotations)
 	_, updateErr := r.controller.managementClient.Resource(r.controller.machineResource).Namespace(u.GetNamespace()).Update(context.TODO(), u, metav1.UpdateOptions{})
 
@@ -196,7 +193,6 @@ func (r *unstructuredScalableResource) MarkMachineForDeletion(machine *unstructu
 	}
 
 	annotations[machineDeleteAnnotationKey] = time.Now().String()
-	annotations[oldMachineDeleteAnnotationKey] = time.Now().String()
 	u.SetAnnotations(annotations)
 
 	_, updateErr := r.controller.managementClient.Resource(r.controller.machineResource).Namespace(u.GetNamespace()).Update(context.TODO(), u, metav1.UpdateOptions{})
@@ -209,9 +205,8 @@ func (r *unstructuredScalableResource) Labels() map[string]string {
 
 	// get the managed labels from the scalable resource, if they exist.
 	if labels, found, err := unstructured.NestedStringMap(r.unstructured.UnstructuredContent(), "spec", "template", "spec", "metadata", "labels"); found && err == nil {
-		// In OpenShift, we want all labels, not just managed labels
-		// managedLabels := getManagedNodeLabelsFromLabels(labels)
-		allLabels = cloudprovider.JoinStringMaps(allLabels, labels)
+		managedLabels := getManagedNodeLabelsFromLabels(labels)
+		allLabels = cloudprovider.JoinStringMaps(allLabels, managedLabels)
 	}
 
 	// annotation labels are supplied as an override to other values, we process them last.
@@ -231,53 +226,60 @@ func (r *unstructuredScalableResource) Labels() map[string]string {
 	return allLabels
 }
 
-func (r *unstructuredScalableResource) Taints() []apiv1.Taint {
-	taints := make([]apiv1.Taint, 0)
+func (r *unstructuredScalableResource) Taints() []corev1.Taint {
+	var allTaints []corev1.Taint
 
-	newtaints, found, err := unstructured.NestedSlice(r.unstructured.Object, "spec", "template", "spec", "taints")
-	if err != nil {
-		return nil
-	}
-	if found {
-		for _, t := range newtaints {
-			if t := unstructuredToTaint(t); t != nil {
-				taints = append(taints, *t)
-			} else {
-				klog.Warningf("Unable to convert of type %T data to taint: %+v", t, t)
+	// Read taints from spec.template.spec.taints. Requires CAPI v1.12+ with the
+	// MachineTaintPropagation feature gate enabled.
+	if rawTaints, found, err := unstructured.NestedSlice(r.unstructured.UnstructuredContent(), "spec", "template", "spec", "taints"); found && err == nil {
+		for _, item := range rawTaints {
+			taintMap, ok := item.(map[string]interface{})
+			if !ok {
 				continue
 			}
+			taint := corev1.Taint{}
+			if key, ok := taintMap["key"].(string); ok {
+				taint.Key = key
+			}
+			if value, ok := taintMap["value"].(string); ok {
+				taint.Value = value
+			}
+			if effect, ok := taintMap["effect"].(string); ok {
+				taint.Effect = corev1.TaintEffect(effect)
+			}
+			allTaints = append(allTaints, taint)
 		}
 	}
 
+	// Annotation taints take highest priority. If an annotation taint has the same
+	// key+effect as a spec taint, it overrides it; otherwise it is appended.
+	// Format: "key1=value1:NoSchedule,key2=value2:NoExecute"
 	annotations := r.unstructured.GetAnnotations()
-	// annotation value the form of "key1=value1:condition,key2=value2:condition"
 	if val, found := annotations[taintsKey]; found {
-		newtaints := strings.Split(val, ",")
-		for _, taintStr := range newtaints {
-			taint, err := parseTaint(taintStr)
-			if err == nil {
-				taints = append(taints, taint)
+		for _, taintStr := range strings.Split(val, ",") {
+			t, err := parseTaint(taintStr)
+			if err != nil {
+				klog.V(4).Infof("Failed to parse taint %q from annotation %s: %v", taintStr, taintsKey, err)
+				continue
+			}
+			replaced := false
+			for i, existing := range allTaints {
+				if existing.Key == t.Key && existing.Effect == t.Effect {
+					allTaints[i] = t
+					replaced = true
+					break
+				}
+			}
+			if !replaced {
+				allTaints = append(allTaints, t)
 			}
 		}
 	}
 
-	return taints
-}
-
-func unstructuredToTaint(unstructuredTaintInterface interface{}) *corev1.Taint {
-	unstructuredTaint := unstructuredTaintInterface.(map[string]interface{})
-	if unstructuredTaint == nil {
+	if len(allTaints) == 0 {
 		return nil
 	}
-
-	taint := &corev1.Taint{}
-	taint.Key = unstructuredTaint["key"].(string)
-	// value is optional and could be nil if not present
-	if unstructuredTaint["value"] != nil {
-		taint.Value = unstructuredTaint["value"].(string)
-	}
-	taint.Effect = corev1.TaintEffect(unstructuredTaint["effect"].(string))
-	return taint
+	return allTaints
 }
 
 // A node group can scale from zero if it can inform about the CPU and memory
@@ -330,9 +332,9 @@ func (r *unstructuredScalableResource) InstanceCapacity() (map[corev1.ResourceNa
 	if err != nil {
 		return nil, err
 	}
-	if !gpuCount.IsZero() {
-		// OpenShift does not yet use the gpu-type annotation, and assumes nvidia gpu
-		capacityAnnotations[gpuapis.ResourceNvidiaGPU] = gpuCount
+	gpuType := r.InstanceGPUTypeAnnotation()
+	if !gpuCount.IsZero() && gpuType != "" {
+		capacityAnnotations[corev1.ResourceName(gpuType)] = gpuCount
 	}
 
 	maxPods, err := r.InstanceMaxPodsCapacityAnnotation()
@@ -373,7 +375,7 @@ func (r *unstructuredScalableResource) InstanceCapacity() (map[corev1.ResourceNa
 
 // InstanceSystemInfo sets the nodeSystemInfo from the infrastructure reference resource.
 // If the infrastructure reference resource is not found, returns nil.
-func (r *unstructuredScalableResource) InstanceSystemInfo() *apiv1.NodeSystemInfo {
+func (r *unstructuredScalableResource) InstanceSystemInfo() *corev1.NodeSystemInfo {
 	infraObj, err := r.readInfrastructureReferenceResource()
 	if err != nil || infraObj == nil {
 		return nil
@@ -573,8 +575,8 @@ func resourceCapacityFromInfrastructureObject(infraobj *unstructured.Unstructure
 	return capacity
 }
 
-func systemInfoFromInfrastructureObject(infraobj *unstructured.Unstructured) apiv1.NodeSystemInfo {
-	nsi := apiv1.NodeSystemInfo{}
+func systemInfoFromInfrastructureObject(infraobj *unstructured.Unstructured) corev1.NodeSystemInfo {
+	nsi := corev1.NodeSystemInfo{}
 	infransi, found, err := unstructured.NestedStringMap(infraobj.Object, "status", "nodeInfo")
 	if !found || err != nil {
 		return nsi
@@ -653,19 +655,19 @@ func parseCSIDriverAnnotation(annotationValue string) []storagev1.CSINodeDriver 
 }
 
 // adapted from https://github.com/kubernetes/kubernetes/blob/release-1.25/pkg/util/taints/taints.go#L39
-func parseTaint(st string) (apiv1.Taint, error) {
-	var taint apiv1.Taint
+func parseTaint(st string) (corev1.Taint, error) {
+	var taint corev1.Taint
 
 	var key string
 	var value string
-	var effect apiv1.TaintEffect
+	var effect corev1.TaintEffect
 
 	parts := strings.Split(st, ":")
 	switch len(parts) {
 	case 1:
 		key = parts[0]
 	case 2:
-		effect = apiv1.TaintEffect(parts[1])
+		effect = corev1.TaintEffect(parts[1])
 
 		partsKV := strings.Split(parts[0], "=")
 		if len(partsKV) > 2 {

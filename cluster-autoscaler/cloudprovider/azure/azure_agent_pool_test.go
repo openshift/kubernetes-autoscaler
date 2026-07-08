@@ -19,28 +19,22 @@ package azure
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"testing"
 	"time"
 
-	apiv1 "k8s.io/api/core/v1"
-	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/utils/ptr"
-	"sigs.k8s.io/cloud-provider-azure/pkg/azureclients/storageaccountclient/mockstorageaccountclient"
-	"sigs.k8s.io/cloud-provider-azure/pkg/azureclients/vmclient/mockvmclient"
-	providerazureconsts "sigs.k8s.io/cloud-provider-azure/pkg/consts"
-	"sigs.k8s.io/cloud-provider-azure/pkg/retry"
-
-	"github.com/Azure/azure-sdk-for-go/services/compute/mgmt/2022-08-01/compute"
-	"github.com/Azure/azure-sdk-for-go/services/resources/mgmt/2017-05-10/resources"
-	"github.com/Azure/go-autorest/autorest/date"
+	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/compute/armcompute/v6"
+	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/resources/armresources"
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/mock/gomock"
+	apiv1 "k8s.io/api/core/v1"
+	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
+	"k8s.io/utils/ptr"
+	"sigs.k8s.io/cloud-provider-azure/pkg/azclient/virtualmachineclient/mock_virtualmachineclient"
+	providerazureconsts "sigs.k8s.io/cloud-provider-azure/pkg/consts"
 )
 
 var (
-	rerrTooManyReqs       = retry.Error{HTTPStatusCode: http.StatusTooManyRequests}
-	rerrInternalErr       = retry.Error{HTTPStatusCode: http.StatusInternalServerError}
 	testValidProviderID0  = "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/as-vm-0"
 	testValidProviderID1  = "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/as-vm-1"
 	testInvalidProviderID = "/subscriptions/sub/resourceGroups/rg/providers/provider/virtualMachines/as-vm-0/"
@@ -59,21 +53,21 @@ func newTestAgentPool(manager *AzureManager, name string) *AgentPool {
 	}
 }
 
-func getExpectedVMs() []compute.VirtualMachine {
-	expectedVMs := []compute.VirtualMachine{
+func getExpectedVMs() []*armcompute.VirtualMachine {
+	expectedVMs := []*armcompute.VirtualMachine{
 		{
 			Name: ptr.To("000-0-00000000-0"),
 			ID:   ptr.To("/subscriptions/sub/resourceGroups/rg/providers/provider/0"),
 			Tags: map[string]*string{"poolName": ptr.To("as")},
-			VirtualMachineProperties: &compute.VirtualMachineProperties{
-				StorageProfile: &compute.StorageProfile{
-					OsDisk: &compute.OSDisk{
-						OsType: compute.OperatingSystemTypesLinux,
-						Vhd:    &compute.VirtualHardDisk{URI: ptr.To("https://foo.blob/vhds/bar.vhd")},
+			Properties: &armcompute.VirtualMachineProperties{
+				StorageProfile: &armcompute.StorageProfile{
+					OSDisk: &armcompute.OSDisk{
+						OSType: ptr.To(armcompute.OperatingSystemTypesLinux),
+						Vhd:    &armcompute.VirtualHardDisk{URI: ptr.To("https://foo.blob/vhds/bar.vhd")},
 					},
 				},
-				NetworkProfile: &compute.NetworkProfile{
-					NetworkInterfaces: &[]compute.NetworkInterfaceReference{
+				NetworkProfile: &armcompute.NetworkProfile{
+					NetworkInterfaces: []*armcompute.NetworkInterfaceReference{
 						{},
 					},
 				},
@@ -83,9 +77,9 @@ func getExpectedVMs() []compute.VirtualMachine {
 			Name: ptr.To("00000000001"),
 			ID:   ptr.To("/subscriptions/sub/resourceGroups/rg/providers/provider/0"),
 			Tags: map[string]*string{"poolName": ptr.To("as")},
-			VirtualMachineProperties: &compute.VirtualMachineProperties{
-				StorageProfile: &compute.StorageProfile{
-					OsDisk: &compute.OSDisk{OsType: compute.OperatingSystemTypesWindows},
+			Properties: &armcompute.VirtualMachineProperties{
+				StorageProfile: &armcompute.StorageProfile{
+					OSDisk: &armcompute.OSDisk{OSType: ptr.To(armcompute.OperatingSystemTypesWindows)},
 				},
 			},
 		},
@@ -107,39 +101,39 @@ func TestDeleteOutdatedDeployments(t *testing.T) {
 	timeBenchMark, _ := time.Parse(timeLayout, "2000-01-01 00:00:00")
 
 	testCases := []struct {
-		deployments              map[string]resources.DeploymentExtended
+		deployments              map[string]armresources.DeploymentExtended
 		expectedDeploymentsNames map[string]bool
 		expectedErr              error
 		desc                     string
 	}{
 		{
-			deployments: map[string]resources.DeploymentExtended{
+			deployments: map[string]armresources.DeploymentExtended{
 				"non-cluster-autoscaler-0000": {
 					Name: ptr.To("non-cluster-autoscaler-0000"),
-					Properties: &resources.DeploymentPropertiesExtended{
-						ProvisioningState: ptr.To("Succeeded"),
-						Timestamp:         &date.Time{Time: timeBenchMark.Add(2 * time.Minute)},
+					Properties: &armresources.DeploymentPropertiesExtended{
+						ProvisioningState: ptr.To(armresources.ProvisioningStateSucceeded),
+						Timestamp:         ptr.To(timeBenchMark.Add(2 * time.Minute)),
 					},
 				},
 				"cluster-autoscaler-0000": {
 					Name: ptr.To("cluster-autoscaler-0000"),
-					Properties: &resources.DeploymentPropertiesExtended{
-						ProvisioningState: ptr.To("Succeeded"),
-						Timestamp:         &date.Time{Time: timeBenchMark},
+					Properties: &armresources.DeploymentPropertiesExtended{
+						ProvisioningState: ptr.To(armresources.ProvisioningStateSucceeded),
+						Timestamp:         ptr.To(timeBenchMark),
 					},
 				},
 				"cluster-autoscaler-0001": {
 					Name: ptr.To("cluster-autoscaler-0001"),
-					Properties: &resources.DeploymentPropertiesExtended{
-						ProvisioningState: ptr.To("Succeeded"),
-						Timestamp:         &date.Time{Time: timeBenchMark.Add(time.Minute)},
+					Properties: &armresources.DeploymentPropertiesExtended{
+						ProvisioningState: ptr.To(armresources.ProvisioningStateSucceeded),
+						Timestamp:         ptr.To(timeBenchMark.Add(time.Minute)),
 					},
 				},
 				"cluster-autoscaler-0002": {
 					Name: ptr.To("cluster-autoscaler-0002"),
-					Properties: &resources.DeploymentPropertiesExtended{
-						ProvisioningState: ptr.To("Succeeded"),
-						Timestamp:         &date.Time{Time: timeBenchMark.Add(2 * time.Minute)},
+					Properties: &armresources.DeploymentPropertiesExtended{
+						ProvisioningState: ptr.To(armresources.ProvisioningStateSucceeded),
+						Timestamp:         ptr.To(timeBenchMark.Add(2 * time.Minute)),
 					},
 				},
 			},
@@ -175,13 +169,13 @@ func TestAgentPoolGetVMsFromCache(t *testing.T) {
 	defer ctrl.Finish()
 
 	testAS := newTestAgentPool(newTestAzureManager(t), "testAS")
-	expectedVMs := []compute.VirtualMachine{
+	expectedVMs := []*armcompute.VirtualMachine{
 		{
 			Tags: map[string]*string{"poolName": ptr.To("testAS")},
 		},
 	}
 
-	mockVMClient := mockvmclient.NewMockInterface(ctrl)
+	mockVMClient := mock_virtualmachineclient.NewMockInterface(ctrl)
 	testAS.manager.azClient.virtualMachinesClient = mockVMClient
 	mockVMClient.EXPECT().List(gomock.Any(), testAS.manager.config.ResourceGroup).Return(expectedVMs, nil)
 	testAS.manager.config.VMType = providerazureconsts.VMTypeStandard
@@ -200,7 +194,7 @@ func TestGetVMIndexes(t *testing.T) {
 
 	as := newTestAgentPool(newTestAzureManager(t), "as")
 	expectedVMs := getExpectedVMs()
-	mockVMClient := mockvmclient.NewMockInterface(ctrl)
+	mockVMClient := NewMockInterface(ctrl)
 	as.manager.azClient.virtualMachinesClient = mockVMClient
 	mockVMClient.EXPECT().List(gomock.Any(), as.manager.config.ResourceGroup).Return(expectedVMs, nil)
 	as.manager.config.VMType = providerazureconsts.VMTypeStandard
@@ -240,7 +234,7 @@ func TestGetCurSize(t *testing.T) {
 	as := newTestAgentPool(newTestAzureManager(t), "as")
 	as.curSize = 1
 	expectedVMs := getExpectedVMs()
-	mockVMClient := mockvmclient.NewMockInterface(ctrl)
+	mockVMClient := NewMockInterface(ctrl)
 	as.manager.azClient.virtualMachinesClient = mockVMClient
 	mockVMClient.EXPECT().List(gomock.Any(), as.manager.config.ResourceGroup).Return(expectedVMs, nil)
 	as.manager.config.VMType = providerazureconsts.VMTypeStandard
@@ -264,7 +258,7 @@ func TestAgentPoolTargetSize(t *testing.T) {
 	defer ctrl.Finish()
 
 	as := newTestAgentPool(newTestAzureManager(t), "as")
-	mockVMClient := mockvmclient.NewMockInterface(ctrl)
+	mockVMClient := NewMockInterface(ctrl)
 	as.manager.azClient.virtualMachinesClient = mockVMClient
 	expectedVMs := getExpectedVMs()
 	mockVMClient.EXPECT().List(gomock.Any(), as.manager.config.ResourceGroup).Return(expectedVMs, nil)
@@ -284,7 +278,7 @@ func TestAgentPoolIncreaseSize(t *testing.T) {
 	defer ctrl.Finish()
 
 	as := newTestAgentPool(newTestAzureManager(t), "as")
-	mockVMClient := mockvmclient.NewMockInterface(ctrl)
+	mockVMClient := NewMockInterface(ctrl)
 	as.manager.azClient.virtualMachinesClient = mockVMClient
 	expectedVMs := getExpectedVMs()
 	mockVMClient.EXPECT().List(gomock.Any(), as.manager.config.ResourceGroup).Return(expectedVMs, nil).MaxTimes(2)
@@ -313,7 +307,7 @@ func TestAgentPoolDecreaseTargetSize(t *testing.T) {
 
 	as := newTestAgentPool(newTestAzureManager(t), "as")
 	as.curSize = 3
-	mockVMClient := mockvmclient.NewMockInterface(ctrl)
+	mockVMClient := NewMockInterface(ctrl)
 	as.manager.azClient.virtualMachinesClient = mockVMClient
 	expectedVMs := getExpectedVMs()
 	mockVMClient.EXPECT().List(gomock.Any(), as.manager.config.ResourceGroup).Return(expectedVMs, nil).MaxTimes(3)
@@ -370,10 +364,10 @@ func TestDeleteInstances(t *testing.T) {
 	as.manager.azureCache.instanceToNodeGroup[azureRef{Name: testValidProviderID1}] = as1
 	as.manager.azureCache.instanceToNodeGroup[azureRef{Name: testInvalidProviderID}] = as
 
-	mockVMClient := mockvmclient.NewMockInterface(ctrl)
+	mockVMClient := NewMockInterface(ctrl)
 	as.manager.azClient.virtualMachinesClient = mockVMClient
 
-	mockSAClient := mockstorageaccountclient.NewMockInterface(ctrl)
+	mockSAClient := NewMockStorageAccountClient(ctrl)
 	as.manager.azClient.storageAccountsClient = mockSAClient
 
 	err := as.DeleteInstances([]*azureRef{})
@@ -420,10 +414,10 @@ func TestForceDeleteNodes(t *testing.T) {
 	as.manager.azureCache.instanceToNodeGroup[azureRef{Name: testValidProviderID1}] = as1
 	as.manager.azureCache.instanceToNodeGroup[azureRef{Name: testInvalidProviderID}] = as
 
-	mockVMClient := mockvmclient.NewMockInterface(ctrl)
+	mockVMClient := NewMockInterface(ctrl)
 	as.manager.azClient.virtualMachinesClient = mockVMClient
 
-	mockSAClient := mockstorageaccountclient.NewMockInterface(ctrl)
+	mockSAClient := NewMockStorageAccountClient(ctrl)
 	as.manager.azClient.storageAccountsClient = mockSAClient
 
 	err := as.ForceDeleteNodes([]*apiv1.Node{})
@@ -457,9 +451,9 @@ func TestAgentPoolDeleteNodes(t *testing.T) {
 	as := newTestAgentPool(newTestAzureManager(t), "as")
 	as.manager.azureCache.instanceToNodeGroup[azureRef{Name: testValidProviderID0}] = as
 	expectedVMs := getExpectedVMs()
-	mockVMClient := mockvmclient.NewMockInterface(ctrl)
+	mockVMClient := NewMockInterface(ctrl)
 	as.manager.azClient.virtualMachinesClient = mockVMClient
-	mockSAClient := mockstorageaccountclient.NewMockInterface(ctrl)
+	mockSAClient := NewMockStorageAccountClient(ctrl)
 	as.manager.azClient.storageAccountsClient = mockSAClient
 	mockVMClient.EXPECT().List(gomock.Any(), as.manager.config.ResourceGroup).Return(expectedVMs, nil)
 	as.manager.config.VMType = providerazureconsts.VMTypeStandard
@@ -499,7 +493,7 @@ func TestAgentPoolNodes(t *testing.T) {
 	defer ctrl.Finish()
 
 	as := newTestAgentPool(newTestAzureManager(t), "as")
-	expectedVMs := []compute.VirtualMachine{
+	expectedVMs := []*armcompute.VirtualMachine{
 		{
 			Tags: map[string]*string{"poolName": ptr.To("as")},
 			ID:   ptr.To(""),
@@ -507,10 +501,13 @@ func TestAgentPoolNodes(t *testing.T) {
 		{
 			Tags: map[string]*string{"poolName": ptr.To("as")},
 			ID:   &testValidProviderID0,
+			Properties: &armcompute.VirtualMachineProperties{
+				ProvisioningState: new("Succeeded"),
+			},
 		},
 	}
 
-	mockVMClient := mockvmclient.NewMockInterface(ctrl)
+	mockVMClient := NewMockInterface(ctrl)
 	as.manager.azClient.virtualMachinesClient = mockVMClient
 	mockVMClient.EXPECT().List(gomock.Any(), as.manager.config.ResourceGroup).Return(expectedVMs, nil)
 	as.manager.config.VMType = providerazureconsts.VMTypeStandard
@@ -521,8 +518,15 @@ func TestAgentPoolNodes(t *testing.T) {
 	nodes, err := as.Nodes()
 	assert.NoError(t, err)
 	assert.Equal(t, 1, len(nodes))
+	assert.Equal(t, cloudprovider.InstanceRunning, nodes[0].Status.State)
 
-	expectedVMs = []compute.VirtualMachine{
+	expectedVMs[1].Properties = &armcompute.VirtualMachineProperties{ProvisioningState: ptr.To(VMProvisioningStateDeleting)}
+	as.manager.azureCache.virtualMachines["as"] = expectedVMs
+	nodes, err = as.Nodes()
+	assert.NoError(t, err)
+	assert.Equal(t, cloudprovider.InstanceDeleting, nodes[0].Status.State)
+
+	expectedVMs = []*armcompute.VirtualMachine{
 		{
 			Tags: map[string]*string{"poolName": ptr.To("as")},
 			ID:   ptr.To("foo"),
@@ -535,4 +539,77 @@ func TestAgentPoolNodes(t *testing.T) {
 	expectedErr := fmt.Errorf("\"azure://foo\" isn't in Azure resource ID format")
 	assert.Equal(t, expectedErr, err)
 	assert.Nil(t, nodes)
+}
+
+func TestAgentPoolDeleteInstancesProactivelyMarksDeletion(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	as := newTestAgentPool(newTestAzureManager(t), "as")
+	as.manager.azureCache.instanceToNodeGroup[azureRef{Name: testValidProviderID0}] = as
+
+	mockVMClient := NewMockInterface(ctrl)
+	as.manager.azClient.virtualMachinesClient = mockVMClient
+
+	vmName, err := resourceName(testValidProviderID0)
+	assert.NoError(t, err)
+	mockVMClient.EXPECT().Get(gomock.Any(), as.manager.config.ResourceGroup, vmName, nil).DoAndReturn(
+		func(ctx context.Context, resourceGroupName, vmName string, expand *string) (*armcompute.VirtualMachine, error) {
+			hasInstance, hasInstanceErr := as.manager.azureCache.HasInstance(testValidProviderID0)
+			assert.False(t, hasInstance)
+			assert.NoError(t, hasInstanceErr)
+			return &armcompute.VirtualMachine{
+				Properties: &armcompute.VirtualMachineProperties{
+					StorageProfile: &armcompute.StorageProfile{OSDisk: &armcompute.OSDisk{ManagedDisk: &armcompute.ManagedDiskParameters{}}},
+				},
+			}, nil
+		})
+	mockVMClient.EXPECT().Delete(gomock.Any(), as.manager.config.ResourceGroup, vmName).Return(nil)
+
+	hasInstance, err := as.manager.azureCache.HasInstance(testValidProviderID0)
+	assert.True(t, hasInstance)
+	assert.NoError(t, err)
+
+	err = as.DeleteInstances([]*azureRef{{Name: testValidProviderID0}})
+	assert.NoError(t, err)
+}
+
+func TestAgentPoolDeleteInstancesStrictCacheDoesNotProactivelyMarkDeletion(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	as := newTestAgentPool(newTestAzureManager(t), "as")
+	as.manager.config.StrictCacheUpdates = true
+	as.manager.azureCache.instanceToNodeGroup[azureRef{Name: testValidProviderID0}] = as
+
+	mockVMClient := NewMockInterface(ctrl)
+	as.manager.azClient.virtualMachinesClient = mockVMClient
+
+	vmName, err := resourceName(testValidProviderID0)
+	assert.NoError(t, err)
+	mockVMClient.EXPECT().Get(gomock.Any(), as.manager.config.ResourceGroup, vmName, nil).DoAndReturn(
+		func(ctx context.Context, resourceGroupName, vmName string, expand *string) (*armcompute.VirtualMachine, error) {
+			hasInstance, hasInstanceErr := as.manager.azureCache.HasInstance(testValidProviderID0)
+			assert.True(t, hasInstance)
+			assert.NoError(t, hasInstanceErr)
+			return &armcompute.VirtualMachine{
+				Properties: &armcompute.VirtualMachineProperties{
+					StorageProfile: &armcompute.StorageProfile{OSDisk: &armcompute.OSDisk{ManagedDisk: &armcompute.ManagedDiskParameters{}}},
+				},
+			}, nil
+		})
+	mockVMClient.EXPECT().Delete(gomock.Any(), as.manager.config.ResourceGroup, vmName).Return(nil)
+
+	hasInstance, err := as.manager.azureCache.HasInstance(testValidProviderID0)
+	assert.True(t, hasInstance)
+	assert.NoError(t, err)
+
+	err = as.DeleteInstances([]*azureRef{{Name: testValidProviderID0}})
+	assert.NoError(t, err)
+
+	// Strict cache mode should not mutate instance state proactively; the instance
+	// remains present until the next refresh reflects Azure state.
+	hasInstance, err = as.manager.azureCache.HasInstance(testValidProviderID0)
+	assert.True(t, hasInstance)
+	assert.NoError(t, err)
 }

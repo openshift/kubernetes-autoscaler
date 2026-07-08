@@ -22,14 +22,23 @@ import (
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/builder"
 	egoscale "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/exoscale/internal/github.com/exoscale/egoscale/v2"
 	"k8s.io/autoscaler/cluster-autoscaler/config/dynamic"
 	coreoptions "k8s.io/autoscaler/cluster-autoscaler/core/options"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/errors"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/gpu"
+	"k8s.io/client-go/informers"
 )
 
 var _ cloudprovider.CloudProvider = (*exoscaleCloudProvider)(nil)
+
+func init() {
+	builder.RegisterCloudProvider(cloudprovider.ExoscaleProviderName, func(opts *coreoptions.AutoscalerOptions, do cloudprovider.NodeGroupDiscoveryOptions, rl *cloudprovider.ResourceLimiter, informerFactory informers.SharedInformerFactory) cloudprovider.CloudProvider {
+		return BuildExoscale(opts, do, rl)
+	})
+	builder.SetDefaultCloudProvider(cloudprovider.ExoscaleProviderName)
+}
 
 const exoscaleProviderIDPrefix = "exoscale://"
 
@@ -135,9 +144,39 @@ func (e *exoscaleCloudProvider) NodeGroupForNode(node *apiv1.Node) (cloudprovide
 		debugf("found node %s belonging to SKS Nodepool %s", toNodeID(node.Spec.ProviderID), *sksNodepool.ID)
 	} else {
 		// Standalone Instance Pool
+
+		var nodeGroupSpec *dynamic.NodeGroupSpec
+
+		for _, spec := range e.manager.discoveryOpts.NodeGroupSpecs {
+			s, err := dynamic.SpecFromString(spec, scaleToZeroSupported)
+
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse node group spec: %v", err)
+			}
+
+			if s.Name == *instancePool.Name {
+				nodeGroupSpec = s
+				break
+			}
+		}
+
+		var minSize, maxSize int
+		if nodeGroupSpec != nil {
+			minSize = nodeGroupSpec.MinSize
+			maxSize = nodeGroupSpec.MaxSize
+		} else {
+			minSize = 1
+			maxSize, err = e.manager.computeInstanceQuota()
+			if err != nil {
+				return nil, err
+			}
+		}
+
 		nodeGroup = &instancePoolNodeGroup{
 			instancePool: instancePool,
 			m:            e.manager,
+			minSize:      minSize,
+			maxSize:      maxSize,
 		}
 		debugf("found node %s belonging to Instance Pool %s", toNodeID(node.Spec.ProviderID), *instancePool.ID)
 	}

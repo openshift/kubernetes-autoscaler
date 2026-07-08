@@ -22,8 +22,8 @@ import (
 	"strings"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
-	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/containerservice/armcontainerservice/v5"
-	"github.com/Azure/azure-sdk-for-go/services/compute/mgmt/2022-08-01/compute"
+	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/compute/armcompute/v6"
+	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/containerservice/armcontainerservice/v8"
 
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
@@ -158,7 +158,7 @@ func (vmPool *VMPool) IncreaseSize(delta int) error {
 	// hosted CAS will be using Autoscale scale profile
 	// HostedSystem will be using manual scale profile
 	// Both of them need to set the Target-Count and SKU headers
-	if len(versionedAP.Properties.VirtualMachinesProfile.Scale.Autoscale) > 0 ||
+	if versionedAP.Properties.VirtualMachinesProfile.Scale.Autoscale != nil ||
 		(versionedAP.Properties.Mode != nil &&
 			strings.EqualFold(string(*versionedAP.Properties.Mode), "HostedSystem")) {
 		header := make(http.Header)
@@ -210,8 +210,8 @@ func buildRequestBodyForScaleUp(agentpool armcontainerservice.AgentPool, count i
 
 	// set the count of the matching manual scale profile to the new target value
 	for _, manualProfile := range agentpool.Properties.VirtualMachinesProfile.Scale.Manual {
-		if manualProfile != nil && len(manualProfile.Sizes) == 1 &&
-			strings.EqualFold(ptr.Deref(manualProfile.Sizes[0], ""), vmSku) {
+		if manualProfile != nil && manualProfile.Size != nil &&
+			strings.EqualFold(ptr.Deref(manualProfile.Size, ""), vmSku) {
 			klog.V(5).Infof("Found matching manual profile for VM SKU: %s, updating count to: %d", vmSku, count)
 			manualProfile.Count = ptr.To(count)
 			requestBody.Properties.VirtualMachinesProfile = agentpool.Properties.VirtualMachinesProfile
@@ -246,6 +246,16 @@ func (vmPool *VMPool) DeleteNodes(nodes []*apiv1.Node) error {
 	}
 
 	klog.V(3).Infof("Deleting nodes from vmPool %s: %v", vmPool.Name, providerIDs)
+
+	// In non-strict mode, proactively mark instances as deleting in the cache so
+	// HasInstance reports them as gone before the next cache refresh. A failed
+	// delete is reconciled by the deferred invalidateCache() below, which forces a
+	// refresh on the next loop.
+	if !vmPool.manager.config.StrictCacheUpdates {
+		for _, providerID := range providerIDs {
+			vmPool.manager.azureCache.setInstanceStateByProviderID(providerID, cloudprovider.InstanceDeleting)
+		}
+	}
 
 	machineNames := make([]*string, len(providerIDs))
 	for i, providerID := range providerIDs {
@@ -416,23 +426,24 @@ func (vmPool *VMPool) getSpotPoolSize() (int32, error) {
 // getVMsFromCache retrieves the list of virtual machines in this VMPool.
 // If excludeDeleting is true, it skips VMs in the "Deleting" state.
 // https://learn.microsoft.com/en-us/azure/virtual-machines/states-billing#provisioning-states
-func (vmPool *VMPool) getVMsFromCache(op skipOption) ([]compute.VirtualMachine, error) {
+func (vmPool *VMPool) getVMsFromCache(op skipOption) ([]*armcompute.VirtualMachine, error) {
 	vmsMap := vmPool.manager.azureCache.getVirtualMachines()
-	var filteredVMs []compute.VirtualMachine
+	var filteredVMs []*armcompute.VirtualMachine
 
 	for _, vm := range vmsMap[vmPool.agentPoolName] {
-		if vm.VirtualMachineProperties == nil ||
-			vm.VirtualMachineProperties.HardwareProfile == nil ||
-			!strings.EqualFold(string(vm.HardwareProfile.VMSize), vmPool.sku) {
+		if vm.Properties == nil ||
+			vm.Properties.HardwareProfile == nil ||
+			vm.Properties.HardwareProfile.VMSize == nil ||
+			!strings.EqualFold(string(*vm.Properties.HardwareProfile.VMSize), vmPool.sku) {
 			continue
 		}
 
-		if op.skipDeleting && strings.Contains(ptr.Deref(vm.VirtualMachineProperties.ProvisioningState, ""), "Deleting") {
+		if op.skipDeleting && strings.Contains(ptr.Deref(vm.Properties.ProvisioningState, ""), "Deleting") {
 			klog.V(4).Infof("Skipping VM %s in deleting state", ptr.Deref(vm.ID, ""))
 			continue
 		}
 
-		if op.skipFailed && strings.Contains(ptr.Deref(vm.VirtualMachineProperties.ProvisioningState, ""), "Failed") {
+		if op.skipFailed && strings.Contains(ptr.Deref(vm.Properties.ProvisioningState, ""), "Failed") {
 			klog.V(4).Infof("Skipping VM %s in failed state", ptr.Deref(vm.ID, ""))
 			continue
 		}
@@ -458,7 +469,16 @@ func (vmPool *VMPool) Nodes() ([]cloudprovider.Instance, error) {
 		if err != nil {
 			return nil, err
 		}
-		nodes = append(nodes, cloudprovider.Instance{Id: resourceID})
+		// Surface the VM provisioning state so the cache (and HasInstance /
+		// ClusterStateRegistry through it) can observe VMs that are being deleted.
+		// VMs pools do not support fast-delete-on-failed-provisioning, so the power
+		// state is irrelevant here.
+		var provisioningState *string
+		if vm.Properties != nil {
+			provisioningState = vm.Properties.ProvisioningState
+		}
+		status := instanceStatusFromProvisioningStateAndPowerState(resourceID, provisioningState, vmPowerStateRunning, disableFastDeleteOnFailure)
+		nodes = append(nodes, cloudprovider.Instance{Id: resourceID, Status: status})
 	}
 
 	return nodes, nil
@@ -481,7 +501,7 @@ func (vmPool *VMPool) TemplateNodeInfo() (*framework.NodeInfo, error) {
 		return nil, err
 	}
 
-	nodeInfo := framework.NewNodeInfo(node, nil, &framework.PodInfo{Pod: cloudprovider.BuildKubeProxy(vmPool.agentPoolName)})
+	nodeInfo := framework.NewNodeInfo(node, nil, framework.NewPodInfo(cloudprovider.BuildKubeProxy(vmPool.agentPoolName), nil))
 
 	return nodeInfo, nil
 }
@@ -510,7 +530,13 @@ func (vmPool *VMPool) getAgentpoolFromAzure() (armcontainerservice.AgentPool, er
 	return resp.AgentPool, nil
 }
 
-// AtomicIncreaseSize is not implemented.
+// AtomicIncreaseSize increases the VMPool size by delta and blocks until the
+// underlying agent pool PUT operation completes. IncreaseSize already issues a
+// synchronous PUT that waits via PollUntilDone, so it satisfies the atomic
+// contract: on success the capacity change has been fully applied by Azure
+// before returning. This blocking behavior is required for atomic-scale-up
+// ProvisioningRequest support to provide a capacity guarantee before workloads
+// are admitted.
 func (vmPool *VMPool) AtomicIncreaseSize(delta int) error {
-	return cloudprovider.ErrNotImplemented
+	return vmPool.IncreaseSize(delta)
 }

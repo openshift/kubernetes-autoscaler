@@ -18,15 +18,13 @@ package unneeded
 
 import (
 	"fmt"
-	"reflect"
 	"time"
 
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	ca_context "k8s.io/autoscaler/cluster-autoscaler/context"
 	"k8s.io/autoscaler/cluster-autoscaler/core/scaledown"
 	"k8s.io/autoscaler/cluster-autoscaler/core/scaledown/eligibility"
-	"k8s.io/autoscaler/cluster-autoscaler/core/scaledown/resource"
-	"k8s.io/autoscaler/cluster-autoscaler/metrics"
+
 	"k8s.io/autoscaler/cluster-autoscaler/processors/nodes"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator"
 	"k8s.io/autoscaler/cluster-autoscaler/utils"
@@ -38,10 +36,10 @@ import (
 
 // Nodes tracks the state of cluster nodes that are not needed.
 type Nodes struct {
-	sdtg         scaleDownTimeGetter
-	limitsFinder *resource.LimitsFinder
-	cachedList   []*scaledown.UnneededNode
-	byName       map[string]*node
+	sdtg scaleDownTimeGetter
+
+	cachedList []*scaledown.UnneededNode
+	byName     map[string]*node
 }
 
 type node struct {
@@ -59,10 +57,9 @@ type scaleDownTimeGetter interface {
 }
 
 // NewNodes returns a new initialized Nodes object.
-func NewNodes(sdtg scaleDownTimeGetter, limitsFinder *resource.LimitsFinder) *Nodes {
+func NewNodes(sdtg scaleDownTimeGetter) *Nodes {
 	return &Nodes{
-		sdtg:         sdtg,
-		limitsFinder: limitsFinder,
+		sdtg: sdtg,
 	}
 }
 
@@ -237,8 +234,8 @@ func (n *Nodes) lookupAndSetRemovalThreshold(v *node, cp cloudprovider.CloudProv
 		klog.Warningf("Error determining node group for %s: %v", v.ntbr.Node.Name, err)
 		return
 	}
-	if nodeGroup == nil || reflect.ValueOf(nodeGroup).IsNil() {
-		klog.V(4).Infof("Node %s has no node group config", v.ntbr.Node.Name)
+	if nodeGroup == nil {
+		klog.V(4).Infof("Skipping %s - no node group config", v.ntbr.Node.Name)
 		return
 	}
 
@@ -281,7 +278,7 @@ func (n *Nodes) unremovableReason(autoscalingCtx *ca_context.AutoscalingContext,
 	}
 
 	nodeGroup, err := autoscalingCtx.CloudProvider.NodeGroupForNode(node)
-	if err != nil || nodeGroup == nil || reflect.ValueOf(nodeGroup).IsNil() {
+	if err != nil || nodeGroup == nil {
 		klog.V(4).Infof("Skipping %s - no node group config", node.Name)
 		return simulator.NotAutoscaled
 	}
@@ -290,25 +287,14 @@ func (n *Nodes) unremovableReason(autoscalingCtx *ca_context.AutoscalingContext,
 		return reason
 	}
 
-	resourceDelta, err := n.limitsFinder.DeltaForNode(autoscalingCtx, node, nodeGroup, scaleDownContext.ResourcesWithLimits)
+	checkResult, err := scaleDownContext.Tracker.ConsumeQuota(autoscalingCtx, nodeGroup, node, 1)
 	if err != nil {
-		klog.Errorf("Error getting node resources: %v", err)
+		klog.Errorf("Failed to check limits for %s: %v", node.Name, err)
 		return simulator.UnexpectedError
 	}
 
-	checkResult := scaleDownContext.ResourcesLeft.TryDecrementBy(resourceDelta)
 	if checkResult.Exceeded() {
-		klog.V(4).Infof("Skipping %s - minimal limit exceeded for %v", node.Name, checkResult.ExceededResources)
-		for _, resource := range checkResult.ExceededResources {
-			switch resource {
-			case cloudprovider.ResourceNameCores:
-				metrics.RegisterSkippedScaleDownCPU()
-			case cloudprovider.ResourceNameMemory:
-				metrics.RegisterSkippedScaleDownMemory()
-			default:
-				continue
-			}
-		}
+		klog.V(2).Infof("Skipping scale down of %s in this batch - would violate minimum limits", node.Name)
 		return simulator.MinimalResourceLimitExceeded
 	}
 

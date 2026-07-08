@@ -135,7 +135,7 @@ func (ng *nodegroup) DeleteNodes(nodes []*corev1.Node) error {
 	// < minSize, then the request to delete that many nodes is bogus
 	// and we fail fast.
 	if replicas-len(nodes) < ng.MinSize() {
-		return fmt.Errorf("unable to delete %d machines in %q, machine replicas are %q, minSize is %q ", len(nodes), ng.Id(), replicas, ng.MinSize())
+		return fmt.Errorf("unable to delete %d machines in %q, machine replicas are %d, minSize is %d ", len(nodes), ng.Id(), replicas, ng.MinSize())
 	}
 
 	// Step 3: annotate the corresponding machine that it is a
@@ -382,7 +382,7 @@ func (ng *nodegroup) TemplateNodeInfo() (*framework.NodeInfo, error) {
 	}
 	csiNode := ng.scalableResource.InstanceCSINode()
 
-	nodeInfo := framework.NewNodeInfo(&node, resourceSlices, &framework.PodInfo{Pod: cloudprovider.BuildKubeProxy(ng.scalableResource.Name())})
+	nodeInfo := framework.NewNodeInfo(&node, resourceSlices, framework.NewPodInfo(cloudprovider.BuildKubeProxy(ng.scalableResource.Name()), nil))
 	if csiNode != nil {
 		nodeInfo.SetCSINode(csiNode)
 	}

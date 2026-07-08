@@ -34,27 +34,22 @@ const (
 	ResourceMemory ResourceName = "memory"
 	// ResourceNodes - number of nodes, in units.
 	ResourceNodes ResourceName = "nodes"
+	// ValidCondition is the condition specifying whether the CapacityQuota is valid
+	ValidCondition = "Valid"
+	// ValidationSucceeded specifies that the CapacityQuota is valid
+	ValidationSucceeded = "ValidationSucceeded"
+	// ValidationFailed specifies that the CapacityQuota is invalid
+	ValidationFailed = "ValidationFailed"
+	// ReconciledCondition is the condition specifying whether the CapacityQuota status has been reconciled.
+	ReconciledCondition = "Reconciled"
+	// ReconciliationSucceeded specifies that the CapacityQuota status has been reconciled successfully.
+	ReconciliationSucceeded = "ReconciliationSucceeded"
+	// ReconciliationFailed specifies that the CapacityQuota status has failed to reconcile.
+	ReconciliationFailed = "ReconciliationFailed"
 )
 
 // ResourceList is a set of (resource name, quantity) pairs.
 type ResourceList map[ResourceName]resource.Quantity
-
-// CapacityQuotaSpec defines the desired state of CapacityQuota
-type CapacityQuotaSpec struct {
-	// Selector is a label selector selecting the nodes to which the quota applies.
-	// Empty or nil selector matches all nodes.
-	// +optional
-	Selector *metav1.LabelSelector `json:"selector,omitempty"`
-
-	// Limits define quota limits.
-	// +required
-	Limits CapacityQuotaLimits `json:"limits"`
-}
-
-// CapacityQuotaStatus defines the observed state of CapacityQuota.
-type CapacityQuotaStatus struct {
-	// TODO: status should report resources currently in use
-}
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
@@ -87,15 +82,61 @@ type CapacityQuota struct {
 	Status CapacityQuotaStatus `json:"status,omitempty,omitzero"`
 }
 
+// CapacityQuotaSpec defines the desired state of CapacityQuota
+type CapacityQuotaSpec struct {
+	// Selector is a label selector selecting the nodes to which the quota applies.
+	// Empty or nil selector matches all nodes.
+	// +optional
+	Selector *metav1.LabelSelector `json:"selector,omitempty"`
+
+	// Limits define quota limits.
+	// +required
+	Limits CapacityQuotaLimits `json:"limits"`
+}
+
 // CapacityQuotaLimits define quota limits.
 type CapacityQuotaLimits struct {
 	// Resources define resource limits of this quota.
 	//
 	// Currently supported built-in resources: cpu, memory. Additionally,
 	// nodes key can be used to limit the number of existing nodes.
+	// All resource quantities must be non-negative integers. Binary and decimal units are allowed as long as the quantity
+	// can be converted to an integer.
+	//
+	// Example allowed quantities: "32Gi", "2k", "10"
+	// Example invalid quantities: "3.67Gi", "500m", "0.3"
+	//
+	// **Caveat**: milli quantities are not supported even if they represent an integer, for example: "1000m".
+	//
 	// Node autoscaler implementations and cloud providers can support custom
 	// resources, such as GPU.
 	// +required
+	// +kubebuilder:validation:Type=object
+	// +kubebuilder:validation:MaxProperties=20
+	// +kubebuilder:validation:XValidation:rule="self.all(key, size(key) <= 63)",message="Resource names must be 63 characters or less."
+	// +kubebuilder:validation:XValidation:rule="self.all(key, type(self[key]) == int ? self[key] >= 0 : (!self[key].startsWith('-') && quantity(self[key]).isInteger()))",message="All resource quantities must be non-negative integers."
+	Resources ResourceList `json:"resources"`
+}
+
+// CapacityQuotaStatus defines the observed state of CapacityQuota.
+type CapacityQuotaStatus struct {
+	// Used shows the current usage of the quota.
+	// +optional
+	Used *CapacityQuotaUsage `json:"used,omitempty"`
+
+	// Conditions provide a standard mechanism for reporting the quota's state.
+	// CapacityQuota will be enforced only if it has a Valid=True condition.
+	// +listType=map
+	// +listMapKey=type
+	// +patchStrategy=merge
+	// +patchMergeKey=type
+	// +optional
+	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type"`
+}
+
+// CapacityQuotaUsage shows the current usage of the quota.
+type CapacityQuotaUsage struct {
+	// Resources shows the current usage of the resources defined in the quota limits.
 	Resources ResourceList `json:"resources"`
 }
 

@@ -23,14 +23,23 @@ import (
 
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/builder"
 	"k8s.io/autoscaler/cluster-autoscaler/config"
 	coreoptions "k8s.io/autoscaler/cluster-autoscaler/core/options"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/errors"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/gpu"
+	"k8s.io/client-go/informers"
 
 	v1 "k8s.io/api/core/v1"
 	klog "k8s.io/klog/v2"
 )
+
+func init() {
+	builder.RegisterCloudProvider(cloudprovider.CloudStackProviderName, func(opts *coreoptions.AutoscalerOptions, do cloudprovider.NodeGroupDiscoveryOptions, rl *cloudprovider.ResourceLimiter, informerFactory informers.SharedInformerFactory) cloudprovider.CloudProvider {
+		return BuildCloudStack(opts, do, rl)
+	})
+	builder.SetDefaultCloudProvider(cloudprovider.CloudStackProviderName)
+}
 
 const (
 	// GPULabel is the label added to nodes with GPU resource.
@@ -67,7 +76,14 @@ func (provider *cloudStackCloudProvider) NodeGroups() []cloudprovider.NodeGroup 
 // should not be processed by cluster autoscaler, or non-nil error if such
 // occurred.
 func (provider *cloudStackCloudProvider) NodeGroupForNode(node *v1.Node) (cloudprovider.NodeGroup, error) {
-	return provider.manager.clusterForNode(node)
+	ng, err := provider.manager.clusterForNode(node)
+	if err != nil {
+		return nil, err
+	}
+	if ng == nil {
+		return nil, nil
+	}
+	return ng, nil
 }
 
 // HasInstance returns whether a given node has a corresponding instance in this cloud provider

@@ -17,7 +17,6 @@ limitations under the License.
 package scaledowncandidates
 
 import (
-	"reflect"
 	"time"
 
 	apiv1 "k8s.io/api/core/v1"
@@ -46,6 +45,7 @@ func (p *ScaleDownCandidatesDelayProcessor) GetPodDestinationCandidates(autoscal
 func (p *ScaleDownCandidatesDelayProcessor) GetScaleDownCandidates(autoscalingCtx *ca_context.AutoscalingContext,
 	nodes []*apiv1.Node) ([]*apiv1.Node, errors.AutoscalerError) {
 	result := []*apiv1.Node{}
+	alreadyLoggedGroups := make(map[string]bool)
 
 	for _, node := range nodes {
 		nodeGroup, err := autoscalingCtx.CloudProvider.NodeGroupForNode(node)
@@ -53,7 +53,7 @@ func (p *ScaleDownCandidatesDelayProcessor) GetScaleDownCandidates(autoscalingCt
 			klog.Warningf("Error while checking node group for %s: %v", node.Name, err)
 			continue
 		}
-		if nodeGroup == nil || reflect.ValueOf(nodeGroup).IsNil() {
+		if nodeGroup == nil {
 			klog.V(4).Infof("Node %s should not be processed by cluster autoscaler (no node group config)", node.Name)
 			continue
 		}
@@ -62,8 +62,11 @@ func (p *ScaleDownCandidatesDelayProcessor) GetScaleDownCandidates(autoscalingCt
 
 		recent := func(m map[string]time.Time, d time.Duration, msg string) bool {
 			if !m[nodeGroup.Id()].IsZero() && m[nodeGroup.Id()].Add(d).After(currentTime) {
-				klog.V(4).Infof("Skipping scale down on node group %s because it %s recently at %v",
-					nodeGroup.Id(), msg, m[nodeGroup.Id()])
+				if !alreadyLoggedGroups[nodeGroup.Id()] {
+					klog.V(4).Infof("Skipping scale down on node group %s because it %s recently at %v",
+						nodeGroup.Id(), msg, m[nodeGroup.Id()])
+					alreadyLoggedGroups[nodeGroup.Id()] = true
+				}
 				return true
 			}
 
@@ -104,8 +107,7 @@ func (p *ScaleDownCandidatesDelayProcessor) RegisterScaleDown(nodeGroup cloudpro
 }
 
 // RegisterFailedScaleUp records when the last scale up failed for a nodegroup.
-func (p *ScaleDownCandidatesDelayProcessor) RegisterFailedScaleUp(_ cloudprovider.NodeGroup,
-	_ string, _ string, _ string, _ string, _ time.Time) {
+func (p *ScaleDownCandidatesDelayProcessor) RegisterFailedScaleUp(_ cloudprovider.NodeGroup, _ int, _ cloudprovider.InstanceErrorInfo, currentTime time.Time) {
 }
 
 // RegisterFailedScaleDown records failed scale-down for a nodegroup.

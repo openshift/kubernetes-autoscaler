@@ -24,9 +24,9 @@ import (
 	"strings"
 	"time"
 
-	core "k8s.io/api/core/v1"
+	corev1 "k8s.io/api/core/v1"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
-	meta "k8s.io/apimachinery/pkg/apis/meta/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
@@ -38,6 +38,8 @@ import (
 	vpa_api "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/client/clientset/versioned/typed/autoscaling.k8s.io/v1"
 	vpa_lister "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/client/listers/autoscaling.k8s.io/v1"
 	controllerfetcher "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/target/controller_fetcher"
+	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/annotations"
+	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/client"
 )
 
 // VpaWithSelector is a pair of VPA and its selector.
@@ -47,19 +49,19 @@ type VpaWithSelector struct {
 }
 
 type patchRecord struct {
-	Op    string      `json:"op,inline"`
-	Path  string      `json:"path,inline"`
-	Value interface{} `json:"value"`
+	Op    string `json:"op,inline"`
+	Path  string `json:"path,inline"`
+	Value any    `json:"value"`
 }
 
 func patchVpaStatus(vpaClient vpa_api.VerticalPodAutoscalerInterface, vpaName string, patches []patchRecord) (result *vpa_types.VerticalPodAutoscaler, err error) {
 	bytes, err := json.Marshal(patches)
 	if err != nil {
 		klog.ErrorS(err, "Cannot marshal VPA status patches", "patches", patches)
-		return
+		return nil, err
 	}
 
-	return vpaClient.Patch(context.TODO(), vpaName, types.JSONPatchType, bytes, meta.PatchOptions{}, "status")
+	return vpaClient.Patch(context.TODO(), vpaName, types.JSONPatchType, bytes, metav1.PatchOptions{}, "status")
 }
 
 // UpdateVpaStatusIfNeeded updates the status field of the VPA API object.
@@ -88,6 +90,7 @@ func NewVpasLister(vpaClient *vpa_clientset.Clientset, stopChannel <-chan struct
 		Handler:       &cache.ResourceEventHandlerFuncs{},
 		ResyncPeriod:  1 * time.Hour,
 		Indexers:      cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc},
+		Transform:     client.StripManagedFields,
 	}
 
 	store, controller := cache.NewInformerWithOptions(informerOptions)
@@ -118,6 +121,7 @@ func NewVpaCheckpointLister(vpaClient *vpa_clientset.Clientset, stopChannel <-ch
 		Handler:       &cache.ResourceEventHandlerFuncs{},
 		ResyncPeriod:  1 * time.Hour,
 		Indexers:      cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc},
+		Transform:     client.StripManagedFields,
 	}
 
 	store, controller := cache.NewInformerWithOptions(informerOptions)
@@ -138,7 +142,7 @@ func NewVpaCheckpointLister(vpaClient *vpa_clientset.Clientset, stopChannel <-ch
 }
 
 // PodMatchesVPA returns true iff the vpaWithSelector matches the Pod.
-func PodMatchesVPA(pod *core.Pod, vpaWithSelector *VpaWithSelector) bool {
+func PodMatchesVPA(pod *corev1.Pod, vpaWithSelector *VpaWithSelector) bool {
 	return PodLabelsMatchVPA(pod.Namespace, labels.Set(pod.GetLabels()), vpaWithSelector.Vpa.Namespace, vpaWithSelector.Selector)
 }
 
@@ -157,7 +161,7 @@ func Stronger(a, b *vpa_types.VerticalPodAutoscaler) bool {
 		return true
 	}
 	// Compare creation timestamps of the VPA objects. This is the clue of the stronger logic.
-	var aTime, bTime meta.Time
+	var aTime, bTime metav1.Time
 	aTime = a.GetCreationTimestamp()
 	bTime = b.GetCreationTimestamp()
 	if !aTime.Equal(&bTime) {
@@ -168,8 +172,7 @@ func Stronger(a, b *vpa_types.VerticalPodAutoscaler) bool {
 }
 
 // GetControllingVPAForPod chooses the earliest created VPA from the input list that matches the given Pod.
-func GetControllingVPAForPod(ctx context.Context, pod *core.Pod, vpas []*VpaWithSelector, ctrlFetcher controllerfetcher.ControllerFetcher) *VpaWithSelector {
-
+func GetControllingVPAForPod(ctx context.Context, pod *corev1.Pod, vpas []*VpaWithSelector, ctrlFetcher controllerfetcher.ControllerFetcher) *VpaWithSelector {
 	parentController, err := FindParentControllerForPod(ctx, pod, ctrlFetcher)
 	if err != nil {
 		klog.ErrorS(err, "Failed to get parent controller for pod", "pod", klog.KObj(pod))
@@ -201,8 +204,8 @@ func GetControllingVPAForPod(ctx context.Context, pod *core.Pod, vpas []*VpaWith
 }
 
 // FindParentControllerForPod returns the parent controller (topmost well-known or scalable controller) for the given Pod.
-func FindParentControllerForPod(ctx context.Context, pod *core.Pod, ctrlFetcher controllerfetcher.ControllerFetcher) (*controllerfetcher.ControllerKeyWithAPIVersion, error) {
-	var ownerRefrence *meta.OwnerReference
+func FindParentControllerForPod(ctx context.Context, pod *corev1.Pod, ctrlFetcher controllerfetcher.ControllerFetcher) (*controllerfetcher.ControllerKeyWithAPIVersion, error) {
+	var ownerRefrence *metav1.OwnerReference
 	for i := range pod.OwnerReferences {
 		r := pod.OwnerReferences[i]
 		if r.Controller != nil && *r.Controller {
@@ -234,12 +237,27 @@ func FindParentControllerForPod(ctx context.Context, pod *core.Pod, ctrlFetcher 
 }
 
 // GetUpdateMode returns the updatePolicy.updateMode for a given VPA.
-// If the mode is not specified it returns the default (UpdateModeAuto).
+// If the mode is not specified it returns the default (UpdateModeRecreate).
 func GetUpdateMode(vpa *vpa_types.VerticalPodAutoscaler) vpa_types.UpdateMode {
 	if vpa.Spec.UpdatePolicy == nil || vpa.Spec.UpdatePolicy.UpdateMode == nil || *vpa.Spec.UpdatePolicy.UpdateMode == "" {
-		return vpa_types.UpdateModeAuto
+		return vpa_types.UpdateModeRecreate
 	}
 	return *vpa.Spec.UpdatePolicy.UpdateMode
+}
+
+// HasStartupBoost returns true if VPA has StartupBoost defined either globally or at container level.
+func HasStartupBoost(vpa *vpa_types.VerticalPodAutoscaler) bool {
+	if vpa.Spec.StartupBoost != nil {
+		return true
+	}
+	if vpa.Spec.ResourcePolicy != nil {
+		for _, containerPolicy := range vpa.Spec.ResourcePolicy.ContainerPolicies {
+			if containerPolicy.StartupBoost != nil {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // GetContainerResourcePolicy returns the ContainerResourcePolicy for a given policy
@@ -282,12 +300,85 @@ func CreateOrUpdateVpaCheckpoint(vpaCheckpointClient vpa_api.VerticalPodAutoscal
 	if err != nil {
 		return fmt.Errorf("cannot marshal VPA checkpoint status patches %+v. Reason: %+v", patches, err)
 	}
-	_, err = vpaCheckpointClient.Patch(context.TODO(), vpaCheckpoint.Name, types.JSONPatchType, bytes, meta.PatchOptions{})
+	_, err = vpaCheckpointClient.Patch(context.TODO(), vpaCheckpoint.Name, types.JSONPatchType, bytes, metav1.PatchOptions{})
 	if err != nil && strings.Contains(err.Error(), fmt.Sprintf("\"%s\" not found", vpaCheckpoint.Name)) {
-		_, err = vpaCheckpointClient.Create(context.TODO(), vpaCheckpoint, meta.CreateOptions{})
+		_, err = vpaCheckpointClient.Create(context.TODO(), vpaCheckpoint, metav1.CreateOptions{})
 	}
 	if err != nil {
 		return fmt.Errorf("cannot save checkpoint for vpa %s/%s container %s. Reason: %+v", vpaCheckpoint.Namespace, vpaCheckpoint.Name, vpaCheckpoint.Spec.ContainerName, err)
 	}
 	return nil
+}
+
+// GetExpiredStartupCPUBoostAnnotations returns the names of the containers that have passed their startup boost duration.
+func GetExpiredStartupCPUBoostAnnotations(pod *corev1.Pod, vpa *vpa_types.VerticalPodAutoscaler) []string {
+	var expiredAnnotations []string
+
+	_, readyCond := GetPodCondition(&pod.Status, corev1.PodReady)
+	if readyCond == nil || readyCond.Status != corev1.ConditionTrue {
+		return expiredAnnotations
+	}
+	readyTime := readyCond.LastTransitionTime.Time
+
+	for k := range pod.Annotations {
+		if containerName, found := strings.CutPrefix(k, annotations.StartupCPUBoostAnnotationPrefix); found {
+			boostDuration := getContainerCPUStartupBoostDuration(containerName, vpa)
+			if boostDuration == 0 || time.Since(readyTime) > time.Duration(boostDuration)*time.Second {
+				expiredAnnotations = append(expiredAnnotations, k)
+			}
+		}
+	}
+
+	return expiredAnnotations
+}
+
+func getContainerCPUStartupBoostDuration(containerName string, vpa *vpa_types.VerticalPodAutoscaler) int32 {
+	var boostDuration int32
+	if vpa.Spec.StartupBoost != nil && vpa.Spec.StartupBoost.CPU != nil && vpa.Spec.StartupBoost.CPU.DurationSeconds != nil {
+		boostDuration = *vpa.Spec.StartupBoost.CPU.DurationSeconds // Default to pod-level
+	}
+
+	if vpa.Spec.ResourcePolicy != nil {
+		crp := GetContainerResourcePolicy(containerName, vpa.Spec.ResourcePolicy)
+		if crp != nil && crp.StartupBoost != nil && crp.StartupBoost.CPU != nil && crp.StartupBoost.CPU.DurationSeconds != nil {
+			boostDuration = *crp.StartupBoost.CPU.DurationSeconds
+		}
+	}
+	return boostDuration
+}
+
+// PodHasCPUBoostInProgressAnnotation returns true if the pod has any CPU boost in progress annotation.
+func PodHasCPUBoostInProgressAnnotation(pod *corev1.Pod) bool {
+	if pod.Annotations == nil {
+		return false
+	}
+	for k := range pod.Annotations {
+		if strings.HasPrefix(k, annotations.StartupCPUBoostAnnotationPrefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// IsPodReady returns true if a pod is ready; false otherwise.
+func IsPodReady(pod *corev1.Pod) bool {
+	_, condition := GetPodCondition(&pod.Status, corev1.PodReady)
+	return condition != nil && condition.Status == corev1.ConditionTrue
+}
+
+// GetPodCondition extracts the provided condition from the given status and returns that.
+// Returns nil and -1 if the condition is not present, and the index of the located condition.
+func GetPodCondition(status *corev1.PodStatus, conditionType corev1.PodConditionType) (int, *corev1.PodCondition) {
+	if status == nil {
+		return -1, nil
+	}
+	if status.Conditions == nil {
+		return -1, nil
+	}
+	for i := range status.Conditions {
+		if status.Conditions[i].Type == conditionType {
+			return i, &status.Conditions[i]
+		}
+	}
+	return -1, nil
 }

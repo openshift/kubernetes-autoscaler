@@ -56,7 +56,7 @@ var (
 		prometheus.GaugeOpts{
 			Namespace: metricsNamespace,
 			Name:      "evictable_pods_total",
-			Help:      "Number of Pods matching evicition criteria.",
+			Help:      "Number of Pods matching eviction criteria.",
 		}, []string{"vpa_size_log2", "update_mode"},
 	)
 
@@ -72,7 +72,7 @@ var (
 		prometheus.GaugeOpts{
 			Namespace: metricsNamespace,
 			Name:      "vpas_with_evictable_pods_total",
-			Help:      "Number of VPA objects with at least one Pod matching evicition criteria.",
+			Help:      "Number of VPA objects with at least one Pod matching eviction criteria.",
 		}, []string{"vpa_size_log2", "update_mode"},
 	)
 
@@ -181,21 +181,25 @@ func newModeAndSizeBasedGauge(gauge *prometheus.GaugeVec) *UpdateModeAndSizeBase
 
 // NewControlledPodsCounter returns a wrapper for counting Pods controlled by Updater
 func NewControlledPodsCounter() *UpdateModeAndSizeBasedGauge {
+	controlledCount.Reset()
 	return newModeAndSizeBasedGauge(controlledCount)
 }
 
 // NewEvictablePodsCounter returns a wrapper for counting Pods which are matching eviction criteria
 func NewEvictablePodsCounter() *UpdateModeAndSizeBasedGauge {
+	evictableCount.Reset()
 	return newModeAndSizeBasedGauge(evictableCount)
 }
 
 // NewVpasWithEvictablePodsCounter returns a wrapper for counting VPA objects with Pods matching eviction criteria
 func NewVpasWithEvictablePodsCounter() *UpdateModeAndSizeBasedGauge {
+	vpasWithEvictablePodsCount.Reset()
 	return newModeAndSizeBasedGauge(vpasWithEvictablePodsCount)
 }
 
 // NewVpasWithEvictedPodsCounter returns a wrapper for counting VPA objects with evicted Pods
 func NewVpasWithEvictedPodsCounter() *UpdateModeAndSizeBasedGauge {
+	vpasWithEvictedPodsCount.Reset()
 	return newModeAndSizeBasedGauge(vpasWithEvictedPodsCount)
 }
 
@@ -203,6 +207,13 @@ func NewVpasWithEvictedPodsCounter() *UpdateModeAndSizeBasedGauge {
 func AddEvictedPod(vpaSize int, vpaName string, vpaNamespace string, mode vpa_types.UpdateMode) {
 	log2 := metrics.GetVpaSizeLog2(vpaSize)
 	evictedCount.WithLabelValues(strconv.Itoa(log2), string(mode), vpaName, vpaNamespace).Inc()
+}
+
+// InitCounters initializes counters to 0 for a given VPA so they are visible before any events occur
+func InitCounters(vpaSize int, vpaName string, vpaNamespace string, mode vpa_types.UpdateMode) {
+	log2 := strconv.Itoa(metrics.GetVpaSizeLog2(vpaSize))
+	evictedCount.WithLabelValues(log2, string(mode), vpaName, vpaNamespace).Add(0)
+	inPlaceUpdatedCount.WithLabelValues(log2, vpaName, vpaNamespace).Add(0)
 }
 
 // RecordFailedEviction increases the counter of failed eviction attempts by given VPA size, name, namespace, update mode and reason
@@ -213,16 +224,19 @@ func RecordFailedEviction(vpaSize int, vpaName string, vpaNamespace string, mode
 
 // NewInPlaceUpdatablePodsCounter returns a wrapper for counting Pods which are matching in-place update criteria
 func NewInPlaceUpdatablePodsCounter() *SizeBasedGauge {
+	inPlaceUpdatableCount.Reset()
 	return newSizeBasedGauge(inPlaceUpdatableCount)
 }
 
 // NewVpasWithInPlaceUpdatablePodsCounter returns a wrapper for counting VPA objects with Pods matching in-place update criteria
 func NewVpasWithInPlaceUpdatablePodsCounter() *SizeBasedGauge {
+	vpasWithInPlaceUpdatablePodsCount.Reset()
 	return newSizeBasedGauge(vpasWithInPlaceUpdatablePodsCount)
 }
 
 // NewVpasWithInPlaceUpdatedPodsCounter returns a wrapper for counting VPA objects with in-place updated Pods
 func NewVpasWithInPlaceUpdatedPodsCounter() *SizeBasedGauge {
+	vpasWithInPlaceUpdatedPodsCount.Reset()
 	return newSizeBasedGauge(vpasWithInPlaceUpdatedPodsCount)
 }
 
