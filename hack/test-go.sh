@@ -75,6 +75,8 @@ fi
 
 if [[ "${detect_races}" == "true" ]]; then
     gotest_flags+=" -race"
+    #FIXME(joelsmith): This is temporarily needed if we're using Go 1.25 in CI when the unit tests expect 1.26
+    export GODEBUG=asynctimerchan=0
 fi
 
 # check to see if user has not disabled coverage mode
@@ -140,6 +142,9 @@ if [[ -n "${junit_report}" ]]; then
     os::log::info "Running \`go test\`..."
     # we don't care if the `go test` fails in this pipe, as we want to generate the report and summarize the output anyway
     set +o pipefail
+
+    #FIXME(joelsmith): the Controllers test suite in CA needs envtest. We can fix it in the release repo before running this script but just to check if it works, we'll build it here:
+    ( cd "$(dirname "${BASH_SOURCE}")/../cluster-autoscaler/" && unset GOFLAGS && make setup-envtest )
 
     go test ${gotest_flags} ${test_packages} 2>"${test_error_file}" | tee "${JUNIT_REPORT_OUTPUT}"
 
