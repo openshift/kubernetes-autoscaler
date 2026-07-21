@@ -19,8 +19,6 @@ package consts
 import (
 	"strings"
 	"time"
-
-	"github.com/Azure/azure-sdk-for-go/services/storage/mgmt/2021-09-01/storage"
 )
 
 const (
@@ -96,17 +94,6 @@ const (
 
 	CannotFindDiskLUN = "cannot find Lun"
 
-	// DefaultStorageAccountType is the default storage account type
-	DefaultStorageAccountType = string(storage.SkuNameStandardLRS)
-	// DefaultStorageAccountKind is the default storage account kind
-	DefaultStorageAccountKind = storage.KindStorageV2
-	// FileShareAccountNamePrefix is the file share account name prefix
-	FileShareAccountNamePrefix = "f"
-	// SharedDiskAccountNamePrefix is the shared disk account name prefix
-	SharedDiskAccountNamePrefix = "ds"
-	// DedicatedDiskAccountNamePrefix is the dedicated disk account name prefix
-	DedicatedDiskAccountNamePrefix = "dd"
-
 	// RetryAfterHeaderKey is the retry-after header key in ARM responses.
 	RetryAfterHeaderKey = "Retry-After"
 
@@ -121,6 +108,12 @@ const (
 	VMSetCIDRIPV4TagKey = "kubernetesNodeCIDRMaskIPV4"
 	// VMSetCIDRIPV6TagKey specifies the node ipv6 CIDR mask of the instances on the VMSS or VMAS
 	VMSetCIDRIPV6TagKey = "kubernetesNodeCIDRMaskIPV6"
+	// VmssWindows2019ImageGalleryName is the name of Windows 2019 images from the
+	// Microsoft.Compute/galleries/AKSWindows gallery
+	VmssWindows2019ImageGalleryName = "windows-2019-containerd"
+	// Windows2019OSBuildVersion is the official build version of Windows Server 2019
+	// https://learn.microsoft.com/en-us/windows-server/get-started/windows-server-release-info
+	Windows2019OSBuildVersion = "17763"
 
 	// TagsDelimiter is the delimiter of tags
 	TagsDelimiter = ","
@@ -239,10 +232,10 @@ const (
 	// ref: https://docs.microsoft.com/en-us/azure/azure-subscription-service-limits#load-balancer.
 	MaximumLoadBalancerRuleCount = 250
 
-	// LoadBalancerSkuBasic is the load balancer basic sku
-	LoadBalancerSkuBasic = "basic"
-	// LoadBalancerSkuStandard is the load balancer standard sku
-	LoadBalancerSkuStandard = "standard"
+	// LoadBalancerSKUBasic is the load balancer basic SKU
+	LoadBalancerSKUBasic = "basic"
+	// LoadBalancerSKUStandard is the load balancer standard SKU
+	LoadBalancerSKUStandard = "standard"
 
 	// ServiceAnnotationLoadBalancerInternal is the annotation used on the service
 	ServiceAnnotationLoadBalancerInternal = "service.beta.kubernetes.io/azure-load-balancer-internal"
@@ -253,7 +246,7 @@ const (
 
 	// ServiceAnnotationLoadBalancerMode is the annotation used on the service to specify
 	// which load balancer should be associated with the service. This is valid when using the basic
-	// sku load balancer, or it would be ignored.
+	// SKU load balancer, or it would be ignored.
 	// 1. Default mode - service has no annotation ("service.beta.kubernetes.io/azure-load-balancer-mode")
 	//	  In this case the Loadbalancer of the primary VMSS/VMAS is selected.
 	// 2. "__auto__" mode - service is annotated with __auto__ value, this when loadbalancer from any VMSS/VMAS
@@ -405,6 +398,8 @@ const (
 	ReferencedResourceNotProvisionedMessageCode = "ReferencedResourceNotProvisioned"
 	// ParentResourceNotFoundMessageCode is the error code that the parent VMSS of the VM is not found.
 	ParentResourceNotFoundMessageCode = "ParentResourceNotFound"
+	// ResourceNotFoundMessageCode is the error code that the resource is not found.
+	ResourceNotFoundMessageCode = "NotFound"
 	// ConcurrentRequestConflictMessage is the error message that the request failed due to the conflict with another concurrent operation.
 	ConcurrentRequestConflictMessage = "The request failed due to conflict with a concurrent request."
 	// CannotUpdateVMBeingDeletedMessagePrefix is the prefix of the error message that the request failed due to delete a VM that is being deleted
@@ -583,4 +578,17 @@ const (
 	VMPowerStateDeallocated  = "deallocated"
 	VMPowerStateDeallocating = "deallocating"
 	VMPowerStateUnknown      = "unknown"
+)
+
+// Azure resource lock
+const (
+	AzureResourceLockHolderNameCloudControllerManager = "cloud-controller-manager"
+	AzureResourceLockLeaseName                        = "aks-managed-resource-locker"
+	AzureResourceLockLeaseNamespace                   = "kube-system"
+	AzureResourceLockLeaseDuration                    = int32(15 * 60)
+	AzureResourceLockPreviousHolderNameAnnotation     = "aks-managed-resource-locker-previous-holder"
+
+	AzureResourceLockFailedToLockErrorTemplate                = "%s failed due to fail to lock azure resources. This may because another component is trying to update azure resources, e.g., load balancers. This will be automatically retried by cloud provider exponentially: %w"
+	AzureResourceLockFailedToUnlockErrorTemplate              = "%s failed due to fail to unlock azure resources. This will be automatically retried by cloud provider exponentially, but can also be manually unlocked by removing the holder of the lease '%s/%s'. Before doing this, please be aware that this could lead to unexpected issues: %w"
+	AzureResourceLockFailedToReconcileWithUnlockErrorTemplate = "%s failed due to %s, and when unlocking azure resources another error happened: %w"
 )

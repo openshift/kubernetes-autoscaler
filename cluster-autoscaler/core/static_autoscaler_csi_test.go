@@ -17,6 +17,7 @@ limitations under the License.
 package core
 
 import (
+	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -35,6 +36,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/autoscaler/cluster-autoscaler/config"
 	sdplanner "k8s.io/autoscaler/cluster-autoscaler/core/scaledown/planner"
+	"k8s.io/autoscaler/cluster-autoscaler/resourcequotas"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator/clustersnapshot/predicate"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator/clustersnapshot/store"
 	csinodeprovider "k8s.io/autoscaler/cluster-autoscaler/simulator/csi/provider"
@@ -222,7 +224,7 @@ func TestStaticAutoscalerCSI(t *testing.T) {
 			// Create a framework handle with informer-backed listers for StorageClass/PVC/CSIDriver.
 			client := clientsetfake.NewSimpleClientset(k8sObjects...)
 			informerFactory := informers.NewSharedInformerFactory(client, 0)
-			fwHandle, err := framework.NewHandle(informerFactory, nil, false, true)
+			fwHandle, err := framework.NewHandle(context.Background(), informerFactory, nil, false, true)
 			require.NoError(t, err)
 			stopCh := make(chan struct{})
 			t.Cleanup(func() { close(stopCh) })
@@ -289,7 +291,8 @@ func TestStaticAutoscalerCSI(t *testing.T) {
 			// internal removal simulator uses the same snapshot instance that RunOnce() initializes.
 			deleteOptions := options.NewNodeDeleteOptions(autoscaler.AutoscalingOptions)
 			drainabilityRules := rules.Default(deleteOptions)
-			newSDPlanner := sdplanner.New(autoscaler.AutoscalingContext, autoscaler.processors, deleteOptions, drainabilityRules)
+			factory := resourcequotas.NewTrackerFactory(resourcequotas.TrackerOptions{CustomResourcesProcessor: autoscaler.processors.CustomResourcesProcessor, QuotaProvider: resourcequotas.NewCloudMinProvider(autoscaler.AutoscalingContext.CloudProvider)})
+			newSDPlanner := sdplanner.New(autoscaler.AutoscalingContext, autoscaler.processors, deleteOptions, drainabilityRules, factory)
 			autoscaler.scaleDownPlanner = newSDPlanner
 			autoscaler.processorCallbacks.scaleDownPlanner = newSDPlanner
 

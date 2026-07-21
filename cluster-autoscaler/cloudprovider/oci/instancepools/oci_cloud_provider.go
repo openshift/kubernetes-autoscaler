@@ -11,18 +11,30 @@ import (
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
-	ocicommon "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/oci/common"
-	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/oci/nodepools"
-	npconsts "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/oci/nodepools/consts"
-	"k8s.io/autoscaler/cluster-autoscaler/config"
-	coreoptions "k8s.io/autoscaler/cluster-autoscaler/core/options"
-	caerrors "k8s.io/autoscaler/cluster-autoscaler/utils/errors"
-	"k8s.io/autoscaler/cluster-autoscaler/utils/gpu"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/builder"
+	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/klog/v2"
+
+	ocicommon "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/oci/common"
+	ipconsts "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/oci/instancepools/consts"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/oci/nodepools"
+	npconsts "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/oci/nodepools/consts"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/oci/vendor-internal/github.com/oracle/oci-go-sdk/v65/common"
+	"k8s.io/autoscaler/cluster-autoscaler/config"
+	coreoptions "k8s.io/autoscaler/cluster-autoscaler/core/options"
+	caerrors "k8s.io/autoscaler/cluster-autoscaler/utils/errors"
+	"k8s.io/autoscaler/cluster-autoscaler/utils/gpu"
 )
+
+func init() {
+	builder.RegisterCloudProvider(cloudprovider.OracleCloudProviderName, func(opts *coreoptions.AutoscalerOptions, do cloudprovider.NodeGroupDiscoveryOptions, rl *cloudprovider.ResourceLimiter, _ informers.SharedInformerFactory) cloudprovider.CloudProvider {
+		return BuildOCI(opts, do, rl)
+	})
+	builder.SetDefaultCloudProvider(cloudprovider.OracleCloudProviderName)
+}
 
 // OciCloudProvider implements the CloudProvider interface for OCI. It contains an
 // instance pool manager to interact with OCI instance pools.
@@ -53,6 +65,7 @@ func (ocp *OciCloudProvider) NodeGroupForNode(n *apiv1.Node) (cloudprovider.Node
 
 	ociRef, err := ocicommon.NodeToOciRef(n)
 	if err != nil {
+		klog.V(4).Infof("NodeGroupForNode: ref conversion for node %s failed: %v", n.Name, err)
 		return nil, err
 	}
 
@@ -61,32 +74,38 @@ func (ocp *OciCloudProvider) NodeGroupForNode(n *apiv1.Node) (cloudprovider.Node
 	// this instance may not be a part of an instance pool, or it may be part of a instance pool that the autoscaler does not manage
 	if errors.Cause(err) == errInstanceInstancePoolNotFound {
 		// should not be processed by cluster autoscaler
+		klog.V(4).Infof("NodeGroupForNode: node %s is not a member of any of the specified instance-pool(s)", n.Name)
 		return nil, nil
 	}
-
-	return ng, err
+	klog.V(4).Infof("NodeGroupForNode: %s belongs to instance-pool %s", n.Name, ng.Id())
+	if err != nil {
+		return nil, err
+	}
+	if ng == nil {
+		return nil, nil
+	}
+	return ng, nil
 }
 
 // HasInstance returns whether a given node has a corresponding instance in this cloud provider
 func (ocp *OciCloudProvider) HasInstance(node *apiv1.Node) (bool, error) {
 	instance, err := ocicommon.NodeToOciRef(node)
 	if err != nil {
+		klog.V(4).Infof("HasInstance: ref conversion for node %s failed: %v", node.Name, err)
 		return false, err
 	}
 	instancePool, err := ocp.poolManager.GetInstancePoolForInstance(instance)
 	if err != nil {
+		klog.V(4).Infof("HasInstance: instance-pool check for node %s failed: %v", node.Name, err)
 		return false, err
 	}
-	instances, err := ocp.poolManager.GetInstancePoolNodes(*instancePool)
-	if err != nil {
-		return false, err
+	if instancePool == nil || instancePool.Id() == "" {
+		klog.V(4).Infof("HasInstance: node %s is not a member of any of the specified instance-pool(s)", node.Name)
+		return false, nil
 	}
-	for _, i := range instances {
-		if i.Id == instance.InstanceID {
-			return true, nil
-		}
-	}
-	return false, nil
+
+	klog.V(4).Infof("HasInstance: node %s belongs to instance-pool %s", node.Name, instancePool.Id())
+	return true, nil
 }
 
 // Pricing returns pricing model for this cloud provider or error if not available.
@@ -150,25 +169,30 @@ func (ocp *OciCloudProvider) Refresh() error {
 
 // BuildOCI constructs the OciCloudProvider object that implements the could provider interface (InstancePoolManager).
 func BuildOCI(opts *coreoptions.AutoscalerOptions, do cloudprovider.NodeGroupDiscoveryOptions, rl *cloudprovider.ResourceLimiter) cloudprovider.CloudProvider {
-	ocidType, err := ocicommon.GetAllPoolTypes(opts.NodeGroups)
+	common.EnableInstanceMetadataServiceLookup()
+	ocidType, err := ocicommon.GetAllPoolTypes(do.NodeGroupSpecs)
 	if err != nil {
 		klog.Fatalf("Failed to get pool type: %v", err)
 	}
-	_, nodepoolTagsFound, err := ocicommon.HasNodeGroupTags(opts.NodeGroupAutoDiscovery)
+	instancepoolTagsFound, nodepoolTagsFound, err := ocicommon.HasNodeGroupTags(do.NodeGroupAutoDiscoverySpecs)
 	if err != nil {
 		klog.Fatalf("Failed to get auto discovery tags: %v", err)
 	}
-	if strings.HasPrefix(ocidType, npconsts.OciNodePoolResourceIdent) && nodepoolTagsFound == true {
-		klog.Fatalf("-nodes and -node-group-auto-discovery parameters can not be used together.")
-	} else if strings.HasPrefix(ocidType, npconsts.OciNodePoolResourceIdent) || nodepoolTagsFound == true {
-		manager, err := nodepools.CreateNodePoolManager(opts.CloudConfig, opts.NodeGroupAutoDiscovery, do, createKubeClient(opts.AutoscalingOptions))
+	if strings.HasPrefix(ocidType, npconsts.OciNodePoolResourceIdent) && nodepoolTagsFound {
+		klog.Fatalf("-nodes and -node-group-auto-discovery parameters can not be used together for nodepools.")
+	} else if strings.HasPrefix(ocidType, npconsts.OciNodePoolResourceIdent) || nodepoolTagsFound {
+		manager, err := nodepools.CreateNodePoolManager(opts.CloudConfig, do.NodeGroupAutoDiscoverySpecs, do, createKubeClient(opts.AutoscalingOptions))
 		if err != nil {
 			klog.Fatalf("Could not create OCI OKE cloud provider: %v", err)
 		}
 		return nodepools.NewOciCloudProvider(manager, rl)
 	}
-	// theoretically the only other possible value is no value (if no node groups are passed in)
+
+	// Theoretically, the only other possible value is no value (if no node groups are passed in)
 	// or instancepool, but either way, we'll just default to the instance pool implementation
+	if strings.HasPrefix(ocidType, ipconsts.OciInstancePoolResourceIdent) && instancepoolTagsFound {
+		klog.Fatalf("-nodes and -node-group-auto-discovery parameters can not be used together for instancepools.")
+	}
 	ipManager, err := CreateInstancePoolManager(opts.CloudConfig, do, createKubeClient(opts.AutoscalingOptions))
 	if err != nil {
 		klog.Fatalf("Could not create OCI cloud provider: %v", err)

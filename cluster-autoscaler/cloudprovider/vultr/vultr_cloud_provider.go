@@ -24,11 +24,20 @@ import (
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/builder"
 	coreoptions "k8s.io/autoscaler/cluster-autoscaler/core/options"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/errors"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/gpu"
+	"k8s.io/client-go/informers"
 	"k8s.io/klog/v2"
 )
+
+func init() {
+	builder.RegisterCloudProvider(cloudprovider.VultrProviderName, func(opts *coreoptions.AutoscalerOptions, do cloudprovider.NodeGroupDiscoveryOptions, rl *cloudprovider.ResourceLimiter, informerFactory informers.SharedInformerFactory) cloudprovider.CloudProvider {
+		return BuildVultr(opts, do, rl)
+	})
+	builder.SetDefaultCloudProvider(cloudprovider.VultrProviderName)
+}
 
 var _ cloudprovider.CloudProvider = (*vultrCloudProvider)(nil)
 
@@ -75,6 +84,9 @@ func (v *vultrCloudProvider) NodeGroupForNode(node *apiv1.Node) (cloudprovider.N
 
 		for _, node := range nodes {
 			if node.Id == providerID {
+				if group == nil {
+					return nil, nil
+				}
 				return group, nil
 			}
 		}

@@ -63,7 +63,7 @@ func FilterOutNodesFromNotAutoscaledGroups(nodes []*apiv1.Node, cloudProvider cl
 		if err != nil {
 			return []*apiv1.Node{}, errors.ToAutoscalerError(errors.CloudProviderError, err)
 		}
-		if nodeGroup == nil || reflect.ValueOf(nodeGroup).IsNil() {
+		if nodeGroup == nil {
 			result = append(result, node)
 		}
 	}
@@ -115,7 +115,7 @@ func UpdateClusterStateMetrics(csr *clusterstate.ClusterStateRegistry) {
 	}
 	metrics.UpdateClusterSafeToAutoscale(csr.IsClusterHealthy())
 	readiness := csr.GetClusterReadiness()
-	metrics.UpdateNodesCount(len(readiness.Ready), len(readiness.Unready), len(readiness.NotStarted), len(readiness.LongUnregistered), len(readiness.Unregistered))
+	metrics.UpdateNodesCount(len(readiness.Ready), len(readiness.Unready), len(readiness.NotStarted), len(readiness.Suspended), len(readiness.LongUnregistered), len(readiness.Unregistered))
 }
 
 // GetOldestCreateTime returns oldest creation time out of the pods in the set

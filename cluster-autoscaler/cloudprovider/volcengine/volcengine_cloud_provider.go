@@ -26,12 +26,21 @@ import (
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/builder"
 	"k8s.io/autoscaler/cluster-autoscaler/config/dynamic"
 	coreoptions "k8s.io/autoscaler/cluster-autoscaler/core/options"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/errors"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/gpu"
+	"k8s.io/client-go/informers"
 	"k8s.io/klog/v2"
 )
+
+func init() {
+	builder.RegisterCloudProvider(cloudprovider.VolcengineProviderName, func(opts *coreoptions.AutoscalerOptions, do cloudprovider.NodeGroupDiscoveryOptions, rl *cloudprovider.ResourceLimiter, informerFactory informers.SharedInformerFactory) cloudprovider.CloudProvider {
+		return BuildVolcengine(opts, do, rl)
+	})
+	builder.SetDefaultCloudProvider(cloudprovider.VolcengineProviderName)
+}
 
 // volcengineCloudProvider implements CloudProvider interface.
 type volcengineCloudProvider struct {
@@ -66,7 +75,14 @@ func (v *volcengineCloudProvider) NodeGroupForNode(node *apiv1.Node) (cloudprovi
 		klog.Warningf("Node %v has no providerId", node.Name)
 		return nil, fmt.Errorf("provider id missing from node: %s", node.Name)
 	}
-	return v.volcengineManager.GetAsgForInstance(instanceId)
+	asg, err := v.volcengineManager.GetAsgForInstance(instanceId)
+	if err != nil {
+		return nil, err
+	}
+	if asg == nil {
+		return nil, nil
+	}
+	return asg, nil
 }
 
 // HasInstance returns whether the node has corresponding instance in cloud provider,

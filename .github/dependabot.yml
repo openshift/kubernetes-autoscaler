@@ -1,50 +1,90 @@
 version: 2
 updates:
+### VPA master branch
 - package-ecosystem: gomod
-  directory: "/vertical-pod-autoscaler"
+  directories:
+    - "/vertical-pod-autoscaler"
+    - "/vertical-pod-autoscaler/test/"
   schedule:
     interval: daily
-  open-pull-requests-limit: 0 # setting this to 0 means only allowing security updates, see https://docs.github.com/en/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file#open-pull-requests-limit
   labels:
     - "area/vertical-pod-autoscaler"
     - "release-note-none"
     - "ok-to-test"
+    - "triage/accepted"
+  allow:
+    - dependency-type: "all"
+  groups:
+    non-kubernetes:
+      patterns:
+        - "*"
+      exclude-patterns:
+        - "k8s.io/*"
+        - "sigs.k8s.io/*"
+    kubernetes:
+      patterns:
+        - "k8s.io/*"
+        - "sigs.k8s.io/*"
 - package-ecosystem: docker
-  directory: "/vertical-pod-autoscaler/pkg/recommender"
+  directories:
+    - "/vertical-pod-autoscaler/pkg/admission-controller"
+    - "/vertical-pod-autoscaler/pkg/recommender"
+    - "/vertical-pod-autoscaler/pkg/updater"
   schedule:
     interval: daily
-  ignore:
-    - dependency-name: "golang"
-      versions: ["*.*rc*"]
   open-pull-requests-limit: 3
   labels:
     - "area/vertical-pod-autoscaler"
     - "release-note-none"
     - "ok-to-test"
-- package-ecosystem: docker
-  directory: "/vertical-pod-autoscaler/pkg/updater"
+  groups:
+    actions:
+      update-types:
+        - "minor"
+        - "patch"
+### VPA release 1.7 branch
+- package-ecosystem: gomod
+  target-branch: vpa-release-1.7
+  directories:
+    - "/vertical-pod-autoscaler"
+    - "/vertical-pod-autoscaler/test/"
   schedule:
-    interval: daily
+    interval: weekly
+  labels:
+    - "area/vertical-pod-autoscaler"
+    - "release-note-none"
+    - "ok-to-test"
+    - "triage/accepted"
+  allow:
+    - dependency-type: "all"
   ignore:
-    - dependency-name: "golang"
-      versions: ["*.*rc*"]
+    - dependency-name: "*"
+      update-types:
+        - "version-update:semver-major"
+        - "version-update:semver-minor"
+  groups:
+    patch-updates:
+      patterns:
+        - "*"
+- package-ecosystem: docker
+  target-branch: vpa-release-1.7
+  directories:
+    - "/vertical-pod-autoscaler/pkg/admission-controller"
+    - "/vertical-pod-autoscaler/pkg/recommender"
+    - "/vertical-pod-autoscaler/pkg/updater"
+  schedule:
+    interval: weekly
   open-pull-requests-limit: 3
   labels:
     - "area/vertical-pod-autoscaler"
     - "release-note-none"
     - "ok-to-test"
-- package-ecosystem: docker
-  directory: "/vertical-pod-autoscaler/pkg/admission-controller"
-  schedule:
-    interval: daily
-  ignore:
-    - dependency-name: "golang"
-      versions: ["*.*rc*"]
-  open-pull-requests-limit: 3
-  labels:
-    - "area/vertical-pod-autoscaler"
-    - "release-note-none"
-    - "ok-to-test"
+  groups:
+    actions:
+      update-types:
+        - "minor"
+        - "patch"
+### Addon-resizer
 - package-ecosystem: gomod
   directory: "/addon-resizer"
   schedule:
@@ -78,10 +118,14 @@ updates:
     include: scope
   ignore:
     # Update providers manually.
+    - dependency-name: "k8s.io/cloud-provider-aws"
     - dependency-name: "k8s.io/cloud-provider-aws/*"
     - dependency-name: "github.com/aws/*"
+    - dependency-name: "k8s.io/cloud-provider-gcp"
     - dependency-name: "k8s.io/cloud-provider-gcp/*"
+    - dependency-name: "cloud.google.com/go/compute"
     - dependency-name: "cloud.google.com/go/compute/*"
+    - dependency-name: "sigs.k8s.io/cloud-provider-azure"
     - dependency-name: "sigs.k8s.io/cloud-provider-azure/*"
     - dependency-name: "github.com/Azure/*"
     - dependency-name: "github.com/Azure/go-autorest/autorest/*"

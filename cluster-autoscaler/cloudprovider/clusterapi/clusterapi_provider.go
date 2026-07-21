@@ -19,7 +19,6 @@ package clusterapi
 import (
 	"fmt"
 	"path"
-	"reflect"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -33,11 +32,20 @@ import (
 	klog "k8s.io/klog/v2"
 
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/builder"
 	coreoptions "k8s.io/autoscaler/cluster-autoscaler/core/options"
 	"k8s.io/autoscaler/cluster-autoscaler/processors/scaledowncandidates"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/errors"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/gpu"
+	"k8s.io/client-go/informers"
 )
+
+func init() {
+	builder.RegisterCloudProvider(cloudprovider.ClusterAPIProviderName, func(opts *coreoptions.AutoscalerOptions, do cloudprovider.NodeGroupDiscoveryOptions, rl *cloudprovider.ResourceLimiter, informerFactory informers.SharedInformerFactory) cloudprovider.CloudProvider {
+		return BuildClusterAPI(opts, do, rl)
+	})
+	builder.SetDefaultCloudProvider(cloudprovider.ClusterAPIProviderName)
+}
 
 const (
 	// GPULabel is the label added to nodes with GPU resource.
@@ -74,7 +82,7 @@ func (p *provider) NodeGroupForNode(node *corev1.Node) (cloudprovider.NodeGroup,
 	if err != nil {
 		return nil, err
 	}
-	if ng == nil || reflect.ValueOf(ng).IsNil() {
+	if ng == nil {
 		return nil, nil
 	}
 	return ng, nil
@@ -179,7 +187,7 @@ func BuildClusterAPI(opts *coreoptions.AutoscalerOptions, do cloudprovider.NodeG
 	// Grab a dynamic interface that we can create informers from
 	managementClient, err := dynamic.NewForConfig(managementConfig)
 	if err != nil {
-		klog.Fatalf("could not generate dynamic client for config")
+		klog.Fatalf("could not generate dynamic client for config: %v", err)
 	}
 
 	workloadClient, err := kubernetes.NewForConfig(workloadConfig)

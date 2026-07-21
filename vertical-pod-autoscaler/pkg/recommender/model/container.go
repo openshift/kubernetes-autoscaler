@@ -17,6 +17,7 @@ limitations under the License.
 package model
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
@@ -97,6 +98,9 @@ func (container *ContainerState) observeQualityMetrics(usage ResourceAmount, isO
 		usageValue = CoresFromCPUAmount(usage)
 	case corev1.ResourceMemory:
 		usageValue = BytesFromMemoryAmount(usage)
+	default:
+		klog.V(0).InfoS("Unknown resource", "resource", resource)
+		return
 	}
 	if container.aggregator.GetLastRecommendation() == nil {
 		metrics_quality.ObserveQualityMetricsRecommendationMissing(usageValue, isOOM, resource, updateMode)
@@ -137,6 +141,12 @@ func (container *ContainerState) GetOOMMinBumpUp() float64 {
 	return container.aggregator.GetOOMMinBumpUp()
 }
 
+// GetMemoryAggregationIntervalDuration returns the memory aggregation interval for this container.
+// It delegates to the aggregator's implementation.
+func (container *ContainerState) GetMemoryAggregationIntervalDuration() time.Duration {
+	return container.aggregator.GetMemoryAggregationIntervalDuration()
+}
+
 func (container *ContainerState) addMemorySample(sample *ContainerUsageSample, isOOM bool) bool {
 	ts := sample.MeasureStart
 	// We always process OOM samples.
@@ -168,8 +178,8 @@ func (container *ContainerState) addMemorySample(sample *ContainerUsageSample, i
 		}
 	} else {
 		// Shift the memory aggregation window to the next interval.
-		memoryAggregationInterval := GetAggregationsConfig().MemoryAggregationInterval
-		shift := ts.Sub(container.WindowEnd).Truncate(memoryAggregationInterval) + memoryAggregationInterval
+		memoryAggregationIntervalDuration := container.GetMemoryAggregationIntervalDuration()
+		shift := ts.Sub(container.WindowEnd).Truncate(memoryAggregationIntervalDuration) + memoryAggregationIntervalDuration
 		container.WindowEnd = container.WindowEnd.Add(shift)
 		container.memoryPeak = 0
 		container.oomPeak = 0
@@ -194,10 +204,13 @@ func (container *ContainerState) addMemorySample(sample *ContainerUsageSample, i
 
 // RecordOOM adds info regarding OOM event in the model as an artificial memory sample.
 func (container *ContainerState) RecordOOM(timestamp time.Time, requestedMemory ResourceAmount) error {
-	// Discard old OOM
-	config := GetAggregationsConfig()
-	// TODO(omerap12): remove MemoryAggregationInterval to per-container configuration as well
-	if timestamp.Before(container.WindowEnd.Add(-1 * config.MemoryAggregationInterval)) {
+	// Discard OOMs that are too old to be relevant. The reference point is the
+	// most recently observed memory sample, not WindowEnd: WindowEnd is the end
+	// of the current aggregation interval and can sit up to a full interval ahead
+	// of the latest real sample, so using it here would wrongly drop a fresh OOM
+	// that landed just before an interval boundary (kubernetes/autoscaler#8548).
+	if !container.lastMemorySampleStart.IsZero() &&
+		timestamp.Before(container.lastMemorySampleStart.Add(-1*container.GetMemoryAggregationIntervalDuration())) {
 		return fmt.Errorf("OOM event will be discarded - it is too old (%v)", timestamp)
 	}
 	// Get max of the request and the recent usage-based memory peak.
@@ -212,7 +225,7 @@ func (container *ContainerState) RecordOOM(timestamp time.Time, requestedMemory 
 		Resource:     ResourceMemory,
 	}
 	if !container.addMemorySample(&oomMemorySample, true) {
-		return fmt.Errorf("adding OOM sample failed")
+		return errors.New("adding OOM sample failed")
 	}
 	return nil
 }

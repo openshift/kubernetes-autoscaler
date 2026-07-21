@@ -17,6 +17,7 @@ limitations under the License.
 package core
 
 import (
+	"context"
 	"strings"
 	"time"
 
@@ -27,9 +28,9 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/core/utils"
 	"k8s.io/autoscaler/cluster-autoscaler/estimator"
 	"k8s.io/autoscaler/cluster-autoscaler/expander/factory"
-	"k8s.io/autoscaler/cluster-autoscaler/observers/loopstart"
 	ca_processors "k8s.io/autoscaler/cluster-autoscaler/processors"
 	"k8s.io/autoscaler/cluster-autoscaler/resourcequotas"
+	"k8s.io/autoscaler/cluster-autoscaler/resourcequotas/capacityquota"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator/clustersnapshot/predicate"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator/clustersnapshot/store"
 	csinodeprovider "k8s.io/autoscaler/cluster-autoscaler/simulator/csi/provider"
@@ -57,8 +58,8 @@ type Autoscaler interface {
 }
 
 // NewAutoscaler creates an autoscaler of an appropriate type according to the parameters
-func NewAutoscaler(opts coreoptions.AutoscalerOptions, informerFactory informers.SharedInformerFactory) (Autoscaler, errors.AutoscalerError) {
-	err := initializeDefaultOptions(&opts, informerFactory)
+func NewAutoscaler(ctx context.Context, opts coreoptions.AutoscalerOptions, informerFactory informers.SharedInformerFactory) (Autoscaler, errors.AutoscalerError) {
+	err := initializeDefaultOptions(ctx, &opts, informerFactory)
 	if err != nil {
 		return nil, errors.ToAutoscalerError(errors.InternalError, err)
 	}
@@ -68,11 +69,12 @@ func NewAutoscaler(opts coreoptions.AutoscalerOptions, informerFactory informers
 		opts.ClusterSnapshot,
 		opts.AutoscalingKubeClients,
 		opts.Processors,
-		opts.LoopStartNotifier,
+		opts.LoopStartObservers,
 		opts.CloudProvider,
 		opts.ExpanderStrategy,
 		opts.EstimatorBuilder,
 		opts.Backoff,
+		opts.ScaleUpFailuresRegistry,
 		opts.DebuggingSnapshotter,
 		opts.RemainingPdbTracker,
 		opts.ScaleUpOrchestrator,
@@ -80,23 +82,22 @@ func NewAutoscaler(opts coreoptions.AutoscalerOptions, informerFactory informers
 		opts.DrainabilityRules,
 		opts.DraProvider,
 		opts.QuotasTrackerOptions,
+		opts.MinQuotasTrackerOptions,
 		opts.CSIProvider,
+		opts.CapacityBufferPodsRegistry,
 	), nil
 }
 
 // Initialize default options if not provided.
-func initializeDefaultOptions(opts *coreoptions.AutoscalerOptions, informerFactory informers.SharedInformerFactory) error {
+func initializeDefaultOptions(ctx context.Context, opts *coreoptions.AutoscalerOptions, informerFactory informers.SharedInformerFactory) error {
 	if opts.Processors == nil {
 		opts.Processors = ca_processors.DefaultProcessors(opts.AutoscalingOptions)
 	}
-	if opts.LoopStartNotifier == nil {
-		opts.LoopStartNotifier = loopstart.NewObserversList(nil)
-	}
 	if opts.AutoscalingKubeClients == nil {
-		opts.AutoscalingKubeClients = ca_context.NewAutoscalingKubeClients(opts.AutoscalingOptions, opts.KubeClient, opts.InformerFactory)
+		opts.AutoscalingKubeClients = ca_context.NewAutoscalingKubeClients(ctx, opts.AutoscalingOptions, opts.KubeClient, opts.InformerFactory)
 	}
 	if opts.FrameworkHandle == nil {
-		fwHandle, err := framework.NewHandle(opts.InformerFactory, opts.SchedulerConfig, opts.DynamicResourceAllocationEnabled, opts.CSINodeAwareSchedulingEnabled)
+		fwHandle, err := framework.NewHandle(ctx, opts.InformerFactory, opts.SchedulerConfig, opts.DynamicResourceAllocationEnabled, opts.CSINodeAwareSchedulingEnabled)
 		if err != nil {
 			return err
 		}
@@ -119,6 +120,7 @@ func initializeDefaultOptions(opts *coreoptions.AutoscalerOptions, informerFacto
 			estimator.NewThresholdBasedEstimationLimiter(thresholds),
 			estimator.NewDecreasingPodOrderer(),
 			/* EstimationAnalyserFunc */ nil,
+			opts.FastpathBinpackingEnabled,
 		)
 		if err != nil {
 			return err
@@ -148,8 +150,12 @@ func initializeDefaultOptions(opts *coreoptions.AutoscalerOptions, informerFacto
 		opts.ExpanderStrategy = expanderStrategy
 	}
 	if opts.QuotasTrackerOptions.QuotaProvider == nil {
-		cloudQuotasProvider := resourcequotas.NewCloudQuotasProvider(opts.CloudProvider)
-		opts.QuotasTrackerOptions.QuotaProvider = resourcequotas.NewCombinedQuotasProvider([]resourcequotas.Provider{cloudQuotasProvider})
+		providers := []resourcequotas.Provider{resourcequotas.NewCloudQuotasProvider(opts.CloudProvider)}
+
+		if opts.CapacityQuotasEnabled {
+			providers = append(providers, capacityquota.NewCapacityQuotasProvider(opts.KubeClientNew))
+		}
+		opts.QuotasTrackerOptions.QuotaProvider = resourcequotas.NewCombinedQuotasProvider(providers)
 	}
 	if opts.QuotasTrackerOptions.CustomResourcesProcessor == nil {
 		opts.QuotasTrackerOptions.CustomResourcesProcessor = opts.Processors.CustomResourcesProcessor
@@ -157,6 +163,16 @@ func initializeDefaultOptions(opts *coreoptions.AutoscalerOptions, informerFacto
 	if opts.QuotasTrackerOptions.NodeFilter == nil {
 		virtualKubeletNodeFilter := utils.VirtualKubeletNodeFilter{}
 		opts.QuotasTrackerOptions.NodeFilter = resourcequotas.NewCombinedNodeFilter([]resourcequotas.NodeFilter{virtualKubeletNodeFilter})
+	}
+
+	if opts.MinQuotasTrackerOptions.QuotaProvider == nil {
+		opts.MinQuotasTrackerOptions.QuotaProvider = resourcequotas.NewCloudMinProvider(opts.CloudProvider)
+	}
+	if opts.MinQuotasTrackerOptions.CustomResourcesProcessor == nil {
+		opts.MinQuotasTrackerOptions.CustomResourcesProcessor = opts.Processors.CustomResourcesProcessor
+	}
+	if opts.MinQuotasTrackerOptions.NodeFilter == nil {
+		opts.MinQuotasTrackerOptions.NodeFilter = opts.QuotasTrackerOptions.NodeFilter
 	}
 
 	if opts.CSINodeAwareSchedulingEnabled {
