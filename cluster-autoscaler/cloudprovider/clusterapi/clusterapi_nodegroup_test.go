@@ -2100,6 +2100,7 @@ func TestNodeGroupNodesInstancesStatus(t *testing.T) {
 			machine := testConfig.machines[3].DeepCopy()
 			unstructured.RemoveNestedField(machine.Object, "status", "nodeRef")
 			unstructured.SetNestedField(machine.Object, "ErrorMessage", "status", "errorMessage")
+			unstructured.SetNestedField(machine.Object, "Failed", "status", "phase")
 
 			if err := controller.UpdateResource(controller.machineInformer, controller.machineResource, machine); err != nil {
 				t.Fatalf("unexpected error updating machine, got %v", err)
