@@ -491,6 +491,7 @@ func TestNodeGroupDecreaseTargetSize(t *testing.T) {
 				unstructured.RemoveNestedField(machine.Object, "spec", "providerID")
 			}
 			unstructured.SetNestedField(machine.Object, "ErrorMessage", "status", "errorMessage")
+			unstructured.SetNestedField(machine.Object, "Failed", "status", "phase")
 
 			if err := controller.UpdateResource(controller.machineInformer, controller.machineResource, machine); err != nil {
 				t.Fatalf("unexpected error updating machine, got %v", err)
@@ -1403,6 +1404,10 @@ func TestNodeGroupWithFailedMachine(t *testing.T) {
 		unstructured.RemoveNestedField(machine.Object, "spec", "providerID")
 		unstructured.SetNestedField(machine.Object, "ErrorMessage", "status", "errorMessage")
 
+		if err := unstructured.SetNestedField(machine.Object, "Failed", "status", "phase"); err != nil {
+			t.Fatalf("unexpected error setting nested field: %v", err)
+		}
+
 		if err := controller.UpdateResource(controller.machineInformer, controller.machineResource, machine); err != nil {
 			t.Fatalf("unexpected error updating machine, got %v", err)
 		}
@@ -2178,6 +2183,7 @@ func TestNodeGroupNodesInstancesStatus(t *testing.T) {
 			machine := testConfig.machines[2].DeepCopy()
 			unstructured.SetNestedField(machine.Object, "node-1", "status", "nodeRef", "name")
 			unstructured.SetNestedField(machine.Object, "ErrorMessage", "status", "errorMessage")
+			unstructured.SetNestedField(machine.Object, "Failed", "status", "phase")
 
 			if err := controller.UpdateResource(controller.machineInformer, controller.machineResource, machine); err != nil {
 				t.Fatalf("unexpected error updating machine, got %v", err)
@@ -2192,6 +2198,7 @@ func TestNodeGroupNodesInstancesStatus(t *testing.T) {
 			machine := testConfig.machines[3].DeepCopy()
 			unstructured.RemoveNestedField(machine.Object, "status", "nodeRef")
 			unstructured.SetNestedField(machine.Object, "ErrorMessage", "status", "errorMessage")
+			unstructured.SetNestedField(machine.Object, "Failed", "status", "phase")
 
 			if err := controller.UpdateResource(controller.machineInformer, controller.machineResource, machine); err != nil {
 				t.Fatalf("unexpected error updating machine, got %v", err)
