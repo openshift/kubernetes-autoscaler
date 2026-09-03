@@ -249,10 +249,6 @@ func (feeder *clusterStateFeeder) InitFromHistoryProvider(historyProvider histor
 						ContainerUsageSample: sample,
 						Container:            containerID,
 					}); err != nil {
-					// Ignore missing "POD" containers returned by prometheus adapter
-					if _, isKeyError := err.(model.KeyError); isKeyError && containerName == "POD" {
-						continue
-					}
 					klog.V(0).InfoS("Failed to add sample", "sample", sample, "error", err)
 				}
 			}
@@ -280,11 +276,11 @@ func (feeder *clusterStateFeeder) InitFromCheckpoints(ctx context.Context) {
 	klog.V(3).InfoS("Initializing VPA from checkpoints")
 	feeder.LoadVPAs(ctx)
 
+	klog.V(3).InfoS("Fetching VPA checkpoints")
 	checkpointList, err := feeder.vpaCheckpointLister.List(labels.Everything())
 	if err != nil {
 		klog.ErrorS(err, "Cannot list VPA checkpoints")
 	}
-	klog.V(3).InfoS("Fetching VPA checkpoints", "count", len(checkpointList))
 
 	namespaces := make(map[string]bool)
 	for _, v := range feeder.clusterState.VPAs() {
@@ -530,7 +526,7 @@ func (feeder *clusterStateFeeder) LoadRealTimeMetrics(ctx context.Context) {
 		for _, sample := range newContainerUsageSamplesWithKey(containerMetrics) {
 			if err := feeder.clusterState.AddSample(sample); err != nil {
 				// Not all pod states are tracked in memory saver mode.
-				if _, isKeyError := err.(model.KeyError); isKeyError && (feeder.memorySaveMode || sample.Container.ContainerName == "POD") {
+				if _, isKeyError := err.(model.KeyError); isKeyError && feeder.memorySaveMode {
 					continue
 				}
 				klog.V(0).InfoS("Error adding metric sample", "sample", sample, "error", err)

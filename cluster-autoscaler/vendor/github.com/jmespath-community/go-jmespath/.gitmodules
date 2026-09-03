@@ -1,3 +1,0 @@
-[submodule "compliance"]
-	path = compliance
-	url = https://github.com/jmespath-community/jmespath.test.git

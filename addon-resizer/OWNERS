@@ -1,0 +1,13 @@
+approvers:
+- kwiesmueller
+- jbartosik
+- raywainman
+reviewers:
+- kwiesmueller
+- jbartosik
+- raywainman
+emeritus_approvers:
+- bskiba # 2022-09-30
+- wojtek-t # 2022-09-30
+labels:
+- area/addon-resizer
