@@ -17,6 +17,7 @@ limitations under the License.
 package openshift
 
 import (
+	"context"
 	"fmt"
 	"path"
 	"reflect"
@@ -622,7 +623,7 @@ func TestControllerNodeGroupsNodeCount(t *testing.T) {
 		}
 
 		for i := range nodegroups {
-			nodes, err := nodegroups[i].Nodes()
+			nodes, err := nodegroups[i].Nodes(context.Background())
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -738,7 +739,7 @@ func TestControllerMachineSetNodeNamesWithoutLinkage(t *testing.T) {
 	}
 
 	ng := nodegroups[0]
-	nodeNames, err := ng.Nodes()
+	nodeNames, err := ng.Nodes(context.Background())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -780,7 +781,7 @@ func TestControllerMachineSetNodeNamesUsingProviderID(t *testing.T) {
 	}
 
 	ng := nodegroups[0]
-	nodeNames, err := ng.Nodes()
+	nodeNames, err := ng.Nodes(context.Background())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -836,7 +837,7 @@ func TestControllerMachineSetNodeNamesUsingStatusNodeRefName(t *testing.T) {
 		t.Fatalf("expected 1 nodegroup, got %d", l)
 	}
 
-	nodeNames, err := nodegroups[0].Nodes()
+	nodeNames, err := nodegroups[0].Nodes(context.Background())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
