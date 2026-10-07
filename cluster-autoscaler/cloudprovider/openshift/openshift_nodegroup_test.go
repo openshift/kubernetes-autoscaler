@@ -165,35 +165,35 @@ func TestNodeGroupNewNodeGroupConstructor(t *testing.T) {
 			t.Errorf("expected %q, got %q", testConfig.spec.namespace, ng.scalableResource.Namespace())
 		}
 
-		if ng.MinSize() != tc.minSize {
-			t.Errorf("expected %v, got %v", tc.minSize, ng.MinSize())
+		if ng.MinSize(context.Background()) != tc.minSize {
+			t.Errorf("expected %v, got %v", tc.minSize, ng.MinSize(context.Background()))
 		}
 
-		if ng.MaxSize() != tc.maxSize {
-			t.Errorf("expected %v, got %v", tc.maxSize, ng.MaxSize())
+		if ng.MaxSize(context.Background()) != tc.maxSize {
+			t.Errorf("expected %v, got %v", tc.maxSize, ng.MaxSize(context.Background()))
 		}
 
 		if ng.Id() != expectedID {
 			t.Errorf("expected %q, got %q", expectedID, ng.Id())
 		}
 
-		if ng.Debug() != expectedDebug {
-			t.Errorf("expected %q, got %q", expectedDebug, ng.Debug())
+		if ng.Debug(context.Background()) != expectedDebug {
+			t.Errorf("expected %q, got %q", expectedDebug, ng.Debug(context.Background()))
 		}
 
-		if exists := ng.Exist(); !exists {
+		if exists := ng.Exist(context.Background()); !exists {
 			t.Errorf("expected %t, got %t", true, exists)
 		}
 
-		if _, err := ng.Create(); err != cloudprovider.ErrAlreadyExist {
+		if _, err := ng.Create(context.Background()); err != cloudprovider.ErrAlreadyExist {
 			t.Error("expected error")
 		}
 
-		if err := ng.Delete(); err != cloudprovider.ErrNotImplemented {
+		if err := ng.Delete(context.Background()); err != cloudprovider.ErrNotImplemented {
 			t.Error("expected error")
 		}
 
-		if result := ng.Autoprovisioned(); result {
+		if result := ng.Autoprovisioned(context.Background()); result {
 			t.Errorf("expected %t, got %t", false, result)
 		}
 
@@ -249,7 +249,7 @@ func TestNodeGroupIncreaseSizeErrors(t *testing.T) {
 		}
 
 		ng := nodegroups[0].(*nodegroup)
-		currReplicas, err := ng.TargetSize()
+		currReplicas, err := ng.TargetSize(context.Background())
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -260,7 +260,7 @@ func TestNodeGroupIncreaseSizeErrors(t *testing.T) {
 
 		errors := len(tc.errorMsg) > 0
 
-		err = ng.IncreaseSize(tc.delta)
+		err = ng.IncreaseSize(context.Background(), tc.delta)
 		if errors && err == nil {
 			t.Fatal("expected an error")
 		}
@@ -330,7 +330,7 @@ func TestNodeGroupIncreaseSize(t *testing.T) {
 		}
 
 		ng := nodegroups[0].(*nodegroup)
-		currReplicas, err := ng.TargetSize()
+		currReplicas, err := ng.TargetSize(context.Background())
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -339,7 +339,7 @@ func TestNodeGroupIncreaseSize(t *testing.T) {
 			t.Errorf("initially expected %v, got %v", tc.initial, currReplicas)
 		}
 
-		if err := ng.IncreaseSize(tc.delta); err != nil {
+		if err := ng.IncreaseSize(context.Background(), tc.delta); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
@@ -509,7 +509,7 @@ func TestNodeGroupDecreaseTargetSize(t *testing.T) {
 			if ng == nil {
 				return false, nil
 			}
-			currReplicas, err := ng.TargetSize()
+			currReplicas, err := ng.TargetSize(context.Background())
 			if err != nil {
 				return true, fmt.Errorf("unexpected error: %v", err)
 			}
@@ -518,7 +518,7 @@ func TestNodeGroupDecreaseTargetSize(t *testing.T) {
 				return true, fmt.Errorf("expected %v, got %v", tc.initial+tc.targetSizeIncrement, currReplicas)
 			}
 
-			if err := ng.DecreaseTargetSize(tc.delta); (err != nil) != tc.expectedError {
+			if err := ng.DecreaseTargetSize(context.Background(), tc.delta); (err != nil) != tc.expectedError {
 				return true, fmt.Errorf("expected error: %v, got: %v", tc.expectedError, err)
 			}
 
@@ -709,7 +709,7 @@ func TestNodeGroupDecreaseSizeErrors(t *testing.T) {
 		}
 
 		ng := nodegroups[0].(*nodegroup)
-		currReplicas, err := ng.TargetSize()
+		currReplicas, err := ng.TargetSize(context.Background())
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -720,7 +720,7 @@ func TestNodeGroupDecreaseSizeErrors(t *testing.T) {
 
 		errors := len(tc.errorMsg) > 0
 
-		err = ng.DecreaseTargetSize(tc.delta)
+		err = ng.DecreaseTargetSize(context.Background(), tc.delta)
 		if errors && err == nil {
 			t.Fatal("expected an error")
 		}
@@ -784,7 +784,7 @@ func TestNodeGroupDeleteNodes(t *testing.T) {
 		}
 
 		ng := nodegroups[0].(*nodegroup)
-		nodeNames, err := ng.Nodes()
+		nodeNames, err := ng.Nodes(context.Background())
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -803,7 +803,7 @@ func TestNodeGroupDeleteNodes(t *testing.T) {
 			}
 		}
 
-		if err := ng.DeleteNodes(testConfig.nodes[5:]); err != nil {
+		if err := ng.DeleteNodes(context.Background(), testConfig.nodes[5:]); err != nil {
 			t.Errorf("unexpected error: %v", err)
 		}
 
@@ -881,7 +881,7 @@ func TestNodeGroupMachineSetDeleteNodesWithMismatchedNodes(t *testing.T) {
 		}
 
 		// Deleting nodes that are not in ng0 should fail.
-		err0 := ng0.DeleteNodes(testConfig1.nodes)
+		err0 := ng0.DeleteNodes(context.Background(), testConfig1.nodes)
 		if err0 == nil {
 			t.Error("expected an error")
 		}
@@ -893,7 +893,7 @@ func TestNodeGroupMachineSetDeleteNodesWithMismatchedNodes(t *testing.T) {
 		}
 
 		// Deleting nodes that are not in ng1 should fail.
-		err1 := ng1.DeleteNodes(testConfig0.nodes)
+		err1 := ng1.DeleteNodes(context.Background(), testConfig0.nodes)
 		if err1 == nil {
 			t.Error("expected an error")
 		}
@@ -904,13 +904,13 @@ func TestNodeGroupMachineSetDeleteNodesWithMismatchedNodes(t *testing.T) {
 
 		// Deleting from correct node group should fail because
 		// replicas would become <= 0.
-		if err := ng0.DeleteNodes(testConfig0.nodes); err == nil {
+		if err := ng0.DeleteNodes(context.Background(), testConfig0.nodes); err == nil {
 			t.Error("expected error")
 		}
 
 		// Deleting from correct node group should fail because
 		// replicas would become <= 0.
-		if err := ng1.DeleteNodes(testConfig1.nodes); err == nil {
+		if err := ng1.DeleteNodes(context.Background(), testConfig1.nodes); err == nil {
 			t.Error("expected error")
 		}
 	}
@@ -980,7 +980,7 @@ func TestNodeGroupDeleteNodesTwice(t *testing.T) {
 		}
 
 		ng := nodegroups[0].(*nodegroup)
-		nodeNames, err := ng.Nodes()
+		nodeNames, err := ng.Nodes(context.Background())
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -992,8 +992,8 @@ func TestNodeGroupDeleteNodesTwice(t *testing.T) {
 		if len(nodeNames) <= expectedSize {
 			t.Fatalf("expected more nodes than the expected size: %d <= %d", len(nodeNames), expectedSize)
 		}
-		if ng.MinSize() >= expectedSize {
-			t.Fatalf("expected min size to be less than expected size: %d >= %d", ng.MinSize(), expectedSize)
+		if ng.MinSize(context.Background()) >= expectedSize {
+			t.Fatalf("expected min size to be less than expected size: %d >= %d", ng.MinSize(context.Background()), expectedSize)
 		}
 
 		if len(nodeNames) != len(testConfig.nodes) {
@@ -1021,7 +1021,7 @@ func TestNodeGroupDeleteNodesTwice(t *testing.T) {
 		}
 
 		// Delete all nodes over the expectedSize
-		if err := ng.DeleteNodes(nodesToBeDeleted); err != nil {
+		if err := ng.DeleteNodes(context.Background(), nodesToBeDeleted); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
@@ -1039,7 +1039,7 @@ func TestNodeGroupDeleteNodesTwice(t *testing.T) {
 			if err != nil {
 				return false, err
 			}
-			targetSize, err := nodegroups[0].TargetSize()
+			targetSize, err := nodegroups[0].TargetSize(context.Background())
 			if err != nil {
 				return false, err
 			}
@@ -1056,7 +1056,7 @@ func TestNodeGroupDeleteNodesTwice(t *testing.T) {
 		ng = nodegroups[0].(*nodegroup)
 
 		// Check the nodegroup is at the expected size
-		actualSize, err := ng.TargetSize()
+		actualSize, err := ng.TargetSize(context.Background())
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -1085,7 +1085,7 @@ func TestNodeGroupDeleteNodesTwice(t *testing.T) {
 		// Attempt to delete the nodes again which verifies
 		// that nodegroup.DeleteNodes() skips over nodes that
 		// have a non-nil DeletionTimestamp value.
-		if err := ng.DeleteNodes(nodesToBeDeleted); err != nil {
+		if err := ng.DeleteNodes(context.Background(), nodesToBeDeleted); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
@@ -1142,7 +1142,7 @@ func TestNodeGroupDeleteNodesSequential(t *testing.T) {
 		}
 
 		ng := nodegroups[0].(*nodegroup)
-		nodeNames, err := ng.Nodes()
+		nodeNames, err := ng.Nodes(context.Background())
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -1154,8 +1154,8 @@ func TestNodeGroupDeleteNodesSequential(t *testing.T) {
 		if len(nodeNames) <= expectedSize {
 			t.Fatalf("expected more nodes than the expected size: %d <= %d", len(nodeNames), expectedSize)
 		}
-		if ng.MinSize() >= expectedSize {
-			t.Fatalf("expected min size to be less than expected size: %d >= %d", ng.MinSize(), expectedSize)
+		if ng.MinSize(context.Background()) >= expectedSize {
+			t.Fatalf("expected min size to be less than expected size: %d >= %d", ng.MinSize(context.Background()), expectedSize)
 		}
 
 		if len(nodeNames) != len(testConfig.nodes) {
@@ -1197,7 +1197,7 @@ func TestNodeGroupDeleteNodesSequential(t *testing.T) {
 		}
 
 		for node, nodeGroup := range nodeToNodeGroup {
-			if err := nodeGroup.DeleteNodes([]*corev1.Node{node}); err != nil {
+			if err := nodeGroup.DeleteNodes(context.Background(), []*corev1.Node{node}); err != nil {
 				t.Fatalf("unexpected error deleting node: %v", err)
 			}
 		}
@@ -1282,7 +1282,7 @@ func TestNodeGroupWithFailedMachine(t *testing.T) {
 		}
 
 		ng := nodegroups[0]
-		nodeNames, err := ng.Nodes()
+		nodeNames, err := ng.Nodes(context.Background())
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -1653,7 +1653,7 @@ func TestNodeGroupTemplateNodeInfo(t *testing.T) {
 		if ng == nil {
 			t.Fatal("expected nodegroup to not be nil")
 		}
-		nodeInfo, err := ng.TemplateNodeInfo()
+		nodeInfo, err := ng.TemplateNodeInfo(context.Background())
 		if config.expectedErr != nil {
 			if err != config.expectedErr {
 				t.Fatalf("expected error: %v, but got: %v", config.expectedErr, err)
@@ -1804,7 +1804,7 @@ func TestNodeGroupGetOptions(t *testing.T) {
 		}
 
 		ng := nodegroups[0]
-		opts, err := ng.GetOptions(defaultOptions)
+		opts, err := ng.GetOptions(context.Background(), defaultOptions)
 		assert.NoError(t, err)
 		assert.Equal(t, expectedOptions, opts)
 	}
@@ -1953,7 +1953,7 @@ func TestNodeGroupNodesInstancesStatus(t *testing.T) {
 		}
 
 		ng := nodegroups[0]
-		instances, err := ng.Nodes()
+		instances, err := ng.Nodes(context.Background())
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
