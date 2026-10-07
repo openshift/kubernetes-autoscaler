@@ -17,6 +17,7 @@ limitations under the License.
 package clusterapi
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path"
@@ -39,7 +40,7 @@ import (
 	"k8s.io/client-go/tools/cache"
 	klog "k8s.io/klog/v2"
 
-	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 )
 
 const (
@@ -811,12 +812,12 @@ func (c *machineController) nodeGroups() ([]cloudprovider.NodeGroup, error) {
 			if isScalableResourceAndPaused(*r) {
 				// if the resource is paused from reconciling by cluster api controllers, we don't want to include it
 				// as an active node group.
-				klog.V(4).Infof("discovered a paused node group: %s", ng.Debug())
+				klog.V(4).Infof("discovered a paused node group: %s", ng.Debug(context.TODO()))
 				continue
 			}
 
 			nodegroups = append(nodegroups, ng)
-			klog.V(4).Infof("discovered node group: %s", ng.Debug())
+			klog.V(4).Infof("discovered node group: %s", ng.Debug(context.TODO()))
 		}
 	}
 	return nodegroups, nil
