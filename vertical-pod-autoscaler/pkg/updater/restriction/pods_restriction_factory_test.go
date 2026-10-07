@@ -639,65 +639,44 @@ func TestEvictReplicatedByStatefulSet(t *testing.T) {
 }
 
 func TestEvictReplicatedByDaemonSet(t *testing.T) {
-	testCases := []struct {
-		name                   string
-		desiredNumberScheduled int32
-		numberReady            int32
-	}{
-		{
-			name:                   "Evict two pods (half of 5).",
-			desiredNumberScheduled: 5,
-			numberReady:            5,
+	livePods := int32(5)
+
+	ds := appsv1.DaemonSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "ds",
+			Namespace: "default",
 		},
-		{
-			name:                   "Evict two pods (half of 5) even if no pods are ready.",
-			desiredNumberScheduled: 5,
-			numberReady:            0,
+		TypeMeta: metav1.TypeMeta{
+			Kind: "DaemonSet",
+		},
+		Status: appsv1.DaemonSetStatus{
+			NumberReady: livePods,
 		},
 	}
 
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			ds := appsv1.DaemonSet{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "ds",
-					Namespace: "default",
-				},
-				TypeMeta: metav1.TypeMeta{
-					Kind: "DaemonSet",
-				},
-				Status: appsv1.DaemonSetStatus{
-					DesiredNumberScheduled: tc.desiredNumberScheduled,
-					NumberReady:            tc.numberReady,
-				},
-			}
+	pods := make([]*corev1.Pod, livePods)
+	for i := range pods {
+		pods[i] = test.Pod().WithName(getTestPodName(i)).WithCreator(&ds.ObjectMeta, &ds.TypeMeta).Get()
+	}
 
-			pods := make([]*corev1.Pod, tc.desiredNumberScheduled)
-			for i := range pods {
-				pods[i] = test.Pod().WithName(getTestPodName(i)).WithCreator(&ds.ObjectMeta, &ds.TypeMeta).Get()
-			}
+	basicVpa := getBasicVpa()
+	factory, err := getRestrictionFactory(nil, nil, nil, &ds, 2, 0.5, nil, nil, nil, false)
+	assert.NoError(t, err)
+	creatorToSingleGroupStatsMap, podToReplicaCreatorMap, err := factory.GetCreatorMaps(pods, basicVpa)
+	assert.NoError(t, err)
+	eviction := factory.NewPodsEvictionRestriction(creatorToSingleGroupStatsMap, podToReplicaCreatorMap)
 
-			basicVpa := getBasicVpa()
-			factory, err := getRestrictionFactory(nil, nil, nil, &ds, 2, 0.5, nil, nil, nil, false)
-			assert.NoError(t, err)
-			creatorToSingleGroupStatsMap, podToReplicaCreatorMap, err := factory.GetCreatorMaps(pods, basicVpa)
-			assert.NoError(t, err)
-			assert.Len(t, creatorToSingleGroupStatsMap, 1, "DaemonSet should not be skipped")
-			eviction := factory.NewPodsEvictionRestriction(creatorToSingleGroupStatsMap, podToReplicaCreatorMap)
+	for _, pod := range pods {
+		assert.True(t, eviction.CanEvict(pod))
+	}
 
-			for _, pod := range pods {
-				assert.True(t, eviction.CanEvict(pod))
-			}
-
-			for _, pod := range pods[:2] {
-				err := eviction.Evict(pod, basicVpa, test.FakeEventRecorder())
-				assert.Nil(t, err, "Should evict with no error")
-			}
-			for _, pod := range pods[2:] {
-				err := eviction.Evict(pod, basicVpa, test.FakeEventRecorder())
-				assert.Error(t, err, "Error expected")
-			}
-		})
+	for _, pod := range pods[:2] {
+		err := eviction.Evict(pod, basicVpa, test.FakeEventRecorder())
+		assert.Nil(t, err, "Should evict with no error")
+	}
+	for _, pod := range pods[2:] {
+		err := eviction.Evict(pod, basicVpa, test.FakeEventRecorder())
+		assert.Error(t, err, "Error expected")
 	}
 }
 

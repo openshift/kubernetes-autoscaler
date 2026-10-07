@@ -21,7 +21,9 @@ admissionController:
   registerWebhook: true
   certGen:
     enabled: false
-  logLevel: 6
+  # Enable certificate reload for e2e rotation test
+  extraArgs:
+    - --reload-cert
   # Mount certificates with legacy key names (matching gencerts.sh format)
   volumes:
     - name: tls-certs
@@ -40,7 +42,6 @@ recommender:
     enabled: false
   leaderElection:
     enabled: false
-  logLevel: 6
 
 updater:
   enabled: false
@@ -50,4 +51,3 @@ updater:
     enabled: false
   leaderElection:
     enabled: false
-  logLevel: 6

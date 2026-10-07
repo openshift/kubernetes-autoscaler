@@ -49,6 +49,7 @@ import (
 
 const (
 	defaultResyncPeriod                        = 10 * time.Minute
+	statusUpdateInterval                       = 10 * time.Second
 	scaleCacheEntryLifetime      time.Duration = time.Hour
 	scaleCacheEntryFreshnessTime time.Duration = 10 * time.Minute
 	scaleCacheEntryJitterFactor  float64       = 1.
@@ -70,7 +71,7 @@ func main() {
 	defer close(stopCh)
 
 	vpaClient := vpa_clientset.NewForConfigOrDie(kubeConfig)
-	_, vpaIndexer := vpa_api_util.NewVpasListerWithIndexer(vpaClient, make(chan struct{}), config.CommonFlags.VpaObjectNamespace)
+	vpaLister := vpa_api_util.NewVpasLister(vpaClient, make(chan struct{}), config.CommonFlags.VpaObjectNamespace)
 	kubeClient := kube_client.NewForConfigOrDie(kubeConfig)
 	factory := informers.NewSharedInformerFactoryWithOptions(kubeClient, defaultResyncPeriod,
 		informers.WithNamespace(config.CommonFlags.VpaObjectNamespace),
@@ -88,7 +89,7 @@ func main() {
 		limitRangeCalculator = limitrange.NewNoopLimitsCalculator()
 	}
 	recommendationProvider := recommendation.NewProvider(limitRangeCalculator, vpa_api_util.NewCappingRecommendationProcessor(limitRangeCalculator))
-	vpaMatcher := vpa.NewMatcher(vpaIndexer, targetSelectorFetcher, controllerFetcher)
+	vpaMatcher := vpa.NewMatcher(vpaLister, targetSelectorFetcher, controllerFetcher)
 
 	factory.Start(stopCh)
 	informerMap := factory.WaitForCacheSync(stopCh)
@@ -109,14 +110,11 @@ func main() {
 	if config.Namespace != "" {
 		statusNamespace = config.Namespace
 	}
-	if config.StatusLeaseNamespace != "" {
-		statusNamespace = config.StatusLeaseNamespace
-	}
 	statusUpdater := status.NewUpdater(
 		kubeClient,
-		config.StatusLeaseName,
+		status.AdmissionControllerStatusName,
 		statusNamespace,
-		config.StatusLeaseUpdateInterval,
+		statusUpdateInterval,
 		hostname,
 	)
 

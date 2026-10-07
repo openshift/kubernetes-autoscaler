@@ -77,7 +77,7 @@ type Clientset struct {
 	tracker   testing.ObjectTracker
 }
 
-func (c *Clientset) Discovery() discovery.DiscoveryInterfaces {
+func (c *Clientset) Discovery() discovery.DiscoveryInterface {
 	return c.discovery
 }
 

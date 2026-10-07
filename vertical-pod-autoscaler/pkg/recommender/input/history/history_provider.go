@@ -22,7 +22,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -383,9 +383,7 @@ func (p *prometheusHistoryProvider) GetClusterHistory() (map[model.PodID]*PodHis
 	}
 	for _, podHistory := range res {
 		for _, samples := range podHistory.Samples {
-			slices.SortFunc(samples, func(a, b model.ContainerUsageSample) int {
-				return a.MeasureStart.Compare(b.MeasureStart)
-			})
+			sort.Slice(samples, func(i, j int) bool { return samples[i].MeasureStart.Before(samples[j].MeasureStart) })
 		}
 	}
 	err = p.readLastLabels(res, p.config.PodLabelsMetricName)

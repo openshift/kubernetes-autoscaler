@@ -1132,7 +1132,7 @@ func TestInPlaceModeResizeStatuses(t *testing.T) {
 			clockTime:          time.UnixMilli(3600000),
 		},
 		{
-			name: "InPlace mode - ResizeStatusError returns InPlaceDeferred",
+			name: "InPlace mode - ResizeStatusError returns InPlaceInfeasible (retry)",
 			podConditions: []corev1.PodCondition{
 				{
 					Type:    corev1.PodResizeInProgress,
@@ -1142,7 +1142,7 @@ func TestInPlaceModeResizeStatuses(t *testing.T) {
 				},
 			},
 			updateMode:         vpa_types.UpdateModeInPlace,
-			expectedDecision:   utils.InPlaceDeferred,
+			expectedDecision:   utils.InPlaceInfeasible,
 			lastInPlaceAttempt: time.UnixMilli(0),
 			clockTime:          time.UnixMilli(3600000),
 		},

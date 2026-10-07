@@ -20,10 +20,11 @@ import (
 	"context"
 
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/client-go/tools/cache"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/klog/v2"
 
 	vpa_types "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/apis/autoscaling.k8s.io/v1"
+	vpa_lister "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/client/listers/autoscaling.k8s.io/v1"
 	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/target"
 	controllerfetcher "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/target/controller_fetcher"
 	vpa_api_util "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/vpa"
@@ -36,17 +37,16 @@ type Matcher interface {
 }
 
 type matcher struct {
-	// vpaIndexer must have the vpa_api_util.TargetRefIndex index registered.
-	vpaIndexer        cache.Indexer
+	vpaLister         vpa_lister.VerticalPodAutoscalerLister
 	selectorFetcher   target.VpaTargetSelectorFetcher
 	controllerFetcher controllerfetcher.ControllerFetcher
 }
 
 // NewMatcher returns a new VPA matcher.
-func NewMatcher(vpaIndexer cache.Indexer,
+func NewMatcher(vpaLister vpa_lister.VerticalPodAutoscalerLister,
 	selectorFetcher target.VpaTargetSelectorFetcher,
 	controllerFetcher controllerfetcher.ControllerFetcher) Matcher {
-	return &matcher{vpaIndexer: vpaIndexer,
+	return &matcher{vpaLister: vpaLister,
 		selectorFetcher:   selectorFetcher,
 		controllerFetcher: controllerFetcher}
 }
@@ -61,22 +61,25 @@ func (m *matcher) GetMatchingVPA(ctx context.Context, pod *corev1.Pod) *vpa_type
 		return nil
 	}
 
-	configs, err := m.vpaIndexer.ByIndex(vpa_api_util.TargetRefIndex,
-		vpa_api_util.TargetRefIndexKey(parentController.Namespace, parentController.Kind, parentController.Name))
+	configs, err := m.vpaLister.VerticalPodAutoscalers(pod.Namespace).List(labels.Everything())
 	if err != nil {
 		klog.ErrorS(err, "Failed to get vpa configs")
 		return nil
 	}
 
 	var controllingVpa *vpa_types.VerticalPodAutoscaler
-	for _, obj := range configs {
-		vpaConfig, ok := obj.(*vpa_types.VerticalPodAutoscaler)
-		if !ok {
-			klog.ErrorS(nil, "Unexpected object type in VPA cache", "object", obj)
-			continue
-		}
+	for _, vpaConfig := range configs {
 		if vpa_api_util.GetUpdateMode(vpaConfig) == vpa_types.UpdateModeOff && !vpa_api_util.HasStartupBoost(vpaConfig) {
 			continue
+		}
+		if vpaConfig.Spec.TargetRef == nil {
+			klog.V(5).InfoS("Skipping VPA object because targetRef is not defined. If this is a v1beta1 object, switch to v1", "vpa", klog.KObj(vpaConfig))
+			continue
+		}
+		if vpaConfig.Spec.TargetRef.Kind != parentController.Kind ||
+			vpaConfig.Namespace != parentController.Namespace ||
+			vpaConfig.Spec.TargetRef.Name != parentController.Name {
+			continue // This pod is not associated to the right controller
 		}
 
 		selector, err := m.selectorFetcher.Fetch(ctx, vpaConfig)

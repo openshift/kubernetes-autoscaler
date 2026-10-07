@@ -25,9 +25,9 @@ import (
 // Interface provides access to all the informers in this group version.
 type Interface interface {
 	// VerticalPodAutoscalers returns a VerticalPodAutoscalerInformer.
-	VerticalPodAutoscalers() TypedVerticalPodAutoscalerInformer
+	VerticalPodAutoscalers() VerticalPodAutoscalerInformer
 	// VerticalPodAutoscalerCheckpoints returns a VerticalPodAutoscalerCheckpointInformer.
-	VerticalPodAutoscalerCheckpoints() TypedVerticalPodAutoscalerCheckpointInformer
+	VerticalPodAutoscalerCheckpoints() VerticalPodAutoscalerCheckpointInformer
 }
 
 type version struct {
@@ -41,12 +41,12 @@ func New(f internalinterfaces.SharedInformerFactory, namespace string, tweakList
 	return &version{factory: f, namespace: namespace, tweakListOptions: tweakListOptions}
 }
 
-// VerticalPodAutoscalers returns a TypedVerticalPodAutoscalerInformer.
-func (v *version) VerticalPodAutoscalers() TypedVerticalPodAutoscalerInformer {
+// VerticalPodAutoscalers returns a VerticalPodAutoscalerInformer.
+func (v *version) VerticalPodAutoscalers() VerticalPodAutoscalerInformer {
 	return &verticalPodAutoscalerInformer{factory: v.factory, namespace: v.namespace, tweakListOptions: v.tweakListOptions}
 }
 
-// VerticalPodAutoscalerCheckpoints returns a TypedVerticalPodAutoscalerCheckpointInformer.
-func (v *version) VerticalPodAutoscalerCheckpoints() TypedVerticalPodAutoscalerCheckpointInformer {
+// VerticalPodAutoscalerCheckpoints returns a VerticalPodAutoscalerCheckpointInformer.
+func (v *version) VerticalPodAutoscalerCheckpoints() VerticalPodAutoscalerCheckpointInformer {
 	return &verticalPodAutoscalerCheckpointInformer{factory: v.factory, namespace: v.namespace, tweakListOptions: v.tweakListOptions}
 }
