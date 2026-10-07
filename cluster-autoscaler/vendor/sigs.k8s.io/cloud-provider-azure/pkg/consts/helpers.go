@@ -40,6 +40,11 @@ func IsK8sServiceDisableLoadBalancerFloatingIP(service *v1.Service) bool {
 	return expectAttributeInSvcAnnotationBeEqualTo(service.Annotations, ServiceAnnotationDisableLoadBalancerFloatingIP, TrueAnnotationValue)
 }
 
+// IsK8sServiceDisableLoadBalancerNSGRule returns if cloud-provider-managed NSG rules are disabled in kubernetes service annotations
+func IsK8sServiceDisableLoadBalancerNSGRule(service *v1.Service) bool {
+	return expectAttributeInSvcAnnotationBeEqualTo(service.Annotations, ServiceAnnotationDisableLoadBalancerNSGRule, TrueAnnotationValue)
+}
+
 // GetHealthProbeConfigOfPortFromK8sSvcAnnotation get health probe configuration for port
 func GetHealthProbeConfigOfPortFromK8sSvcAnnotation(annotations map[string]string, port int32, key HealthProbeParams, validators ...BusinessValidator) (*string, error) {
 	return GetAttributeValueInSvcAnnotation(annotations, BuildHealthProbeAnnotationKeyForPort(port, key), validators...)
@@ -50,7 +55,7 @@ func IsHealthProbeRuleOnK8sServicePortDisabled(annotations map[string]string, po
 	return expectAttributeInSvcAnnotationBeEqualTo(annotations, BuildAnnotationKeyForPort(port, PortAnnotationNoHealthProbeRule), TrueAnnotationValue), nil
 }
 
-// IsHealthProbeRuleOnK8sServicePortDisabled return if port is for health probe only
+// IsLBRuleOnK8sServicePortDisabled return if port should have no rule in load balancer
 func IsLBRuleOnK8sServicePortDisabled(annotations map[string]string, port int32) (bool, error) {
 	return expectAttributeInSvcAnnotationBeEqualTo(annotations, BuildAnnotationKeyForPort(port, PortAnnotationNoLBRule), TrueAnnotationValue), nil
 }
