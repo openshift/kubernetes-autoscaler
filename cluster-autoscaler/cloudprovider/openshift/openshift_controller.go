@@ -17,6 +17,7 @@ limitations under the License.
 package openshift
 
 import (
+	"context"
 	"fmt"
 	"path"
 	"strings"
@@ -518,7 +519,7 @@ func (c *machineController) nodeGroups() ([]cloudprovider.NodeGroup, error) {
 
 		if ng != nil {
 			nodegroups = append(nodegroups, ng)
-			klog.V(4).Infof("discovered node group: %s", ng.Debug())
+			klog.V(4).Infof("discovered node group: %s", ng.Debug(context.Background()))
 		}
 	}
 	return nodegroups, nil
