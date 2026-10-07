@@ -17,6 +17,7 @@ limitations under the License.
 package openshift
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -35,19 +36,22 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	klog "k8s.io/klog/v2"
 
-	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
-	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/builder"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/builder"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/clusterapi"
-	coreoptions "k8s.io/autoscaler/cluster-autoscaler/core/options"
-	caserrors "k8s.io/autoscaler/cluster-autoscaler/utils/errors"
-	"k8s.io/autoscaler/cluster-autoscaler/utils/gpu"
+	coreoptions "sigs.k8s.io/cluster-autoscaler/pkg/core/options"
+	caserrors "sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
+	"sigs.k8s.io/cluster-autoscaler/pkg/utils/gpu"
 )
 
+// ProviderName is the cloud provider name for the OpenShift provider.
+const ProviderName = "openshift"
+
 func init() {
-	builder.RegisterCloudProvider(cloudprovider.OpenShiftProviderName, func(opts *coreoptions.AutoscalerOptions, do cloudprovider.NodeGroupDiscoveryOptions, rl *cloudprovider.ResourceLimiter, informerFactory informers.SharedInformerFactory) cloudprovider.CloudProvider {
+	builder.RegisterCloudProvider(ProviderName, func(opts *coreoptions.AutoscalerOptions, do cloudprovider.NodeGroupDiscoveryOptions, rl *cloudprovider.ResourceLimiter, informerFactory informers.SharedInformerFactory) cloudprovider.CloudProvider {
 		return BuildOpenShift(opts, do, rl)
 	})
-	builder.SetDefaultCloudProvider(cloudprovider.OpenShiftProviderName)
+	builder.SetDefaultCloudProvider(ProviderName)
 }
 
 const (
@@ -77,14 +81,14 @@ func newProvider(
 }
 
 func (p *provider) Name() string {
-	return cloudprovider.OpenShiftProviderName
+	return ProviderName
 }
 
-func (p *provider) GetResourceLimiter() (*cloudprovider.ResourceLimiter, error) {
+func (p *provider) GetResourceLimiter(ctx context.Context) (*cloudprovider.ResourceLimiter, error) {
 	return p.resourceLimiter, nil
 }
 
-func (p *provider) NodeGroups() []cloudprovider.NodeGroup {
+func (p *provider) NodeGroups(ctx context.Context) []cloudprovider.NodeGroup {
 	// these are all the MachineAPI authoritative node groups
 	nodegroups, err := p.controller.nodeGroups()
 	if err != nil {
@@ -94,7 +98,7 @@ func (p *provider) NodeGroups() []cloudprovider.NodeGroup {
 
 	// if we have a clusterapi provider we need to check for authoritative machinesets there.
 	if p.clusterapiProvider != nil {
-		capiNodegroups := p.clusterapiProvider.NodeGroups()
+		capiNodegroups := p.clusterapiProvider.NodeGroups(ctx)
 		if capiNodegroups != nil {
 			// if we have any ClusterAPI node groups, filter them to see if any are authoritative, and add them to the list
 			capiNodegroups = filterClusterAPIAuthoritativeResources(nodegroups, capiNodegroups)
@@ -105,13 +109,13 @@ func (p *provider) NodeGroups() []cloudprovider.NodeGroup {
 	return nodegroups
 }
 
-func (p *provider) NodeGroupForNode(node *corev1.Node) (cloudprovider.NodeGroup, error) {
+func (p *provider) NodeGroupForNode(ctx context.Context, node *corev1.Node) (cloudprovider.NodeGroup, error) {
 	ng, err := p.controller.nodeGroupForNode(node)
 	if err != nil {
 		if errors.Is(err, errNonAuthoritativeResource) {
 			// if the MachineAPI resource is non-authoritative we need to ask the ClusterAPI provider.
 			if p.clusterapiProvider != nil {
-				return p.clusterapiProvider.NodeGroupForNode(node)
+				return p.clusterapiProvider.NodeGroupForNode(ctx, node)
 			}
 		}
 
@@ -124,7 +128,7 @@ func (p *provider) NodeGroupForNode(node *corev1.Node) (cloudprovider.NodeGroup,
 }
 
 // HasInstance returns whether a given node has a corresponding instance in this cloud provider
-func (p *provider) HasInstance(node *corev1.Node) (bool, error) {
+func (p *provider) HasInstance(ctx context.Context, node *corev1.Node) (bool, error) {
 	machineID := node.Annotations[machineAnnotationKey]
 	ns := node.Annotations[clusterNamespaceAnnotationKey]
 
@@ -134,22 +138,23 @@ func (p *provider) HasInstance(node *corev1.Node) (bool, error) {
 	} else {
 		// if we cannot find the Machine within the MachineAPI resources, we need to check the ClusterAPI resources as well.
 		if p.clusterapiProvider != nil {
-			return p.clusterapiProvider.HasInstance(node)
+			return p.clusterapiProvider.HasInstance(ctx, node)
 		}
 	}
 
 	return false, fmt.Errorf("machine not found for node %s: %v", node.Name, err)
 }
 
-func (*provider) Pricing() (cloudprovider.PricingModel, caserrors.AutoscalerError) {
+func (*provider) Pricing(ctx context.Context) (cloudprovider.PricingModel, caserrors.AutoscalerError) {
 	return nil, cloudprovider.ErrNotImplemented
 }
 
-func (*provider) GetAvailableMachineTypes() ([]string, error) {
+func (*provider) GetAvailableMachineTypes(ctx context.Context) ([]string, error) {
 	return []string{}, nil
 }
 
 func (*provider) NewNodeGroup(
+	ctx context.Context,
 	machineType string,
 	labels map[string]string,
 	systemLabels map[string]string,
@@ -159,11 +164,11 @@ func (*provider) NewNodeGroup(
 	return nil, cloudprovider.ErrNotImplemented
 }
 
-func (*provider) Cleanup() error {
+func (*provider) Cleanup(ctx context.Context) error {
 	return nil
 }
 
-func (p *provider) Refresh() error {
+func (p *provider) Refresh(ctx context.Context) error {
 	return nil
 }
 
@@ -173,20 +178,20 @@ func (p *provider) GetInstanceID(node *corev1.Node) string {
 }
 
 // GetAvailableGPUTypes return all available GPU types cloud provider supports.
-func (p *provider) GetAvailableGPUTypes() map[string]struct{} {
+func (p *provider) GetAvailableGPUTypes(ctx context.Context) map[string]struct{} {
 	// TODO: implement this
 	return nil
 }
 
 // GPULabel returns the label added to nodes with GPU resource.
-func (p *provider) GPULabel() string {
+func (p *provider) GPULabel(ctx context.Context) string {
 	return GPULabel
 }
 
 // GetNodeGpuConfig returns the label, type and resource name for the GPU added to node. If node doesn't have
 // any GPUs, it returns nil.
-func (p *provider) GetNodeGpuConfig(node *corev1.Node) *cloudprovider.GpuConfig {
-	return gpu.GetNodeGPUFromCloudProvider(p, node)
+func (p *provider) GetNodeGpuConfig(ctx context.Context, node *corev1.Node) *cloudprovider.GpuConfig {
+	return gpu.GetNodeGPUFromCloudProvider(ctx, p, node)
 }
 
 // BuildOpenShift builds CloudProvider implementation for machine api.
