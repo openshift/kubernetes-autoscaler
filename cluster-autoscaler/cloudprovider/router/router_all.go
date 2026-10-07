@@ -1,5 +1,5 @@
-//go:build !gce && !aws && !azure && !kubemark && !alicloud && !magnum && !digitalocean && !clusterapi && !huaweicloud && !ionoscloud && !linode && !hetzner && !bizflycloud && !brightbox && !equinixmetal && !oci && !vultr && !tencentcloud && !scaleway && !externalgrpc && !civo && !rancher && !volcengine && !baiducloud && !cherry && !cloudstack && !exoscale && !kamatera && !ovhcloud && !kwok && !utho && !coreweave && !openshift
-// +build !gce,!aws,!azure,!kubemark,!alicloud,!magnum,!digitalocean,!clusterapi,!huaweicloud,!ionoscloud,!linode,!hetzner,!bizflycloud,!brightbox,!equinixmetal,!oci,!vultr,!tencentcloud,!scaleway,!externalgrpc,!civo,!rancher,!volcengine,!baiducloud,!cherry,!cloudstack,!exoscale,!kamatera,!ovhcloud,!kwok,!utho,!coreweave,!openshift
+//go:build !gce && !aws && !azure && !kubemark && !alicloud && !magnum && !digitalocean && !clusterapi && !huaweicloud && !ionoscloud && !linode && !hetzner && !bizflycloud && !brightbox && !equinixmetal && !oci && !vultr && !tencentcloud && !scaleway && !externalgrpc && !civo && !rancher && !volcengine && !baiducloud && !cherry && !cloudstack && !exoscale && !kamatera && !ovhcloud && !kwok && !utho && !coreweave
+// +build !gce,!aws,!azure,!kubemark,!alicloud,!magnum,!digitalocean,!clusterapi,!huaweicloud,!ionoscloud,!linode,!hetzner,!bizflycloud,!brightbox,!equinixmetal,!oci,!vultr,!tencentcloud,!scaleway,!externalgrpc,!civo,!rancher,!volcengine,!baiducloud,!cherry,!cloudstack,!exoscale,!kamatera,!ovhcloud,!kwok,!utho,!coreweave
 
 /*
 Copyright The Kubernetes Authors.
@@ -22,14 +22,12 @@ package router
 import (
 	// Blank import to register a cloudprovider outside main or test package.
 	// This is by design.
-	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	_ "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/alicloud"
 	_ "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/aws"
 	_ "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/azure"
 	_ "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/baiducloud"
 	_ "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/bizflycloud"
 	_ "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/brightbox"
-	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/builder"
 	_ "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/cherryservers"
 	_ "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/civo"
 	_ "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/cloudstack"
