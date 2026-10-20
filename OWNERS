@@ -1,0 +1,11 @@
+approvers:
+- elmiko
+- jkyros
+- joelsmith
+- maxcao13
+reviewers:
+- elmiko
+- jkyros
+- joelsmith
+- maxcao13
+component: Cluster Autoscaler
