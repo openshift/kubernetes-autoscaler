@@ -45,7 +45,7 @@ require (
 	golang.org/x/sys v0.38.0
 	google.golang.org/api v0.151.0
 	google.golang.org/grpc v1.72.2
-	google.golang.org/protobuf v1.36.8
+	google.golang.org/protobuf v1.36.12
 	gopkg.in/gcfg.v1 v1.2.3
 	gopkg.in/inf.v0 v0.9.1
 	k8s.io/api v0.35.0
@@ -242,7 +242,6 @@ require (
 	k8s.io/kube-openapi v0.0.0-20250910181357-589584f1c912 // indirect
 	k8s.io/kubectl v0.28.0 // indirect
 	k8s.io/mount-utils v0.26.0-alpha.0 // indirect
-	k8s.io/pod-security-admission v0.0.0 // indirect
 	sigs.k8s.io/apiserver-network-proxy/konnectivity-client v0.31.2 // indirect
 	sigs.k8s.io/cloud-provider-azure/pkg/azclient/configloader v0.0.4 // indirect
 	sigs.k8s.io/controller-runtime v0.22.4 // indirect
