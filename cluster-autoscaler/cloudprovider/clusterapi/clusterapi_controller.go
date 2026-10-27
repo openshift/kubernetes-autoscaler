@@ -22,6 +22,7 @@ import (
 	"path"
 	"strings"
 	"sync"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -66,7 +67,14 @@ const (
 	autoDiscovererTypeClusterAPI  = "clusterapi"
 	autoDiscovererClusterNameKey  = "clusterName"
 	autoDiscovererNamespaceKey    = "namespace"
+	machinePhaseFailed            = "Failed"
+	kindVersionCacheTTL           = time.Minute
 )
+
+type kindVersionCacheEntry struct {
+	version  string
+	cachedAt time.Time
+}
 
 // machineController watches for Nodes, Machines, MachinePools, MachineSets, and
 // MachineDeployments as they are added, updated and deleted on the
@@ -82,6 +90,8 @@ type machineController struct {
 	nodeInformer                cache.SharedIndexInformer
 	managementClient            dynamic.Interface
 	managementScaleClient       scale.ScalesGetter
+	managementDiscoveryClient   discovery.DiscoveryInterface
+	kindVersionCache            sync.Map
 	machineSetResource          schema.GroupVersionResource
 	machineResource             schema.GroupVersionResource
 	machinePoolResource         schema.GroupVersionResource
@@ -561,6 +571,7 @@ func newMachineController(
 		nodeInformer:                nodeInformer,
 		managementClient:            managementClient,
 		managementScaleClient:       managementScaleClient,
+		managementDiscoveryClient:   managementDiscoveryClient,
 		machineSetResource:          gvrMachineSet,
 		machinePoolResource:         gvrMachinePool,
 		machinePoolsAvailable:       machinePoolsAvailable,
@@ -603,6 +614,66 @@ func getAPIGroupPreferredVersion(client discovery.DiscoveryInterface, APIGroup s
 	}
 
 	return "", fmt.Errorf("failed to find API group %q", APIGroup)
+}
+
+// kindPreferredVersion resolves the preferred version for kind in apiGroup,
+// caching successful results for kindVersionCacheTTL. The autoscaler main
+// loop rebuilds scalable resource wrappers on every iteration, so an uncached
+// lookup issues live discovery calls per node group per loop, which can
+// exhaust the discovery client's rate limits on large clusters. Failures are
+// not cached: a lookup for a group that appears later, for example a provider
+// installed after startup, retries on the next loop.
+func (c *machineController) kindPreferredVersion(apiGroup, kind string) (string, error) {
+	key := schema.GroupKind{Group: apiGroup, Kind: kind}
+
+	if cached, ok := c.kindVersionCache.Load(key); ok {
+		entry := cached.(kindVersionCacheEntry)
+		if time.Since(entry.cachedAt) < kindVersionCacheTTL {
+			return entry.version, nil
+		}
+		c.kindVersionCache.Delete(key)
+	}
+
+	version, err := getKindPreferredVersion(c.managementDiscoveryClient, apiGroup, kind)
+	if err != nil {
+		return "", err
+	}
+
+	c.kindVersionCache.Store(key, kindVersionCacheEntry{
+		version:  version,
+		cachedAt: time.Now(),
+	})
+	return version, nil
+}
+
+// getKindPreferredVersion returns the first version in apiGroup that serves the given Kind.
+// In CAPI v1beta2, infrastructureRef only carries apiGroup (no apiVersion), so the
+// group-level preferred version may not match what the infra provider actually serves.
+func getKindPreferredVersion(client discovery.DiscoveryInterface, apiGroup, kind string) (string, error) {
+	groupList, err := client.ServerGroups()
+	if err != nil {
+		return "", fmt.Errorf("failed to get ServerGroups: %v", err)
+	}
+
+	for _, group := range groupList.Groups {
+		if group.Name != apiGroup {
+			continue
+		}
+		for _, v := range group.Versions {
+			resourceList, err := client.ServerResourcesForGroupVersion(v.GroupVersion)
+			if err != nil {
+				return "", fmt.Errorf("failed to get resources for %s: %v", v.GroupVersion, err)
+			}
+			for _, r := range resourceList.APIResources {
+				if r.Kind == kind {
+					return v.Version, nil
+				}
+			}
+		}
+		return "", fmt.Errorf("kind %q not found in any version of group %q", kind, apiGroup)
+	}
+
+	return "", fmt.Errorf("failed to find API group %q", apiGroup)
 }
 
 func (c *machineController) scalableResourceProviderIDs(scalableResource *unstructured.Unstructured) ([]string, error) {
