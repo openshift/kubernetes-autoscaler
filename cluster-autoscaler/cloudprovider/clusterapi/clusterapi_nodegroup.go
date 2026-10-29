@@ -157,6 +157,17 @@ func (ng *nodegroup) DeleteNodes(nodes []*corev1.Node) error {
 			continue
 		}
 
+		if _, hasNodeRef, err := unstructured.NestedFieldCopy(machine.UnstructuredContent(), "status", "nodeRef"); err == nil && !hasNodeRef {
+			// A machine that never became a Node never receives a deletion
+			// timestamp, because nothing drains it. Without this check the
+			// annotation written by the previous call is ignored and the target
+			// size falls by one on every autoscaler pass until minSize.
+			if _, markedForDeletion := machine.GetAnnotations()[machineDeleteAnnotationKey]; markedForDeletion {
+				klog.V(4).Infof("Machine %q already marked for deletion, skipping replica decrement", machine.GetName())
+				continue
+			}
+		}
+
 		nodeGroup, err := ng.machineController.nodeGroupForNode(node)
 		if err != nil {
 			return err
