@@ -897,6 +897,10 @@ golang.org/x/crypto/salsa20/salsa
 ## explicit; go 1.20
 golang.org/x/exp/constraints
 golang.org/x/exp/slices
+# golang.org/x/lint v0.0.0-20241112194109-818c5a804067
+## explicit; go 1.11
+golang.org/x/lint
+golang.org/x/lint/golint
 # golang.org/x/mod v0.17.0
 ## explicit; go 1.18
 golang.org/x/mod/internal/lazyregexp
