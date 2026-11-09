@@ -27,6 +27,7 @@ import (
 	"github.com/pkg/errors"
 
 	corev1 "k8s.io/api/core/v1"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator/framework"
@@ -142,10 +143,21 @@ func (ng *nodegroup) DeleteNodes(nodes []*corev1.Node) error {
 	// suitable candidate for deletion and drop the replica count
 	// by 1. Fail fast on any error.
 	for _, node := range nodes {
-		machine, err := ng.machineController.findMachineByProviderID(normalizedProviderString(node.Spec.ProviderID))
+		nodeGroup, err := ng.machineController.nodeGroupForNode(node)
 		if err != nil {
+			if k8serrors.IsNotFound(err) {
+				klog.Warningf("Node group not found for node %q, skipping deletion: %v", node.Spec.ProviderID, err)
+				continue
+			}
 			return err
 		}
+
+		providerID := normalizedProviderString(node.Spec.ProviderID)
+		machine, err := ng.machineController.findMachineByProviderID(providerID)
+		if err != nil && !k8serrors.IsNotFound(err) {
+			return err
+		}
+
 		if machine == nil {
 			return fmt.Errorf("unknown machine for node %q", node.Spec.ProviderID)
 		}
@@ -157,12 +169,12 @@ func (ng *nodegroup) DeleteNodes(nodes []*corev1.Node) error {
 			continue
 		}
 
-		nodeGroup, err := ng.machineController.nodeGroupForNode(node)
+		_, hasNodeRef, err := unstructured.NestedFieldCopy(machine.UnstructuredContent(), "status", "nodeRef")
 		if err != nil {
 			return err
 		}
 
-		if _, hasNodeRef, err := unstructured.NestedFieldCopy(machine.UnstructuredContent(), "status", "nodeRef"); err == nil && !hasNodeRef {
+		if !hasNodeRef {
 			// A machine that never became a Node never receives a deletion
 			// timestamp, because nothing drains it. Without this check the
 			// annotation written by the previous call is ignored and the target
@@ -171,6 +183,14 @@ func (ng *nodegroup) DeleteNodes(nodes []*corev1.Node) error {
 				klog.V(4).Infof("Machine %q already marked for deletion, skipping replica decrement", machine.GetName())
 				continue
 			}
+		}
+
+		if hasNodeRef && isPendingMachineProviderID(providerID) {
+			// The request was built from an instance list that reported this
+			// machine as pending. One that registered a Node since then must go
+			// through the regular scale-down path, which this path bypasses.
+			klog.V(4).Infof("Machine %q registered a Node after the pending removal request, skipping deletion", machine.GetName())
+			continue
 		}
 
 		if err := nodeGroup.scalableResource.MarkMachineForDeletion(machine); err != nil {
