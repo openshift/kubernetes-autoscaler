@@ -157,7 +157,8 @@ func (ng *nodegroup) DeleteNodes(ctx context.Context, nodes []*corev1.Node) erro
 			return err
 		}
 
-		machine, err := ng.machineController.findMachineByProviderID(normalizedProviderString(node.Spec.ProviderID))
+		providerID := normalizedProviderString(node.Spec.ProviderID)
+		machine, err := ng.machineController.findMachineByProviderID(providerID)
 		if err != nil && !k8serrors.IsNotFound(err) {
 			return err
 		}
@@ -203,6 +204,30 @@ func (ng *nodegroup) DeleteNodes(ctx context.Context, nodes []*corev1.Node) erro
 
 		if !machine.GetDeletionTimestamp().IsZero() {
 			// The machine for this node is already being deleted
+			continue
+		}
+
+		_, hasNodeRef, err := unstructured.NestedFieldCopy(machine.UnstructuredContent(), "status", "nodeRef")
+		if err != nil {
+			return err
+		}
+
+		if !hasNodeRef {
+			// A machine that never became a Node never receives a deletion
+			// timestamp, because nothing drains it. Without this check the
+			// annotation written by the previous call is ignored and the target
+			// size falls by one on every autoscaler pass until minSize.
+			if _, markedForDeletion := machine.GetAnnotations()[machineDeleteAnnotationKey]; markedForDeletion {
+				klog.V(4).Infof("Machine %q already marked for deletion, skipping replica decrement", machine.GetName())
+				continue
+			}
+		}
+
+		if hasNodeRef && isPendingMachineProviderID(providerID) {
+			// The request was built from an instance list that reported this
+			// machine as pending. One that registered a Node since then must go
+			// through the regular scale-down path, which this path bypasses.
+			klog.V(4).Infof("Machine %q registered a Node after the pending removal request, skipping deletion", machine.GetName())
 			continue
 		}
 
