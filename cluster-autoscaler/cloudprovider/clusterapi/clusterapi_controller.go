@@ -17,12 +17,12 @@ limitations under the License.
 package clusterapi
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path"
 	"strings"
 	"sync"
-	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -40,7 +40,7 @@ import (
 	"k8s.io/client-go/tools/cache"
 	klog "k8s.io/klog/v2"
 
-	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 )
 
 const (
@@ -68,14 +68,8 @@ const (
 	autoDiscovererClusterNameKey  = "clusterName"
 	autoDiscovererNamespaceKey    = "namespace"
 
-	machinePhaseFailed  = "Failed"
-	kindVersionCacheTTL = time.Minute
+	machinePhaseFailed = "Failed"
 )
-
-type kindVersionCacheEntry struct {
-	version  string
-	cachedAt time.Time
-}
 
 // machineController watches for Nodes, Machines, MachinePools, MachineSets, and
 // MachineDeployments as they are added, updated and deleted on the
@@ -92,7 +86,6 @@ type machineController struct {
 	managementClient            dynamic.Interface
 	managementScaleClient       scale.ScalesGetter
 	managementDiscoveryClient   discovery.DiscoveryInterface
-	kindVersionCache            sync.Map
 	machineSetResource          schema.GroupVersionResource
 	machineResource             schema.GroupVersionResource
 	machinePoolResource         schema.GroupVersionResource
@@ -621,36 +614,6 @@ func getAPIGroupPreferredVersion(client discovery.DiscoveryInterface, APIGroup s
 	return "", fmt.Errorf("failed to find API group %q", APIGroup)
 }
 
-// kindPreferredVersion resolves the preferred version for kind in apiGroup,
-// caching successful results for kindVersionCacheTTL. The autoscaler main
-// loop rebuilds scalable resource wrappers on every iteration, so an uncached
-// lookup issues live discovery calls per node group per loop, which can
-// exhaust the discovery client's rate limits on large clusters. Failures are
-// not cached: a lookup for a group that appears later, for example a provider
-// installed after startup, retries on the next loop.
-func (c *machineController) kindPreferredVersion(apiGroup, kind string) (string, error) {
-	key := schema.GroupKind{Group: apiGroup, Kind: kind}
-
-	if cached, ok := c.kindVersionCache.Load(key); ok {
-		entry := cached.(kindVersionCacheEntry)
-		if time.Since(entry.cachedAt) < kindVersionCacheTTL {
-			return entry.version, nil
-		}
-		c.kindVersionCache.Delete(key)
-	}
-
-	version, err := getKindPreferredVersion(c.managementDiscoveryClient, apiGroup, kind)
-	if err != nil {
-		return "", err
-	}
-
-	c.kindVersionCache.Store(key, kindVersionCacheEntry{
-		version:  version,
-		cachedAt: time.Now(),
-	})
-	return version, nil
-}
-
 // getKindPreferredVersion returns the first version in apiGroup that serves the given Kind.
 // In CAPI v1beta2, infrastructureRef only carries apiGroup (no apiVersion), so the
 // group-level preferred version may not match what the infra provider actually serves.
@@ -849,12 +812,12 @@ func (c *machineController) nodeGroups() ([]cloudprovider.NodeGroup, error) {
 			if isScalableResourceAndPaused(*r) {
 				// if the resource is paused from reconciling by cluster api controllers, we don't want to include it
 				// as an active node group.
-				klog.V(4).Infof("discovered a paused node group: %s", ng.Debug())
+				klog.V(4).Infof("discovered a paused node group: %s", ng.Debug(context.TODO()))
 				continue
 			}
 
 			nodegroups = append(nodegroups, ng)
-			klog.V(4).Infof("discovered node group: %s", ng.Debug())
+			klog.V(4).Infof("discovered node group: %s", ng.Debug(context.TODO()))
 		}
 	}
 	return nodegroups, nil

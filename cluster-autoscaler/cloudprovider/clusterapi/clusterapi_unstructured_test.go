@@ -29,7 +29,12 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	"k8s.io/client-go/tools/cache"
+	"k8s.io/dynamic-resource-allocation/cel"
+	"k8s.io/dynamic-resource-allocation/structured"
+	"k8s.io/kubernetes/pkg/scheduler/framework/plugins/dynamicresources"
+	plfeature "k8s.io/kubernetes/pkg/scheduler/framework/plugins/feature"
 	"k8s.io/utils/ptr"
 )
 
@@ -348,7 +353,8 @@ func TestAnnotations(t *testing.T) {
 			Driver:   draDriver,
 			NodeName: &testNodeName,
 			Pool: resourceapi.ResourcePool{
-				Name: testNodeName,
+				Name:               testNodeName,
+				ResourceSliceCount: 1,
 			},
 			Devices: []resourceapi.Device{
 				{
@@ -448,6 +454,120 @@ func TestAnnotations(t *testing.T) {
 			Build()
 		test(t, testConfig, testConfig.machineDeployment)
 	})
+}
+
+// fakeDeviceClassLister is the minimal structured.DeviceClassLister needed to
+// drive the DRA allocator in TestInstanceResourceSlicesAreAllocatable.
+type fakeDeviceClassLister struct {
+	classes []*resourceapi.DeviceClass
+}
+
+func (f fakeDeviceClassLister) List() ([]*resourceapi.DeviceClass, error) {
+	return f.classes, nil
+}
+
+func (f fakeDeviceClassLister) Get(className string) (*resourceapi.DeviceClass, error) {
+	for _, class := range f.classes {
+		if class.Name == className {
+			return class, nil
+		}
+	}
+	return nil, fmt.Errorf("device class %q not found", className)
+}
+
+// TODO: Move this allocator validation to a shared test helper or centralized
+// template validation once one exists, rather than duplicating it across providers.
+// See #7799.
+// TestInstanceResourceSlicesAreAllocatable is a regression test for #10199.
+// It feeds the ResourceSlice(s) returned by InstanceResourceSlices into the
+// real DRA structured allocator (k8s.io/dynamic-resource-allocation/structured)
+// and asserts that a matching claim can actually be allocated from them.
+//
+// Before the #10199 fix, ResourceSliceCount was left at its zero value, so the
+// allocator always treated the synthetic pool as incomplete and refused to
+// allocate from it, no matter how many devices it advertised. Asserting
+// ResourceSliceCount == 1 alone does not catch that: this test additionally
+// exercises the same allocator logic the scheduler relies on.
+func TestInstanceResourceSlicesAreAllocatable(t *testing.T) {
+	testNodeName := "test-node"
+	draDriver := "test-driver"
+	deviceClassName := "test-class"
+
+	annotations := map[string]string{
+		gpuCountKey:  "1",
+		draDriverKey: draDriver,
+	}
+
+	controller := NewTestMachineController(t)
+	defer controller.Stop()
+	testConfig := NewTestConfigBuilder().
+		ForMachineSet().
+		WithNodeCount(1).
+		WithAnnotations(annotations).
+		Build()
+	controller.AddTestConfigs(testConfig)
+
+	sr, err := newUnstructuredScalableResource(controller.machineController, testConfig.machineSet)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	slices, err := sr.InstanceResourceSlices(testNodeName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(slices) != 1 {
+		t.Fatalf("expected exactly one generated ResourceSlice, got %d", len(slices))
+	}
+
+	node := &v1.Node{ObjectMeta: metav1.ObjectMeta{Name: testNodeName}}
+	class := &resourceapi.DeviceClass{ObjectMeta: metav1.ObjectMeta{Name: deviceClassName}}
+	claim := &resourceapi.ResourceClaim{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-claim", Namespace: "default", UID: "test-claim-uid"},
+		Spec: resourceapi.ResourceClaimSpec{
+			Devices: resourceapi.DeviceClaim{
+				Requests: []resourceapi.DeviceRequest{
+					{
+						Name: "gpu",
+						Exactly: &resourceapi.ExactDeviceRequest{
+							DeviceClassName: deviceClassName,
+							AllocationMode:  resourceapi.DeviceAllocationModeExactCount,
+							Count:           1,
+						},
+					},
+				},
+			},
+		},
+	}
+
+	features := dynamicresources.AllocatorFeatures(
+		plfeature.NewSchedulerFeaturesFromGates(utilfeature.DefaultFeatureGate),
+	)
+
+	allocator, err := structured.NewAllocator(
+		context.Background(),
+		features,
+		structured.AllocatedState{},
+		fakeDeviceClassLister{classes: []*resourceapi.DeviceClass{class}},
+		slices,
+		cel.NewCache(1, cel.Features{}),
+	)
+	if err != nil {
+		t.Fatalf("failed to construct DRA allocator: %v", err)
+	}
+
+	results, err := allocator.Allocate(context.Background(), node, []*resourceapi.ResourceClaim{claim})
+	if err != nil {
+		t.Fatalf("DRA allocator returned an unexpected error: %v", err)
+	}
+
+	// A nil/empty result means the allocator could not satisfy the claim. That is
+	// exactly what happens when the synthetic ResourcePool advertises the wrong
+	// ResourceSliceCount: the allocator treats the pool as incomplete and refuses
+	// to allocate from it, regardless of how many matching devices it contains.
+	if len(results) == 0 {
+		t.Fatal("DRA allocator could not allocate a device from the ClusterAPI-generated ResourceSlice; the synthetic pool is being treated as incomplete (regression of #10199)")
+	}
 }
 
 func TestCanScaleFromZero(t *testing.T) {
@@ -897,129 +1017,5 @@ func TestParseCSIDriverAnnotation(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-// The autoscaler main loop rebuilds scalable resource wrappers on every
-// iteration, so kind version discovery must be cached at the controller
-// level. Uncached, each rebuild issues live ServerGroups() and
-// ServerResourcesForGroupVersion() calls per node group, which exceeds the
-// discovery client's rate limits on large clusters and stalls the loop.
-func TestReadInfrastructureReferenceResourceCachesDiscovery(t *testing.T) {
-	mdTestConfig := NewTestConfigBuilder().
-		ForMachineDeployment().
-		WithNodeCount(1).
-		WithCapacity(map[string]string{cpuStatusKey: "1", memoryStatusKey: "4G"}).
-		Build()
-	controller := NewTestMachineController(t)
-	defer controller.Stop()
-	if err := controller.AddTestConfigs(mdTestConfig); err != nil {
-		t.Fatal(err)
-	}
-
-	discoveryCallsBefore := len(controller.discoveryClient.Actions())
-
-	// Simulate two loop iterations: two wrappers over the same MachineDeployment.
-	for i := 0; i < 2; i++ {
-		sr, err := newUnstructuredScalableResource(controller.machineController, mdTestConfig.machineDeployment)
-		if err != nil {
-			t.Fatal(err)
-		}
-		infra, err := sr.readInfrastructureReferenceResource()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if infra == nil {
-			t.Fatal("expected infrastructure reference resource to be resolved")
-		}
-	}
-
-	// One resolution round is 1 ServerGroups + 1 ServerResourcesForGroupVersion
-	// action. The second wrapper must hit the controller cache.
-	discoveryCalls := len(controller.discoveryClient.Actions()) - discoveryCallsBefore
-	t.Logf("discovery actions issued: %d", discoveryCalls)
-	if discoveryCalls != 2 {
-		t.Errorf("expected exactly one discovery round (2 actions) across wrapper rebuilds, got %d actions", discoveryCalls)
-	}
-
-	// Once the TTL expires, the next resolution must re-query discovery and
-	// refresh the cache entry.
-	controller.machineController.kindVersionCache.Range(func(key, value any) bool {
-		entry := value.(kindVersionCacheEntry)
-		entry.cachedAt = time.Now().Add(-2 * kindVersionCacheTTL)
-		controller.machineController.kindVersionCache.Store(key, entry)
-		return true
-	})
-
-	sr, err := newUnstructuredScalableResource(controller.machineController, mdTestConfig.machineDeployment)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := sr.readInfrastructureReferenceResource(); err != nil {
-		t.Fatal(err)
-	}
-
-	discoveryCalls = len(controller.discoveryClient.Actions()) - discoveryCallsBefore
-	if discoveryCalls != 4 {
-		t.Errorf("expected rediscovery after TTL expiration (4 actions total), got %d actions", discoveryCalls)
-	}
-
-	// Confirm the refreshed cache entry serves subsequent lookups within TTL.
-	sr, err = newUnstructuredScalableResource(controller.machineController, mdTestConfig.machineDeployment)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := sr.readInfrastructureReferenceResource(); err != nil {
-		t.Fatal(err)
-	}
-
-	discoveryCalls = len(controller.discoveryClient.Actions()) - discoveryCallsBefore
-	if discoveryCalls != 4 {
-		t.Errorf("expected refreshed cache entry to be reused within TTL (4 actions total), got %d actions", discoveryCalls)
-	}
-}
-
-// TestReadInfrastructureReferenceResourceScalesWithoutExtraDiscovery reproduces
-// the incident shape: many node groups whose scalable resource wrappers are
-// rebuilt on every main loop iteration. Without caching, each wrapper rebuild
-// issues a full discovery round, which exhausts the discovery client's rate
-// limits on large clusters.
-func TestReadInfrastructureReferenceResourceScalesWithoutExtraDiscovery(t *testing.T) {
-	const nodeGroups = 50
-	const loopIterations = 2
-
-	mdTestConfigs := NewTestConfigBuilder().
-		ForMachineDeployment().
-		WithNodeCount(0).
-		WithCapacity(map[string]string{cpuStatusKey: "1", memoryStatusKey: "4G"}).
-		BuildMultiple(nodeGroups)
-	controller := NewTestMachineController(t)
-	defer controller.Stop()
-	if err := controller.AddTestConfigs(mdTestConfigs...); err != nil {
-		t.Fatal(err)
-	}
-
-	discoveryCallsBefore := len(controller.discoveryClient.Actions())
-
-	for iter := 0; iter < loopIterations; iter++ {
-		for _, config := range mdTestConfigs {
-			sr, err := newUnstructuredScalableResource(controller.machineController, config.machineDeployment)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if _, err := sr.readInfrastructureReferenceResource(); err != nil {
-				t.Fatal(err)
-			}
-		}
-	}
-
-	// All node groups share one (apiGroup, kind) pair, so the whole run must
-	// cost a single discovery round: 1 ServerGroups + 1
-	// ServerResourcesForGroupVersion action.
-	discoveryCalls := len(controller.discoveryClient.Actions()) - discoveryCallsBefore
-	t.Logf("discovery actions issued for %d node groups across %d loop iterations: %d", nodeGroups, loopIterations, discoveryCalls)
-	if discoveryCalls != 2 {
-		t.Errorf("expected exactly one discovery round (2 actions) for %d node groups across %d loop iterations, got %d actions",
-			nodeGroups, loopIterations, discoveryCalls)
 	}
 }

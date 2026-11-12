@@ -1,0 +1,12 @@
+approvers:
+- damsien
+- pablo-ruth
+- Tomy2e
+reviewers:
+- damsien
+- pablo-ruth
+- Tomy2e
+- remyleone
+
+labels:
+- area/provider/scaleway
