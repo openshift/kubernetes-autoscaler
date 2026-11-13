@@ -44,10 +44,12 @@ import (
 	"sigs.k8s.io/cloud-provider-azure/pkg/azclient/configloader"
 	azcache "sigs.k8s.io/cloud-provider-azure/pkg/cache"
 	"sigs.k8s.io/cloud-provider-azure/pkg/consts"
+	"sigs.k8s.io/cloud-provider-azure/pkg/log"
 	azureconfig "sigs.k8s.io/cloud-provider-azure/pkg/provider/config"
 	"sigs.k8s.io/cloud-provider-azure/pkg/provider/privatelinkservice"
 	"sigs.k8s.io/cloud-provider-azure/pkg/provider/routetable"
 	"sigs.k8s.io/cloud-provider-azure/pkg/provider/securitygroup"
+	"sigs.k8s.io/cloud-provider-azure/pkg/provider/servicegateway"
 	"sigs.k8s.io/cloud-provider-azure/pkg/provider/subnet"
 	"sigs.k8s.io/cloud-provider-azure/pkg/provider/zone"
 	utilsets "sigs.k8s.io/cloud-provider-azure/pkg/util/sets"
@@ -156,6 +158,8 @@ type Cloud struct {
 	endpointSlicesCache                             sync.Map
 
 	azureResourceLocker *AzureResourceLocker
+
+	serviceGatewayRuntime *servicegateway.Runtime
 }
 
 // NewCloud returns a Cloud with initialized clients
@@ -178,8 +182,11 @@ func NewCloud(ctx context.Context, clientBuilder cloudprovider.ControllerClientB
 
 	az.ipv6DualStackEnabled = true
 
-	if clientBuilder != nil {
+	if az.KubeClient == nil && clientBuilder != nil {
 		az.KubeClient = clientBuilder.ClientOrDie("azure-cloud-provider")
+	}
+	if az.ServiceGatewayEnabled {
+		az.serviceGatewayRuntime = servicegateway.NewRuntime(az.Config, az.NetworkClientFactory, az.KubeClient)
 	}
 	az.azureResourceLocker = NewAzureResourceLocker(
 		az,
@@ -193,6 +200,7 @@ func NewCloud(ctx context.Context, clientBuilder cloudprovider.ControllerClientB
 }
 
 func NewCloudFromConfigFile(ctx context.Context, clientBuilder cloudprovider.ControllerClientBuilder, configFilePath string, calFromCCM bool) (cloudprovider.Interface, error) {
+	logger := log.FromContextOrBackground(ctx).WithName("NewCloudFromConfigFile")
 	var (
 		cloud cloudprovider.Interface
 		err   error
@@ -203,14 +211,15 @@ func NewCloudFromConfigFile(ctx context.Context, clientBuilder cloudprovider.Con
 		var configFile *os.File
 		configFile, err = os.Open(configFilePath)
 		if err != nil {
-			klog.Fatalf("Couldn't open cloud provider configuration %s: %#v",
-				configFilePath, err)
+			logger.Error(err, "Couldn't open cloud provider configuration", "configFilePath", configFilePath)
+			klog.FlushAndExit(klog.ExitFlushTimeout, 1)
 		}
 
 		defer configFile.Close()
 		configValue, err = azureconfig.ParseConfig(configFile)
 		if err != nil {
-			klog.Fatalf("Failed to parse Azure cloud provider config: %v", err)
+			logger.Error(err, "Failed to parse Azure cloud provider config")
+			klog.FlushAndExit(klog.ExitFlushTimeout, 1)
 		}
 	}
 	cloud, err = NewCloud(ctx, clientBuilder, configValue, calFromCCM && configFilePath != "")
@@ -254,6 +263,7 @@ var (
 
 // InitializeCloudFromConfig initializes the Cloud from config.
 func (az *Cloud) InitializeCloudFromConfig(ctx context.Context, config *azureconfig.Config, _, callFromCCM bool) error {
+	logger := log.FromContextOrBackground(ctx).WithName("InitializeCloudFromConfig")
 	if config == nil {
 		// should not reach here
 		return fmt.Errorf("InitializeCloudFromConfig: cannot initialize from nil config")
@@ -297,15 +307,13 @@ func (az *Cloud) InitializeCloudFromConfig(ctx context.Context, config *azurecon
 		}
 	}
 
-	if config.LoadBalancerBackendPoolConfigurationType == "" ||
-		// TODO(nilo19): support pod IP mode in the future
-		strings.EqualFold(config.LoadBalancerBackendPoolConfigurationType, consts.LoadBalancerBackendPoolConfigurationTypePODIP) {
+	if config.LoadBalancerBackendPoolConfigurationType == "" {
 		config.LoadBalancerBackendPoolConfigurationType = consts.LoadBalancerBackendPoolConfigurationTypeNodeIPConfiguration
 	} else {
 		supportedLoadBalancerBackendPoolConfigurationTypes := utilsets.NewString(
 			strings.ToLower(consts.LoadBalancerBackendPoolConfigurationTypeNodeIPConfiguration),
 			strings.ToLower(consts.LoadBalancerBackendPoolConfigurationTypeNodeIP),
-			strings.ToLower(consts.LoadBalancerBackendPoolConfigurationTypePODIP))
+			strings.ToLower(consts.LoadBalancerBackendPoolConfigurationTypePodIP))
 		if !supportedLoadBalancerBackendPoolConfigurationTypes.Has(strings.ToLower(config.LoadBalancerBackendPoolConfigurationType)) {
 			return fmt.Errorf("loadBalancerBackendPoolConfigurationType %s is not supported, supported values are %v", config.LoadBalancerBackendPoolConfigurationType, supportedLoadBalancerBackendPoolConfigurationTypes.UnsortedList())
 		}
@@ -338,6 +346,30 @@ func (az *Cloud) InitializeCloudFromConfig(ctx context.Context, config *azurecon
 	err = az.setLBDefaults(config)
 	if err != nil {
 		return err
+	}
+
+	serviceGatewayPartiallyEnabled := config.ServiceGatewayEnabled || config.IsLBBackendPoolTypePodIP() || config.UseServiceLoadBalancer()
+	serviceGatewayFullyEnabled := config.ServiceGatewayEnabled && config.IsLBBackendPoolTypePodIP() && config.UseServiceLoadBalancer()
+
+	if serviceGatewayPartiallyEnabled && !serviceGatewayFullyEnabled {
+		return fmt.Errorf("InitializeCloudFromConfig: ServiceGateway requires serviceGatewayEnabled=true, loadBalancerBackendPoolConfigurationType=podIP, and loadBalancerSku=service to be configured together (actual: serviceGatewayEnabled=%t, loadBalancerBackendPoolConfigurationType=%s, loadBalancerSku=%s)",
+			config.ServiceGatewayEnabled,
+			config.LoadBalancerBackendPoolConfigurationType,
+			config.LoadBalancerSKU)
+	}
+
+	if serviceGatewayFullyEnabled {
+		logger.V(2).Info("Service Gateway is enabled, using PodIP backend pool type with Service Load Balancer")
+
+		// ServiceGateway (PodIP backend pools) and Multi-SLB (NodeIP/NIC backend pools) are mutually exclusive.
+		if len(config.MultipleStandardLoadBalancerConfigurations) > 0 {
+			return fmt.Errorf("InitializeCloudFromConfig: ServiceGatewayEnabled and MultipleStandardLoadBalancerConfigurations are mutually exclusive and cannot both be set")
+		}
+
+		// EnableMigrateToIPBasedBackendPoolAPI has no meaning when ServiceGateway is enabled.
+		if config.EnableMigrateToIPBasedBackendPoolAPI {
+			return fmt.Errorf("InitializeCloudFromConfig: EnableMigrateToIPBasedBackendPoolAPI cannot be used when ServiceGatewayEnabled is true — ContainerLB already uses PodIP-based backend pools")
+		}
 	}
 
 	az.Config = *config
@@ -373,6 +405,9 @@ func (az *Cloud) InitializeCloudFromConfig(ctx context.Context, config *azurecon
 		az.LoadBalancerBackendPool = newBackendPoolTypeNodeIPConfig(az)
 	} else if az.IsLBBackendPoolTypeNodeIP() {
 		az.LoadBalancerBackendPool = newBackendPoolTypeNodeIP(az)
+	} else if az.IsLBBackendPoolTypePodIP() {
+		// ServiceGateway owns PodIP backend pools through difftracker.
+		az.LoadBalancerBackendPool = nil
 	}
 
 	if az.UseMultipleStandardLoadBalancers() {
@@ -397,7 +432,7 @@ func (az *Cloud) InitializeCloudFromConfig(ctx context.Context, config *azurecon
 			return fmt.Errorf("useInstanceMetadata must be enabled without Azure credentials")
 		}
 
-		klog.V(2).Infof("Azure cloud provider is starting without credentials")
+		logger.V(2).Info("Azure cloud provider is starting without credentials")
 	}
 
 	if az.UserAgent == "" {
@@ -418,7 +453,7 @@ func (az *Cloud) InitializeCloudFromConfig(ctx context.Context, config *azurecon
 		if err != nil {
 			return err
 		}
-		klog.InfoS("Setting up ARM client factory for network resources", "subscriptionID", networkSubscriptionID)
+		logger.Info("Setting up ARM client factory for network resources", "subscriptionID", networkSubscriptionID)
 
 		az.ComputeClientFactory, err = newARMClientFactory(&azclient.ClientFactoryConfig{
 			SubscriptionID: az.SubscriptionID,
@@ -426,7 +461,7 @@ func (az *Cloud) InitializeCloudFromConfig(ctx context.Context, config *azurecon
 		if err != nil {
 			return err
 		}
-		klog.InfoS("Setting up ARM client factory for compute resources", "subscriptionID", az.SubscriptionID)
+		logger.Info("Setting up ARM client factory for compute resources", "subscriptionID", az.SubscriptionID)
 	}
 
 	networkClientFactory := az.NetworkClientFactory
@@ -445,7 +480,7 @@ func (az *Cloud) InitializeCloudFromConfig(ctx context.Context, config *azurecon
 	}
 
 	if az.zoneRepo == nil {
-		az.zoneRepo, err = zone.NewRepo(az.ComputeClientFactory.GetProviderClient())
+		az.zoneRepo, err = zone.NewRepo(az.NetworkClientFactory.GetProviderClient())
 		if err != nil {
 			return err
 		}
@@ -496,7 +531,7 @@ func (az *Cloud) InitializeCloudFromConfig(ctx context.Context, config *azurecon
 			// wait for the success first time of syncing zones
 			err = az.syncRegionZonesMap(ctx)
 			if err != nil {
-				klog.Errorf("InitializeCloudFromConfig: failed to sync regional zones map for the first time: %s", err.Error())
+				logger.Error(err, "Failed to sync regional zones map for the first time")
 				return err
 			}
 
@@ -538,8 +573,9 @@ func (az *Cloud) checkEnableMultipleStandardLoadBalancers() error {
 }
 
 func (az *Cloud) initCaches() (err error) {
+	logger := log.Background().WithName("initCaches")
 	if az.DisableAPICallCache {
-		klog.Infof("API call cache is disabled, ignore logs about cache operations")
+		logger.Info("API call cache is disabled, ignore logs about cache operations")
 	}
 
 	az.vmCache, err = az.newVMCache()
@@ -584,6 +620,7 @@ func (az *Cloud) setLBDefaults(config *azureconfig.Config) error {
 }
 
 func (az *Cloud) setCloudProviderBackoffDefaults(config *azureconfig.Config) wait.Backoff {
+	logger := log.Background().WithName("setCloudProviderBackoffDefaults")
 	// Conditionally configure resource request backoff
 	resourceRequestBackoff := wait.Backoff{
 		Steps: 1,
@@ -610,11 +647,11 @@ func (az *Cloud) setCloudProviderBackoffDefaults(config *azureconfig.Config) wai
 			Duration: time.Duration(config.CloudProviderBackoffDuration) * time.Second,
 			Jitter:   config.CloudProviderBackoffJitter,
 		}
-		klog.V(2).Infof("Azure cloudprovider using try backoff: retries=%d, exponent=%f, duration=%d, jitter=%f",
-			config.CloudProviderBackoffRetries,
-			config.CloudProviderBackoffExponent,
-			config.CloudProviderBackoffDuration,
-			config.CloudProviderBackoffJitter)
+		logger.V(2).Info("Azure cloudprovider using try backoff",
+			"retries", config.CloudProviderBackoffRetries,
+			"exponent", config.CloudProviderBackoffExponent,
+			"duration", config.CloudProviderBackoffDuration,
+			"jitter", config.CloudProviderBackoffJitter)
 	} else {
 		// CloudProviderBackoffRetries will be set to 1 by default as the requirements of Azure SDK.
 		config.CloudProviderBackoffRetries = 1
@@ -625,14 +662,28 @@ func (az *Cloud) setCloudProviderBackoffDefaults(config *azureconfig.Config) wai
 
 // Initialize passes a Kubernetes clientBuilder interface to the cloud provider
 func (az *Cloud) Initialize(clientBuilder cloudprovider.ControllerClientBuilder, _ <-chan struct{}) {
-	az.KubeClient = clientBuilder.ClientOrDie("azure-cloud-provider")
+	if az.KubeClient == nil {
+		az.KubeClient = clientBuilder.ClientOrDie("azure-cloud-provider")
+	}
 	az.eventBroadcaster = record.NewBroadcaster()
 	az.eventBroadcaster.StartRecordingToSink(&v1core.EventSinkImpl{Interface: az.KubeClient.CoreV1().Events("")})
 	az.eventRecorder = az.eventBroadcaster.NewRecorder(scheme.Scheme, v1.EventSource{Component: "azure-cloud-provider"})
+	if az.serviceGatewayRuntime != nil {
+		az.serviceGatewayRuntime.SetKubeClient(az.KubeClient)
+		az.serviceGatewayRuntime.SetEventRecorder(az.eventRecorder)
+	}
+}
+
+// ServiceGatewayRuntime returns the ServiceGateway runtime used by the Service controller.
+func (az *Cloud) ServiceGatewayRuntime() *servicegateway.Runtime {
+	return az.serviceGatewayRuntime
 }
 
 // LoadBalancer returns a balancer interface. Also returns true if the interface is supported, false otherwise.
 func (az *Cloud) LoadBalancer() (cloudprovider.LoadBalancer, bool) {
+	if az.serviceGatewayRuntime != nil {
+		return az.serviceGatewayRuntime.LoadBalancer()
+	}
 	return az, true
 }
 
@@ -683,7 +734,8 @@ func (az *Cloud) ProviderName() string {
 
 // SetInformers sets informers for Azure cloud provider.
 func (az *Cloud) SetInformers(informerFactory informers.SharedInformerFactory) {
-	klog.Infof("Setting up informers for Azure cloud provider")
+	logger := log.Background().WithName("SetInformers")
+	logger.Info("Setting up informers for Azure cloud provider")
 	nodeInformer := informerFactory.Core().V1().Nodes().Informer()
 	_, _ = nodeInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
@@ -704,18 +756,18 @@ func (az *Cloud) SetInformers(informerFactory informers.SharedInformerFactory) {
 			if !isNode {
 				deletedState, ok := obj.(cache.DeletedFinalStateUnknown)
 				if !ok {
-					klog.Errorf("Received unexpected object: %v", obj)
+					logger.Error(nil, "Received unexpected object", "obj", obj)
 					return
 				}
 				node, ok = deletedState.Obj.(*v1.Node)
 				if !ok {
-					klog.Errorf("DeletedFinalStateUnknown contained non-Node object: %v", deletedState.Obj)
+					logger.Error(nil, "DeletedFinalStateUnknown contained non-Node object", "obj", deletedState.Obj)
 					return
 				}
 			}
 			az.updateNodeCaches(node, nil)
 
-			klog.V(4).Infof("Removing node %s from VMSet cache.", node.Name)
+			logger.V(4).Info("Removing node from VMSet cache", "node", node.Name)
 			_ = az.VMSet.DeleteCacheForNode(context.Background(), node.Name)
 		},
 	})
@@ -724,11 +776,15 @@ func (az *Cloud) SetInformers(informerFactory informers.SharedInformerFactory) {
 	az.serviceLister = informerFactory.Core().V1().Services().Lister()
 	az.nodeLister = informerFactory.Core().V1().Nodes().Lister()
 
-	az.setUpEndpointSlicesInformer(informerFactory)
+	// ServiceGateway registers its own EndpointSlice handlers when its runtime starts.
+	if az.serviceGatewayRuntime == nil {
+		az.setUpEndpointSlicesInformer(informerFactory)
+	}
 }
 
 // updateNodeCaches updates local cache for node's zones and external resource groups.
 func (az *Cloud) updateNodeCaches(prevNode, newNode *v1.Node) {
+	logger := log.Background().WithName("updateNodeCaches")
 	az.nodeCachesLock.Lock()
 	defer az.nodeCachesLock.Unlock()
 
@@ -754,8 +810,7 @@ func (az *Cloud) updateNodeCaches(prevNode, newNode *v1.Node) {
 		managed, ok := prevNode.Labels[consts.ManagedByAzureLabel]
 		isNodeManagedByCloudProvider := !ok || !strings.EqualFold(managed, consts.NotManagedByAzureLabelValue)
 
-		klog.Infof("managed=%v, ok=%v, isNodeManagedByCloudProvider=%v",
-			managed, ok, isNodeManagedByCloudProvider)
+		logger.Info("node management status", "managed", managed, "ok", ok, "isNodeManagedByCloudProvider", isNodeManagedByCloudProvider)
 
 		// Remove from unmanagedNodes cache
 		if !isNodeManagedByCloudProvider {
@@ -764,7 +819,7 @@ func (az *Cloud) updateNodeCaches(prevNode, newNode *v1.Node) {
 
 		// Remove from nodePrivateIPs cache.
 		for _, address := range getNodePrivateIPAddresses(prevNode) {
-			klog.V(6).Infof("removing IP address %s of the node %s", address, prevNode.Name)
+			logger.V(6).Info("removing IP address of the node", "address", address, "node", prevNode.Name)
 			az.nodePrivateIPs[prevNode.Name].Delete(address)
 			delete(az.nodePrivateIPToNodeNameMap, address)
 		}
@@ -806,11 +861,11 @@ func (az *Cloud) updateNodeCaches(prevNode, newNode *v1.Node) {
 		switch {
 		case !isNodeManagedByCloudProvider:
 			az.excludeLoadBalancerNodes.Insert(newNode.Name)
-			klog.V(6).Infof("excluding Node %q from LoadBalancer because it is not managed by cloud provider", newNode.Name)
+			logger.V(6).Info("excluding Node from LoadBalancer because it is not managed by cloud provider", "node", newNode.Name)
 
 		case hasExcludeBalancerLabel:
 			az.excludeLoadBalancerNodes.Insert(newNode.Name)
-			klog.V(6).Infof("excluding Node %q from LoadBalancer because it has exclude-from-external-load-balancers label", newNode.Name)
+			logger.V(6).Info("excluding Node from LoadBalancer because it has exclude-from-external-load-balancers label", "node", newNode.Name)
 
 		default:
 			// Nodes not falling into the three cases above are valid backends and
@@ -824,7 +879,7 @@ func (az *Cloud) updateNodeCaches(prevNode, newNode *v1.Node) {
 				az.nodePrivateIPToNodeNameMap = make(map[string]string)
 			}
 
-			klog.V(6).Infof("adding IP address %s of the node %s", address, newNode.Name)
+			logger.V(6).Info("adding IP address of the node", "address", address, "node", newNode.Name)
 			az.nodePrivateIPs[strings.ToLower(newNode.Name)] = utilsets.SafeInsert(az.nodePrivateIPs[strings.ToLower(newNode.Name)], address)
 			az.nodePrivateIPToNodeNameMap[address] = newNode.Name
 		}
@@ -833,6 +888,7 @@ func (az *Cloud) updateNodeCaches(prevNode, newNode *v1.Node) {
 
 // updateNodeTaint updates node out-of-service taint
 func (az *Cloud) updateNodeTaint(node *v1.Node) {
+	logger := log.Background().WithName("updateNodeTaint")
 	if node == nil {
 		klog.Warningf("node is nil, skip updating node out-of-service taint (should not happen)")
 		return
@@ -844,18 +900,18 @@ func (az *Cloud) updateNodeTaint(node *v1.Node) {
 
 	if isNodeReady(node) {
 		if err := cloudnodeutil.RemoveTaintOffNode(az.KubeClient, node.Name, node, nodeOutOfServiceTaint); err != nil {
-			klog.Errorf("failed to remove taint %s from the node %s", v1.TaintNodeOutOfService, node.Name)
+			logger.Error(err, "failed to remove taint from the node", "taint", v1.TaintNodeOutOfService, "node", node.Name)
 		}
 	} else {
 		// node shutdown taint is added when cloud provider determines instance is shutdown
 		if !taints.TaintExists(node.Spec.Taints, nodeOutOfServiceTaint) &&
 			taints.TaintExists(node.Spec.Taints, nodeShutdownTaint) {
-			klog.V(2).Infof("adding %s taint to node %s", v1.TaintNodeOutOfService, node.Name)
+			logger.V(2).Info("adding taint to node", "taint", v1.TaintNodeOutOfService, "node", node.Name)
 			if err := cloudnodeutil.AddOrUpdateTaintOnNode(az.KubeClient, node.Name, nodeOutOfServiceTaint); err != nil {
-				klog.Errorf("failed to add taint %s to the node %s", v1.TaintNodeOutOfService, node.Name)
+				logger.Error(err, "failed to add taint to the node", "taint", v1.TaintNodeOutOfService, "node", node.Name)
 			}
 		} else {
-			klog.V(2).Infof("node %s is not ready but either shutdown taint is missing or out-of-service taint is already added, skip adding node out-of-service taint", node.Name)
+			logger.V(2).Info("node is not ready but either shutdown taint is missing or out-of-service taint is already added, skip adding node out-of-service taint", "node", node.Name)
 		}
 	}
 }

@@ -43,6 +43,11 @@ const (
 	LabelFailureDomainBetaRegion = "failure-domain.beta.kubernetes.io/region"
 	// LabelPlatformSubFaultDomain is the label key of platformSubFaultDomain
 	LabelPlatformSubFaultDomain = "topology.kubernetes.azure.com/sub-fault-domain"
+	// LabelPlatformInterconnectGroup is the label key of Platform Interconnect Group
+	LabelPlatformInterconnectGroup = "topology.kubernetes.azure.com/interconnect-group"
+
+	// TagNameInterconnectGroup is the tag name in IMDS tagsList for Platform Interconnect Group
+	TagNameInterconnectGroup = "Platform_Interconnect_Group"
 
 	// ADFSIdentitySystem is the override value for tenantID on Azure Stack clouds.
 	ADFSIdentitySystem = "adfs"
@@ -236,6 +241,13 @@ const (
 	LoadBalancerSKUBasic = "basic"
 	// LoadBalancerSKUStandard is the load balancer standard SKU
 	LoadBalancerSKUStandard = "standard"
+	// LoadBalancerSKUService is the load balancer service SKU
+	LoadBalancerSKUService = "service"
+	// LoadBalancerARMSKUService is the case-sensitive ARM SKU for a ServiceGateway load balancer.
+	LoadBalancerARMSKUService = "Service"
+
+	// PodLabelServiceEgressGateway is the label used on the pod
+	PodLabelServiceEgressGateway = "kubernetes.azure.com/service-egress-gateway"
 
 	// ServiceAnnotationLoadBalancerInternal is the annotation used on the service
 	ServiceAnnotationLoadBalancerInternal = "service.beta.kubernetes.io/azure-load-balancer-internal"
@@ -262,13 +274,6 @@ const (
 	// ServiceAnnotationDNSLabelName is the annotation used on the service
 	// to specify the DNS label name for the service.
 	ServiceAnnotationDNSLabelName = "service.beta.kubernetes.io/azure-dns-label-name"
-
-	// ServiceAnnotationSharedSecurityRule is the annotation used on the service
-	// to specify that the service should be exposed using an Azure security rule
-	// that may be shared with other service, trading specificity of rules for an
-	// increase in the number of services that can be exposed. This relies on the
-	// Azure "augmented security rules" feature.
-	ServiceAnnotationSharedSecurityRule = "service.beta.kubernetes.io/azure-shared-securityrule"
 
 	// ServiceAnnotationLoadBalancerResourceGroup is the annotation used on the service
 	// to specify the resource group of load balancer objects that are not in the same resource group as the cluster.
@@ -325,6 +330,11 @@ const (
 	// If omitted, the default value is false
 	ServiceAnnotationDisableLoadBalancerFloatingIP = "service.beta.kubernetes.io/azure-disable-load-balancer-floating-ip"
 
+	// ServiceAnnotationDisableLoadBalancerNSGRule disables cloud-provider-managed NSG rules for the service.
+	// This annotation is not recommended for general use; it is a break-glass option for operators that intentionally
+	// manage the service's NSG rules themselves. If omitted, the default value is false
+	ServiceAnnotationDisableLoadBalancerNSGRule = "service.beta.kubernetes.io/azure-disable-load-balancer-nsg-rule"
+
 	// ServiceAnnotationAdditionalPublicIPs sets the additional Public IPs (split by comma) besides the service's Public IP configured on LoadBalancer.
 	// These additional Public IPs would be consumed by kube-proxy to configure the iptables rules on each node. Note they would not be configured
 	// automatically on Azure LoadBalancer. Instead, they need to be configured manually (e.g. on Azure cross-region LoadBalancer by another operator).
@@ -362,6 +372,8 @@ const (
 	FrontendIPConfigIDTemplate = "/subscriptions/%s/resourceGroups/%s/providers/Microsoft.Network/loadBalancers/%s/frontendIPConfigurations/%s"
 	// BackendPoolIDTemplate is the template of the backend pool
 	BackendPoolIDTemplate = "/subscriptions/%s/resourceGroups/%s/providers/Microsoft.Network/loadBalancers/%s/backendAddressPools/%s"
+	// NatGatewayIDTemplate is the template of the nat gateway
+	NatGatewayIDTemplate = "/subscriptions/%s/resourceGroups/%s/providers/Microsoft.Network/natGateways/%s"
 	// LoadBalancerProbeIDTemplate is the template of the load balancer probe
 	LoadBalancerProbeIDTemplate = "/subscriptions/%s/resourceGroups/%s/providers/Microsoft.Network/loadBalancers/%s/probes/%s"
 
@@ -381,9 +393,8 @@ const (
 	LoadBalancerBackendPoolConfigurationTypeNodeIPConfiguration = "nodeIPConfiguration"
 	// LoadBalancerBackendPoolConfigurationTypeNodeIP is the lb backend pool config type node ip
 	LoadBalancerBackendPoolConfigurationTypeNodeIP = "nodeIP"
-	// LoadBalancerBackendPoolConfigurationTypePODIP is the lb backend pool config type pod ip
-	// TODO (nilo19): support pod IP in the future
-	LoadBalancerBackendPoolConfigurationTypePODIP = "podIP"
+	// LoadBalancerBackendPoolConfigurationTypePodIP is the lb backend pool config type pod ip
+	LoadBalancerBackendPoolConfigurationTypePodIP = "podIP"
 )
 
 // error messages
@@ -578,6 +589,13 @@ const (
 	VMPowerStateDeallocated  = "deallocated"
 	VMPowerStateDeallocating = "deallocating"
 	VMPowerStateUnknown      = "unknown"
+)
+
+// ServiceGateway resource defaults
+const (
+	// DefaultServiceGatewayResourceName is the fixed ServiceGateway resource name used when
+	// ServiceGatewayEnabled=true. It is not configurable via cloud-provider config.
+	DefaultServiceGatewayResourceName = "servicegateway"
 )
 
 // Azure resource lock

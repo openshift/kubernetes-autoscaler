@@ -1,0 +1,198 @@
+/*
+Copyright 2016 The Kubernetes Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package orchestrator
+
+import (
+	"context"
+	"fmt"
+	"sync"
+	"time"
+
+	apiv1 "k8s.io/api/core/v1"
+	"k8s.io/klog/v2"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
+
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
+	"sigs.k8s.io/cluster-autoscaler/pkg/observers/nodegroupchange"
+	"sigs.k8s.io/cluster-autoscaler/pkg/processors/nodegroups/asyncnodegroups"
+	"sigs.k8s.io/cluster-autoscaler/pkg/processors/nodegroupset"
+	"sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
+)
+
+// ScaleUpExecutor scales up node groups.
+type scaleUpExecutor struct {
+	autoscalingCtx             *ca_context.AutoscalingContext
+	scaleStateNotifier         nodegroupchange.NodeGroupChangeObserver
+	asyncNodeGroupStateChecker asyncnodegroups.AsyncNodeGroupStateChecker
+}
+
+// New returns new instance of scale up executor.
+func newScaleUpExecutor(
+	autoscalingCtx *ca_context.AutoscalingContext,
+	scaleStateNotifier nodegroupchange.NodeGroupChangeObserver,
+	asyncNodeGroupStateChecker asyncnodegroups.AsyncNodeGroupStateChecker,
+) *scaleUpExecutor {
+	return &scaleUpExecutor{
+		autoscalingCtx:             autoscalingCtx,
+		scaleStateNotifier:         scaleStateNotifier,
+		asyncNodeGroupStateChecker: asyncNodeGroupStateChecker,
+	}
+}
+
+// ExecuteScaleUps executes the scale ups, based on the provided scale up infos and options.
+// May scale up groups concurrently when autoscler option is enabled.
+// In case of issues returns an error and a scale up info which failed to execute.
+// If there were multiple concurrent errors one combined error is returned.
+func (e *scaleUpExecutor) ExecuteScaleUps(
+	ctx context.Context,
+	scaleUpInfos []nodegroupset.ScaleUpInfo,
+	now time.Time,
+	atomic bool,
+) (errors.AutoscalerError, []cloudprovider.NodeGroup) {
+	options := e.autoscalingCtx.AutoscalingOptions
+	if options.ParallelScaleUp {
+		return e.executeScaleUpsParallel(ctx, scaleUpInfos, now, atomic)
+	}
+	return e.executeScaleUpsSync(ctx, scaleUpInfos, now, atomic)
+}
+
+func (e *scaleUpExecutor) executeScaleUpsSync(
+	ctx context.Context,
+	scaleUpInfos []nodegroupset.ScaleUpInfo,
+	now time.Time,
+	atomic bool,
+) (errors.AutoscalerError, []cloudprovider.NodeGroup) {
+	for _, scaleUpInfo := range scaleUpInfos {
+		if aErr := e.executeScaleUp(ctx, scaleUpInfo, now, atomic); aErr != nil {
+			return aErr, []cloudprovider.NodeGroup{scaleUpInfo.Group}
+		}
+	}
+	return nil, nil
+}
+
+func (e *scaleUpExecutor) executeScaleUpsParallel(
+	ctx context.Context,
+	scaleUpInfos []nodegroupset.ScaleUpInfo,
+	now time.Time,
+	atomic bool,
+) (errors.AutoscalerError, []cloudprovider.NodeGroup) {
+	if err := checkUniqueNodeGroups(scaleUpInfos); err != nil {
+		return err, extractNodeGroups(scaleUpInfos)
+	}
+	type errResult struct {
+		err  errors.AutoscalerError
+		info *nodegroupset.ScaleUpInfo
+	}
+	scaleUpsLen := len(scaleUpInfos)
+	errResults := make(chan errResult, scaleUpsLen)
+	var wg sync.WaitGroup
+	wg.Add(scaleUpsLen)
+	for _, scaleUpInfo := range scaleUpInfos {
+		go func(info nodegroupset.ScaleUpInfo) {
+			defer wg.Done()
+			if aErr := e.executeScaleUp(ctx, info, now, atomic); aErr != nil {
+				errResults <- errResult{err: aErr, info: &info}
+			}
+		}(scaleUpInfo)
+	}
+	wg.Wait()
+	close(errResults)
+	var results []errResult
+	for err := range errResults {
+		results = append(results, err)
+	}
+	if len(results) > 0 {
+		failedNodeGroups := make([]cloudprovider.NodeGroup, len(results))
+		scaleUpErrors := make([]errors.AutoscalerError, len(results))
+		for i, result := range results {
+			failedNodeGroups[i] = result.info.Group
+			scaleUpErrors[i] = result.err
+		}
+		return errors.Combine(scaleUpErrors), failedNodeGroups
+	}
+	return nil, nil
+}
+
+func (e *scaleUpExecutor) increaseSize(ctx context.Context, nodeGroup cloudprovider.NodeGroup, increase int, atomic bool) error {
+	if atomic {
+		if err := nodeGroup.AtomicIncreaseSize(ctx, increase); err != cloudprovider.ErrNotImplemented {
+			return err
+		}
+		// If error is cloudprovider.ErrNotImplemented, fall back to non-atomic
+		// increase - cloud provider doesn't support it.
+	}
+	return nodeGroup.IncreaseSize(ctx, increase)
+}
+
+func (e *scaleUpExecutor) executeScaleUp(
+	ctx context.Context,
+	info nodegroupset.ScaleUpInfo,
+	now time.Time,
+	atomic bool,
+) errors.AutoscalerError {
+	logger := klog.FromContext(ctx)
+	logger.V(0).Info("Scale-up: setting group size", "nodeGroupId", info.Group.Id(), "size", info.NewSize)
+	e.autoscalingCtx.LogRecorder.Eventf(apiv1.EventTypeNormal, "ScaledUpGroup",
+		"Scale-up: setting group %s size to %d instead of %d (max: %d)", info.Group.Id(), info.NewSize, info.CurrentSize, info.MaxSize)
+	increase := info.NewSize - info.CurrentSize
+	if err := e.increaseSize(ctx, info.Group, increase, atomic); err != nil {
+		e.autoscalingCtx.LogRecorder.Eventf(apiv1.EventTypeWarning, "FailedToScaleUpGroup", "Scale-up failed for group %s: %v", info.Group.Id(), err)
+		aerr := errors.ToAutoscalerError(errors.CloudProviderError, err).AddPrefix("failed to increase node group size: ")
+		e.scaleStateNotifier.RegisterFailedScaleUp(ctx, info.Group, increase, cloudprovider.InstanceErrorInfo{
+			ErrorClass:   cloudprovider.OtherErrorClass,
+			ErrorCode:    string(aerr.Type()),
+			ErrorMessage: aerr.Error(),
+		}, now)
+		return aerr
+	}
+	if increase < 0 {
+		return errors.NewAutoscalerError(errors.InternalError, fmt.Sprintf("increase in number of nodes cannot be negative, got: %v", increase))
+	}
+	if !info.Group.Exist(ctx) && e.asyncNodeGroupStateChecker.IsUpcoming(info.Group) {
+		// Don't emit scale up event for upcoming node group as it will be generated after
+		// the node group is created, during initial scale up.
+		return nil
+	}
+	e.scaleStateNotifier.RegisterScaleUp(ctx, info.Group, increase, time.Now())
+	e.autoscalingCtx.LogRecorder.Eventf(apiv1.EventTypeNormal, "ScaledUpGroup",
+		"Scale-up: group %s size set to %d instead of %d (max: %d)", info.Group.Id(), info.NewSize, info.CurrentSize, info.MaxSize)
+	return nil
+}
+
+// Checks if all groups are scaled only once.
+// Scaling one group multiple times concurrently may cause problems.
+func checkUniqueNodeGroups(scaleUpInfos []nodegroupset.ScaleUpInfo) errors.AutoscalerError {
+	uniqueGroups := make(map[string]bool)
+	for _, info := range scaleUpInfos {
+		if uniqueGroups[info.Group.Id()] {
+			return errors.NewAutoscalerErrorf(
+				errors.InternalError,
+				"assertion failure: detected group double scaling: %s", info.Group.Id(),
+			)
+		}
+		uniqueGroups[info.Group.Id()] = true
+	}
+	return nil
+}
+
+func extractNodeGroups(scaleUpInfos []nodegroupset.ScaleUpInfo) []cloudprovider.NodeGroup {
+	groups := make([]cloudprovider.NodeGroup, len(scaleUpInfos))
+	for i, info := range scaleUpInfos {
+		groups[i] = info.Group
+	}
+	return groups
+}

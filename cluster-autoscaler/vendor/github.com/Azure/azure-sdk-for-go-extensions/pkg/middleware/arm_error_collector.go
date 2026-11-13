@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptrace"
+	"sync"
 	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
@@ -52,14 +53,7 @@ type ResponseInfo struct {
 	ConnTracking  *HttpConnTracking
 }
 
-type HttpConnTracking struct {
-	TotalLatency string
-	DnsLatency   string
-	ConnLatency  string
-	TlsLatency   string
-	Protocol     string
-	ReqConnInfo  *httptrace.GotConnInfo
-}
+
 
 // ArmRequestMetricCollector is a interface that collectors need to implement.
 // TODO: use *policy.Request or *http.Request?
@@ -187,54 +181,86 @@ func parseTransportError(err error) *ArmError {
 }
 
 func addConnectionTracingToRequestContext(ctx context.Context, connTracking *HttpConnTracking) context.Context {
-	var getConn, dnsStart, connStart, tlsStart *time.Time
+	// traceVars holds timing variables that need to be protected from concurrent access
+	// since HTTP trace callbacks run in separate goroutines
+	traceVars := &struct {
+		mu        sync.RWMutex
+		getConn   *time.Time
+		dnsStart  *time.Time
+		connStart *time.Time
+		tlsStart  *time.Time
+	}{}
 
 	trace := &httptrace.ClientTrace{
 		GetConn: func(hostPort string) {
-			getConn = to.Ptr(time.Now())
+			traceVars.mu.Lock()
+			defer traceVars.mu.Unlock()
+			traceVars.getConn = to.Ptr(time.Now())
 		},
 		GotConn: func(connInfo httptrace.GotConnInfo) {
+			traceVars.mu.RLock()
+			getConn := traceVars.getConn
+			traceVars.mu.RUnlock()
+
 			if getConn != nil {
-				connTracking.TotalLatency = fmt.Sprintf("%dms", time.Now().Sub(*getConn).Milliseconds())
+				connTracking.setTotalLatency(fmt.Sprintf("%dms", time.Now().Sub(*getConn).Milliseconds()))
 			}
 
-			connTracking.ReqConnInfo = &connInfo
+			connTracking.setReqConnInfo(&connInfo)
 		},
 		DNSStart: func(_ httptrace.DNSStartInfo) {
-			dnsStart = to.Ptr(time.Now())
+			traceVars.mu.Lock()
+			defer traceVars.mu.Unlock()
+			traceVars.dnsStart = to.Ptr(time.Now())
 		},
 		DNSDone: func(dnsInfo httptrace.DNSDoneInfo) {
+			traceVars.mu.RLock()
+			dnsStart := traceVars.dnsStart
+			traceVars.mu.RUnlock()
+
 			if dnsInfo.Err == nil {
 				if dnsStart != nil {
-					connTracking.DnsLatency = fmt.Sprintf("%dms", time.Now().Sub(*dnsStart).Milliseconds())
+					connTracking.setDnsLatency(fmt.Sprintf("%dms", time.Now().Sub(*dnsStart).Milliseconds()))
 				}
 			} else {
-				connTracking.DnsLatency = dnsInfo.Err.Error()
+				connTracking.setDnsLatency(dnsInfo.Err.Error())
 			}
 		},
 		ConnectStart: func(_, _ string) {
-			connStart = to.Ptr(time.Now())
+			traceVars.mu.Lock()
+			defer traceVars.mu.Unlock()
+			traceVars.connStart = to.Ptr(time.Now())
 		},
 		ConnectDone: func(_, _ string, err error) {
+			traceVars.mu.RLock()
+			connStart := traceVars.connStart
+			traceVars.mu.RUnlock()
+
 			if err == nil {
 				if connStart != nil {
-					connTracking.ConnLatency = fmt.Sprintf("%dms", time.Now().Sub(*connStart).Milliseconds())
+					connTracking.setConnLatency(fmt.Sprintf("%dms", time.Now().Sub(*connStart).Milliseconds()))
 				}
 			} else {
-				connTracking.ConnLatency = err.Error()
+				connTracking.setConnLatency(err.Error())
 			}
 		},
 		TLSHandshakeStart: func() {
-			tlsStart = to.Ptr(time.Now())
+			traceVars.mu.Lock()
+			defer traceVars.mu.Unlock()
+			traceVars.tlsStart = to.Ptr(time.Now())
 		},
 		TLSHandshakeDone: func(t tls.ConnectionState, err error) {
+			traceVars.mu.RLock()
+			tlsStart := traceVars.tlsStart
+			traceVars.mu.RUnlock()
+
 			if err == nil {
 				if tlsStart != nil {
-					connTracking.TlsLatency = fmt.Sprintf("%dms", time.Now().Sub(*tlsStart).Milliseconds())
+					connTracking.setTlsLatency(fmt.Sprintf("%dms", time.Now().Sub(*tlsStart).Milliseconds()))
 				}
-				connTracking.Protocol = t.NegotiatedProtocol
+				connTracking.setProtocol(t.NegotiatedProtocol)
 			} else {
-				connTracking.TlsLatency = err.Error()
+				connTracking.setTlsLatency(err.Error())
 			}
 		},
 	}

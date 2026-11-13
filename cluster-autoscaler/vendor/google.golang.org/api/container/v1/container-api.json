@@ -902,7 +902,7 @@
                       ]
                     },
                     "fetchNodePoolUpgradeInfo": {
-                      "description": "Fetch upgrade information of a specific nodepool.",
+                      "description": "Fetch upgrade information of a specific node pool.",
                       "flatPath": "v1/projects/{projectsId}/locations/{locationsId}/clusters/{clustersId}/nodePools/{nodePoolsId}:fetchNodePoolUpgradeInfo",
                       "httpMethod": "GET",
                       "id": "container.projects.locations.clusters.nodePools.fetchNodePoolUpgradeInfo",
@@ -911,7 +911,7 @@
                       ],
                       "parameters": {
                         "name": {
-                          "description": "Required. The name (project, location, cluster, nodepool) of the nodepool to get. Specified in the format `projects/*/locations/*/clusters/*/nodePools/*` or `projects/*/zones/*/clusters/*/nodePools/*`.",
+                          "description": "Required. The name (project, location, cluster, node pool) of the node pool to get. Specified in the format `projects/*/locations/*/clusters/*/nodePools/*` or `projects/*/zones/*/clusters/*/nodePools/*`.",
                           "location": "path",
                           "pattern": "^projects/[^/]+/locations/[^/]+/clusters/[^/]+/nodePools/[^/]+$",
                           "required": true,
@@ -2213,7 +2213,7 @@
                       ]
                     },
                     "fetchNodePoolUpgradeInfo": {
-                      "description": "Fetch upgrade information of a specific nodepool.",
+                      "description": "Fetch upgrade information of a specific node pool.",
                       "flatPath": "v1/projects/{projectsId}/zones/{zonesId}/clusters/{clustersId}/nodePools/{nodePoolsId}:fetchNodePoolUpgradeInfo",
                       "httpMethod": "GET",
                       "id": "container.projects.zones.clusters.nodePools.fetchNodePoolUpgradeInfo",
@@ -2222,7 +2222,7 @@
                       ],
                       "parameters": {
                         "name": {
-                          "description": "Required. The name (project, location, cluster, nodepool) of the nodepool to get. Specified in the format `projects/*/locations/*/clusters/*/nodePools/*` or `projects/*/zones/*/clusters/*/nodePools/*`.",
+                          "description": "Required. The name (project, location, cluster, node pool) of the node pool to get. Specified in the format `projects/*/locations/*/clusters/*/nodePools/*` or `projects/*/zones/*/clusters/*/nodePools/*`.",
                           "location": "path",
                           "pattern": "^projects/[^/]+/zones/[^/]+/clusters/[^/]+/nodePools/[^/]+$",
                           "required": true,
@@ -2660,7 +2660,7 @@
       }
     }
   },
-  "revision": "20251216",
+  "revision": "20260421",
   "rootUrl": "https://container.googleapis.com/",
   "schemas": {
     "AcceleratorConfig": {
@@ -2691,6 +2691,17 @@
       },
       "type": "object"
     },
+    "AccurateTimeConfig": {
+      "description": "AccurateTimeConfig contains configuration for the accurate time synchronization feature.",
+      "id": "AccurateTimeConfig",
+      "properties": {
+        "enablePtpKvmTimeSync": {
+          "description": "Enables enhanced time synchronization using PTP-KVM.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
     "AdditionalIPRangesConfig": {
       "description": "AdditionalIPRangesConfig is the configuration for individual additional subnetwork attached to the cluster",
       "id": "AdditionalIPRangesConfig",
@@ -2701,6 +2712,20 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "status": {
+          "description": "Draining status of the additional subnet.",
+          "enum": [
+            "STATUS_UNSPECIFIED",
+            "ACTIVE",
+            "DRAINING"
+          ],
+          "enumDescriptions": [
+            "Not set, same as ACTIVE.",
+            "ACTIVE status indicates that the subnet is available for new node pool creation.",
+            "DRAINING status indicates that the subnet is not used for new node pool creation."
+          ],
+          "type": "string"
         },
         "subnetwork": {
           "description": "Name of the subnetwork. This can be the full path of the subnetwork or just the name. Example1: my-subnet Example2: projects/gke-project/regions/us-central1/subnetworks/my-subnet",
@@ -2826,13 +2851,29 @@
           "$ref": "NetworkPolicyConfig",
           "description": "Configuration for NetworkPolicy. This only tracks whether the addon is enabled or not on the Master, it does not track whether network policy is enabled for the nodes."
         },
+        "nodeReadinessConfig": {
+          "$ref": "NodeReadinessConfig",
+          "description": "Optional. Configuration for NodeReadinessController add-on."
+        },
         "parallelstoreCsiDriverConfig": {
           "$ref": "ParallelstoreCsiDriverConfig",
           "description": "Configuration for the Cloud Storage Parallelstore CSI driver."
         },
+        "podSnapshotConfig": {
+          "$ref": "PodSnapshotConfig",
+          "description": "Optional. Configuration for the Pod Snapshot feature."
+        },
         "rayOperatorConfig": {
           "$ref": "RayOperatorConfig",
           "description": "Optional. Configuration for Ray Operator addon."
+        },
+        "sliceControllerConfig": {
+          "$ref": "SliceControllerConfig",
+          "description": "Optional. Configuration for the slice controller add-on."
+        },
+        "slurmOperatorConfig": {
+          "$ref": "SlurmOperatorConfig",
+          "description": "Configuration for the Slurm Operator."
         },
         "statefulHaConfig": {
           "$ref": "StatefulHAConfig",
@@ -2993,6 +3034,10 @@
       "description": "Autopilot is the configuration for Autopilot settings on the cluster.",
       "id": "Autopilot",
       "properties": {
+        "clusterPolicyConfig": {
+          "$ref": "ClusterPolicyConfig",
+          "description": "ClusterPolicyConfig denotes cluster level policies that are enforced for the cluster."
+        },
         "enabled": {
           "description": "Enable Autopilot",
           "type": "boolean"
@@ -3056,7 +3101,7 @@
       "type": "object"
     },
     "AutopilotConfig": {
-      "description": "AutopilotConfig contains configuration of autopilot feature for this nodepool.",
+      "description": "AutopilotConfig contains configuration of autopilot feature for this node pool.",
       "id": "AutopilotConfig",
       "properties": {
         "enabled": {
@@ -3261,7 +3306,7 @@
       "type": "object"
     },
     "BootDisk": {
-      "description": "BootDisk specifies the boot disk configuration for nodepools.",
+      "description": "BootDisk specifies the boot disk configuration for node pools.",
       "id": "BootDisk",
       "properties": {
         "diskType": {
@@ -3282,6 +3327,23 @@
           "description": "Disk size in GB. Replaces NodeConfig.disk_size_gb",
           "format": "int64",
           "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "BootDiskProfile": {
+      "description": "Swap on the node's boot disk.",
+      "id": "BootDiskProfile",
+      "properties": {
+        "swapSizeGib": {
+          "description": "Specifies the size of the swap space in gibibytes (GiB).",
+          "format": "int64",
+          "type": "string"
+        },
+        "swapSizePercent": {
+          "description": "Specifies the size of the swap space as a percentage of the boot disk size.",
+          "format": "int32",
+          "type": "integer"
         }
       },
       "type": "object"
@@ -3317,7 +3379,7 @@
       "id": "CertificateAuthorityDomainConfig",
       "properties": {
         "fqdns": {
-          "description": "List of fully qualified domain names (FQDN). Specifying port is supported. Wildcards are NOT supported. Examples: - my.customdomain.com - 10.0.1.2:5000",
+          "description": "List of fully qualified domain names (FQDN). Specifying port is supported. Wildcards are NOT supported. Examples: - `my.customdomain.com` - `10.0.1.2:5000`",
           "items": {
             "type": "string"
           },
@@ -3461,12 +3523,13 @@
           "description": "Configuration for Binary Authorization."
         },
         "clusterIpv4Cidr": {
-          "description": "The IP address range of the container pods in this cluster, in [CIDR](http://en.wikipedia.org/wiki/Classless_Inter-Domain_Routing) notation (e.g. `10.96.0.0/14`). Leave blank to have one automatically chosen or specify a `/14` block in `10.0.0.0/8`.",
+          "description": "The IP address range of the container pods in this cluster, in [CIDR](https://en.wikipedia.org/wiki/Classless_Inter-Domain_Routing) notation (e.g. `10.96.0.0/14`). Leave blank to have one automatically chosen or specify a `/14` block in `10.0.0.0/8`.",
           "type": "string"
         },
         "compliancePostureConfig": {
           "$ref": "CompliancePostureConfig",
-          "description": "Enable/Disable Compliance Posture features for the cluster."
+          "deprecated": true,
+          "description": "Optional. Deprecated: Compliance Posture is no longer supported. For more details, see https://cloud.google.com/kubernetes-engine/docs/deprecations/posture-management-deprecation. Enable/Disable Compliance Posture features for the cluster."
         },
         "conditions": {
           "description": "Which conditions caused the current cluster state.",
@@ -3478,6 +3541,10 @@
         "confidentialNodes": {
           "$ref": "ConfidentialNodes",
           "description": "Configuration of Confidential Nodes. All the nodes in the cluster will be Confidential VM once enabled."
+        },
+        "controlPlaneEgress": {
+          "$ref": "ControlPlaneEgress",
+          "description": "Configuration for control plane egress control."
         },
         "controlPlaneEndpointsConfig": {
           "$ref": "ControlPlaneEndpointsConfig",
@@ -3626,6 +3693,10 @@
           "$ref": "MaintenancePolicy",
           "description": "Configure the maintenance policy for this cluster."
         },
+        "managedMachineLearningDiagnosticsConfig": {
+          "$ref": "ManagedMachineLearningDiagnosticsConfig",
+          "description": "Configuration for Managed Machine Learning Diagnostics."
+        },
         "managedOpentelemetryConfig": {
           "$ref": "ManagedOpenTelemetryConfig",
           "description": "Configuration for Managed OpenTelemetry pipeline."
@@ -3738,13 +3809,21 @@
           "readOnly": true,
           "type": "boolean"
         },
+        "scheduleUpgradeConfig": {
+          "$ref": "ScheduleUpgradeConfig",
+          "description": "Optional. Configuration for scheduled upgrades."
+        },
         "secretManagerConfig": {
           "$ref": "SecretManagerConfig",
           "description": "Secret CSI driver configuration."
         },
+        "secretSyncConfig": {
+          "$ref": "SecretSyncConfig",
+          "description": "Configuration for sync Secret Manager secrets as k8s secrets."
+        },
         "securityPostureConfig": {
           "$ref": "SecurityPostureConfig",
-          "description": "Enable/Disable Security Posture API features for the cluster."
+          "description": "Optional. Enable/Disable Security Posture API features for the cluster."
         },
         "selfLink": {
           "description": "Output only. Server-defined URL for the resource.",
@@ -3752,7 +3831,7 @@
           "type": "string"
         },
         "servicesIpv4Cidr": {
-          "description": "Output only. The IP address range of the Kubernetes services in this cluster, in [CIDR](http://en.wikipedia.org/wiki/Classless_Inter-Domain_Routing) notation (e.g. `1.2.3.4/29`). Service addresses are typically put in the last `/16` from the container CIDR.",
+          "description": "Output only. The IP address range of the Kubernetes services in this cluster, in [CIDR](https://en.wikipedia.org/wiki/Classless_Inter-Domain_Routing) notation (e.g. `1.2.3.4/29`). Service addresses are typically put in the last `/16` from the container CIDR.",
           "readOnly": true,
           "type": "string"
         },
@@ -3795,7 +3874,7 @@
         },
         "tpuIpv4CidrBlock": {
           "deprecated": true,
-          "description": "Output only. The IP address range of the Cloud TPUs in this cluster, in [CIDR](http://en.wikipedia.org/wiki/Classless_Inter-Domain_Routing) notation (e.g. `1.2.3.4/29`). This field is deprecated due to the deprecation of 2VM TPU. The end of life date for 2VM TPU is 2025-04-25.",
+          "description": "Output only. The IP address range of the Cloud TPUs in this cluster, in [CIDR](https://en.wikipedia.org/wiki/Classless_Inter-Domain_Routing) notation (e.g. `1.2.3.4/29`). This field is deprecated due to the deprecation of 2VM TPU. The end of life date for 2VM TPU is 2025-04-25.",
           "readOnly": true,
           "type": "string"
         },
@@ -3824,6 +3903,20 @@
       "description": "ClusterAutoscaling contains global, per-cluster information required by Cluster Autoscaler to automatically adjust the size of the cluster and create/delete node pools based on the current needs.",
       "id": "ClusterAutoscaling",
       "properties": {
+        "autopilotGeneralProfile": {
+          "description": "Autopilot general profile for the cluster, which defines the configuration for the cluster.",
+          "enum": [
+            "AUTOPILOT_GENERAL_PROFILE_UNSPECIFIED",
+            "NO_PERFORMANCE",
+            "NONE"
+          ],
+          "enumDescriptions": [
+            "Use default configuration.",
+            "Avoid extra IP consumption.",
+            "Use default configuration."
+          ],
+          "type": "string"
+        },
         "autoprovisioningLocations": {
           "description": "The list of Google Compute Engine [zones](https://cloud.google.com/compute/docs/zones#available) in which the NodePool's nodes can be created by NAP.",
           "items": {
@@ -3886,6 +3979,29 @@
       },
       "type": "object"
     },
+    "ClusterPolicyConfig": {
+      "description": "ClusterPolicyConfig stores the configuration for cluster wide policies.",
+      "id": "ClusterPolicyConfig",
+      "properties": {
+        "noStandardNodePools": {
+          "description": "Denotes preventing standard node pools and requiring only autopilot node pools.",
+          "type": "boolean"
+        },
+        "noSystemImpersonation": {
+          "description": "Denotes preventing impersonation and CSRs for GKE System users.",
+          "type": "boolean"
+        },
+        "noSystemMutation": {
+          "description": "Denotes that preventing creation and mutation of resources in GKE managed namespaces and cluster-scoped GKE managed resources .",
+          "type": "boolean"
+        },
+        "noUnsafeWebhooks": {
+          "description": "Denotes preventing unsafe webhooks.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
     "ClusterUpdate": {
       "description": "ClusterUpdate describes an update to the cluster. Exactly one update can be applied to a cluster with each request, so at most one field can be provided.",
       "id": "ClusterUpdate",
@@ -3914,6 +4030,10 @@
           "$ref": "AutoIpamConfig",
           "description": "AutoIpamConfig contains all information related to Auto IPAM"
         },
+        "desiredAutopilotClusterPolicyConfig": {
+          "$ref": "ClusterPolicyConfig",
+          "description": "The desired autopilot cluster policies that to be enforced in the cluster."
+        },
         "desiredAutopilotWorkloadPolicyConfig": {
           "$ref": "WorkloadPolicyConfig",
           "description": "WorkloadPolicyConfig is the configuration related to GCW workload policy"
@@ -3928,11 +4048,16 @@
         },
         "desiredCompliancePostureConfig": {
           "$ref": "CompliancePostureConfig",
-          "description": "Enable/Disable Compliance Posture features for the cluster."
+          "deprecated": true,
+          "description": "Deprecated: Compliance Posture is no longer supported. For more details, see https://cloud.google.com/kubernetes-engine/docs/deprecations/posture-management-deprecation. Enable/Disable Compliance Posture features for the cluster."
         },
         "desiredContainerdConfig": {
           "$ref": "ContainerdConfig",
           "description": "The desired containerd config for the cluster."
+        },
+        "desiredControlPlaneEgress": {
+          "$ref": "ControlPlaneEgress",
+          "description": "The desired control plane egress control config for the cluster."
         },
         "desiredControlPlaneEndpointsConfig": {
           "$ref": "ControlPlaneEndpointsConfig",
@@ -4059,6 +4184,10 @@
           "description": "The logging service the cluster should use to write logs. Currently available options: * `logging.googleapis.com/kubernetes` - The Cloud Logging service with a Kubernetes-native resource model * `logging.googleapis.com` - The legacy Cloud Logging service (no longer available as of GKE 1.15). * `none` - no logs will be exported from the cluster. If left as an empty string,`logging.googleapis.com/kubernetes` will be used for GKE 1.14+ or `logging.googleapis.com` for earlier versions.",
           "type": "string"
         },
+        "desiredManagedMachineLearningDiagnosticsConfig": {
+          "$ref": "ManagedMachineLearningDiagnosticsConfig",
+          "description": "The desired managed machine learning diagnostics configuration."
+        },
         "desiredManagedOpentelemetryConfig": {
           "$ref": "ManagedOpenTelemetryConfig",
           "description": "The desired managed open telemetry configuration."
@@ -4180,6 +4309,10 @@
         "desiredSecretManagerConfig": {
           "$ref": "SecretManagerConfig",
           "description": "Enable/Disable Secret Manager Config."
+        },
+        "desiredSecretSyncConfig": {
+          "$ref": "SecretSyncConfig",
+          "description": "Configuration for sync Secret Manager secrets as k8s secrets."
         },
         "desiredSecurityPostureConfig": {
           "$ref": "SecurityPostureConfig",
@@ -4350,7 +4483,8 @@
       "type": "object"
     },
     "CompliancePostureConfig": {
-      "description": "CompliancePostureConfig defines the settings needed to enable/disable features for the Compliance Posture.",
+      "deprecated": true,
+      "description": "Deprecated: Compliance Posture is no longer supported. For more details, see https://cloud.google.com/kubernetes-engine/docs/deprecations/posture-management-deprecation. CompliancePostureConfig defines the settings needed to enable/disable features for the Compliance Posture.",
       "id": "CompliancePostureConfig",
       "properties": {
         "complianceStandards": {
@@ -4459,6 +4593,27 @@
       },
       "type": "object"
     },
+    "ControlPlaneEgress": {
+      "description": "ControlPlaneEgress defines the settings needed to enable control plane egress control.",
+      "id": "ControlPlaneEgress",
+      "properties": {
+        "mode": {
+          "description": "Defines the mode of control plane egress.",
+          "enum": [
+            "MODE_UNSPECIFIED",
+            "VIA_CONTROL_PLANE",
+            "NONE"
+          ],
+          "enumDescriptions": [
+            "Default value not specified.",
+            "Control plane has public IP and no restriction on egress.",
+            "No public IP on control plane and only internal allowlisted egress."
+          ],
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "ControlPlaneEndpointsConfig": {
       "description": "Configuration for all of the cluster's control plane endpoints.",
       "id": "ControlPlaneEndpointsConfig",
@@ -4481,6 +4636,17 @@
         "enabled": {
           "description": "Whether the feature is enabled or not.",
           "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "CrashLoopBackOffConfig": {
+      "description": "Contains config to modify node-level parameters for container restart behavior.",
+      "id": "CrashLoopBackOffConfig",
+      "properties": {
+        "maxContainerRestartPeriod": {
+          "description": "Optional. The maximum duration the backoff delay can accrue to for container restarts, minimum 1 second, maximum 300 seconds. If not set, defaults to the internal crashloopbackoff maximum. The string must be a sequence of decimal numbers, each with optional fraction and a unit suffix, such as \"300ms\". Valid time units are \"ns\", \"us\" (or \"µs\"), \"ms\", \"s\", \"m\", \"h\". See https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/#configurable-container-restart-delay for more details.",
+          "type": "string"
         }
       },
       "type": "object"
@@ -4536,6 +4702,17 @@
           "deprecated": true,
           "description": "Deprecated. The name of the Google Compute Engine [zone](https://cloud.google.com/compute/docs/zones#available) in which the cluster resides. This field has been deprecated and replaced by the parent field.",
           "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "CustomNodeInit": {
+      "description": "Support for running custom init code while bootstrapping nodes.",
+      "id": "CustomNodeInit",
+      "properties": {
+        "initScript": {
+          "$ref": "InitScript",
+          "description": "Optional. The init script to be executed on the node."
         }
       },
       "type": "object"
@@ -4638,7 +4815,10 @@
             "CURRENT_STATE_ENCRYPTION_PENDING",
             "CURRENT_STATE_ENCRYPTION_ERROR",
             "CURRENT_STATE_DECRYPTION_PENDING",
-            "CURRENT_STATE_DECRYPTION_ERROR"
+            "CURRENT_STATE_DECRYPTION_ERROR",
+            "CURRENT_STATE_ALL_OBJECTS_ENCRYPTION_ENABLED",
+            "CURRENT_STATE_ALL_OBJECTS_ENCRYPTION_PENDING",
+            "CURRENT_STATE_ALL_OBJECTS_ENCRYPTION_ERROR"
           ],
           "enumDescriptions": [
             "Should never be set",
@@ -4647,7 +4827,10 @@
             "Encryption (or re-encryption with a different CloudKMS key) of Secrets is in progress.",
             "Encryption (or re-encryption with a different CloudKMS key) of Secrets in etcd encountered an error.",
             "De-crypting Secrets to plain text in etcd is in progress.",
-            "De-crypting Secrets to plain text in etcd encountered an error."
+            "De-crypting Secrets to plain text in etcd encountered an error.",
+            "Encryption of all objects in the storage is enabled. It does not guarantee that all objects in the storage are encrypted, but eventually they will be.",
+            "Enablement of the encryption of all objects in storage is pending.",
+            "Enabling encryption of all objects in storage encountered an error."
           ],
           "readOnly": true,
           "type": "string"
@@ -4677,13 +4860,49 @@
           "enum": [
             "UNKNOWN",
             "ENCRYPTED",
-            "DECRYPTED"
+            "DECRYPTED",
+            "ALL_OBJECTS_ENCRYPTION_ENABLED"
           ],
           "enumDescriptions": [
             "Should never be set",
             "Secrets in etcd are encrypted.",
-            "Secrets in etcd are stored in plain text (at etcd level) - this is unrelated to Compute Engine level full disk encryption."
+            "Secrets in etcd are stored in plain text (at etcd level) - this is unrelated to Compute Engine level full disk encryption.",
+            "Encryption of all objects in the storage is enabled. There is no guarantee that all objects in the storage are encrypted, but eventually they will be."
           ],
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "Date": {
+      "description": "Represents a whole or partial calendar date, such as a birthday. The time of day and time zone are either specified elsewhere or are insignificant. The date is relative to the Gregorian Calendar. This can represent one of the following: * A full date, with non-zero year, month, and day values. * A month and day, with a zero year (for example, an anniversary). * A year on its own, with a zero month and a zero day. * A year and month, with a zero day (for example, a credit card expiration date). Related types: * google.type.TimeOfDay * google.type.DateTime * google.protobuf.Timestamp",
+      "id": "Date",
+      "properties": {
+        "day": {
+          "description": "Day of a month. Must be from 1 to 31 and valid for the year and month, or 0 to specify a year by itself or a year and month where the day isn't significant.",
+          "format": "int32",
+          "type": "integer"
+        },
+        "month": {
+          "description": "Month of a year. Must be from 1 to 12, or 0 to specify a year without a month and day.",
+          "format": "int32",
+          "type": "integer"
+        },
+        "year": {
+          "description": "Year of the date. Must be from 1 to 9999, or 0 to specify a date without a year.",
+          "format": "int32",
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "DedicatedLocalSsdProfile": {
+      "description": "Provisions a new, separate local NVMe SSD exclusively for swap.",
+      "id": "DedicatedLocalSsdProfile",
+      "properties": {
+        "diskCount": {
+          "description": "The number of physical local NVMe SSD disks to attach.",
+          "format": "int64",
           "type": "string"
         }
       },
@@ -4747,6 +4966,35 @@
       },
       "type": "object"
     },
+    "DisruptionBudget": {
+      "description": "DisruptionBudget defines the upgrade disruption budget for the cluster control plane.",
+      "id": "DisruptionBudget",
+      "properties": {
+        "lastDisruptionTime": {
+          "description": "Output only. The last time a disruption was performed on the control plane.",
+          "format": "google-datetime",
+          "readOnly": true,
+          "type": "string"
+        },
+        "lastMinorVersionDisruptionTime": {
+          "description": "Output only. The last time a minor version upgrade was performed on the control plane.",
+          "format": "google-datetime",
+          "readOnly": true,
+          "type": "string"
+        },
+        "minorVersionDisruptionInterval": {
+          "description": "Optional. The minimum duration between two minor version upgrades of the control plane.",
+          "format": "google-duration",
+          "type": "string"
+        },
+        "patchVersionDisruptionInterval": {
+          "description": "Optional. The minimum duration between two patch version upgrades of the control plane.",
+          "format": "google-duration",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "DisruptionEvent": {
       "description": "DisruptionEvent is a notification sent to customers about the disruption event of a resource.",
       "id": "DisruptionEvent",
@@ -4801,6 +5049,17 @@
       "properties": {},
       "type": "object"
     },
+    "EncryptionConfig": {
+      "description": "Defines encryption settings for the swap space.",
+      "id": "EncryptionConfig",
+      "properties": {
+        "disabled": {
+          "description": "Optional. If true, swap space will not be encrypted. Defaults to false (encrypted).",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
     "EnterpriseConfig": {
       "deprecated": true,
       "description": "EnterpriseConfig is the cluster enterprise configuration. Deprecated: GKE Enterprise features are now available without an Enterprise tier.",
@@ -4834,6 +5093,23 @@
             "ENTERPRISE indicates a GKE Enterprise cluster."
           ],
           "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "EphemeralLocalSsdProfile": {
+      "description": "Swap on the local SSD shared with pod ephemeral storage.",
+      "id": "EphemeralLocalSsdProfile",
+      "properties": {
+        "swapSizeGib": {
+          "description": "Specifies the size of the swap space in gibibytes (GiB).",
+          "format": "int64",
+          "type": "string"
+        },
+        "swapSizePercent": {
+          "description": "Specifies the size of the swap space as a percentage of the ephemeral local SSD capacity.",
+          "format": "int32",
+          "type": "integer"
         }
       },
       "type": "object"
@@ -5026,6 +5302,25 @@
       "properties": {
         "secretUri": {
           "description": "Secret URI, in the form \"projects/$PROJECT_ID/secrets/$SECRET_NAME/versions/$VERSION\". Version can be fixed (e.g. \"2\") or \"latest\"",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "GPUDirectConfig": {
+      "description": "GPUDirectConfig specifies the GPU direct strategy on the node pool.",
+      "id": "GPUDirectConfig",
+      "properties": {
+        "gpuDirectStrategy": {
+          "description": "The type of GPU direct strategy to enable on the node pool.",
+          "enum": [
+            "GPU_DIRECT_STRATEGY_UNSPECIFIED",
+            "RDMA"
+          ],
+          "enumDescriptions": [
+            "Default value. No GPU Direct strategy is enabled on the node.",
+            "GPUDirect-RDMA on A3 Ultra, and A4 machine types"
+          ],
           "type": "string"
         }
       },
@@ -5327,7 +5622,7 @@
           "type": "array"
         },
         "host": {
-          "description": "Host configures the registry host/mirror. It supports fully qualified domain names (FQDN) and IP addresses: Specifying port is supported. Wildcards are NOT supported. Examples: - my.customdomain.com - 10.0.1.2:5000",
+          "description": "Host configures the registry host/mirror. It supports fully qualified domain names (FQDNs) and IP addresses. Specifying scheme, port or path is supported. Scheme can only be http or https. Wildcards are NOT supported. Examples: - `my.customdomain.com` - `https://my.customdomain.com/path` - `10.0.1.2:5000`",
           "type": "string"
         },
         "overridePath": {
@@ -5423,7 +5718,7 @@
           "type": "string"
         },
         "clusterIpv4CidrBlock": {
-          "description": "The IP address range for the cluster pod IPs. If this field is set, then `cluster.cluster_ipv4_cidr` must be left blank. This field is only applicable when `use_ip_aliases` is true. Set to blank to have a range chosen with the default size. Set to /netmask (e.g. `/14`) to have a range chosen with a specific netmask. Set to a [CIDR](http://en.wikipedia.org/wiki/Classless_Inter-Domain_Routing) notation (e.g. `10.96.0.0/14`) from the RFC-1918 private networks (e.g. `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`) to pick a specific range to use.",
+          "description": "The IP address range for the cluster pod IPs. If this field is set, then `cluster.cluster_ipv4_cidr` must be left blank. This field is only applicable when `use_ip_aliases` is true. Set to blank to have a range chosen with the default size. Set to /netmask (e.g. `/14`) to have a range chosen with a specific netmask. Set to a [CIDR](https://en.wikipedia.org/wiki/Classless_Inter-Domain_Routing) notation (e.g. `10.96.0.0/14`) from the RFC-1918 private networks (e.g. `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`) to pick a specific range to use.",
           "type": "string"
         },
         "clusterSecondaryRangeName": {
@@ -5464,7 +5759,7 @@
           "type": "string"
         },
         "nodeIpv4CidrBlock": {
-          "description": "The IP address range of the instance IPs in this cluster. This is applicable only if `create_subnetwork` is true. Set to blank to have a range chosen with the default size. Set to /netmask (e.g. `/14`) to have a range chosen with a specific netmask. Set to a [CIDR](http://en.wikipedia.org/wiki/Classless_Inter-Domain_Routing) notation (e.g. `10.96.0.0/14`) from the RFC-1918 private networks (e.g. `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`) to pick a specific range to use.",
+          "description": "The IP address range of the instance IPs in this cluster. This is applicable only if `create_subnetwork` is true. Set to blank to have a range chosen with the default size. Set to /netmask (e.g. `/14`) to have a range chosen with a specific netmask. Set to a [CIDR](https://en.wikipedia.org/wiki/Classless_Inter-Domain_Routing) notation (e.g. `10.96.0.0/14`) from the RFC-1918 private networks (e.g. `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`) to pick a specific range to use.",
           "type": "string"
         },
         "podCidrOverprovisionConfig": {
@@ -5477,7 +5772,7 @@
           "type": "string"
         },
         "servicesIpv4CidrBlock": {
-          "description": "The IP address range of the services IPs in this cluster. If blank, a range will be automatically chosen with the default size. This field is only applicable when `use_ip_aliases` is true. Set to blank to have a range chosen with the default size. Set to /netmask (e.g. `/14`) to have a range chosen with a specific netmask. Set to a [CIDR](http://en.wikipedia.org/wiki/Classless_Inter-Domain_Routing) notation (e.g. `10.96.0.0/14`) from the RFC-1918 private networks (e.g. `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`) to pick a specific range to use.",
+          "description": "The IP address range of the services IPs in this cluster. If blank, a range will be automatically chosen with the default size. This field is only applicable when `use_ip_aliases` is true. Set to blank to have a range chosen with the default size. Set to /netmask (e.g. `/14`) to have a range chosen with a specific netmask. Set to a [CIDR](https://en.wikipedia.org/wiki/Classless_Inter-Domain_Routing) notation (e.g. `10.96.0.0/14`) from the RFC-1918 private networks (e.g. `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`) to pick a specific range to use.",
           "type": "string"
         },
         "servicesIpv6CidrBlock": {
@@ -5514,7 +5809,7 @@
         },
         "tpuIpv4CidrBlock": {
           "deprecated": true,
-          "description": "The IP address range of the Cloud TPUs in this cluster. If unspecified, a range will be automatically chosen with the default size. This field is only applicable when `use_ip_aliases` is true. If unspecified, the range will use the default size. Set to /netmask (e.g. `/14`) to have a range chosen with a specific netmask. Set to a [CIDR](http://en.wikipedia.org/wiki/Classless_Inter-Domain_Routing) notation (e.g. `10.96.0.0/14`) from the RFC-1918 private networks (e.g. `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`) to pick a specific range to use. This field is deprecated due to the deprecation of 2VM TPU. The end of life date for 2VM TPU is 2025-04-25.",
+          "description": "The IP address range of the Cloud TPUs in this cluster. If unspecified, a range will be automatically chosen with the default size. This field is only applicable when `use_ip_aliases` is true. If unspecified, the range will use the default size. Set to /netmask (e.g. `/14`) to have a range chosen with a specific netmask. Set to a [CIDR](https://en.wikipedia.org/wiki/Classless_Inter-Domain_Routing) notation (e.g. `10.96.0.0/14`) from the RFC-1918 private networks (e.g. `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`) to pick a specific range to use. This field is deprecated due to the deprecation of 2VM TPU. The end of life date for 2VM TPU is 2025-04-25.",
           "type": "string"
         },
         "useIpAliases": {
@@ -5572,6 +5867,33 @@
         "enabled": {
           "description": "Whether to enable the Identity Service component",
           "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "InitScript": {
+      "description": "InitScript provide a simply bash script to be executed on the node.",
+      "id": "InitScript",
+      "properties": {
+        "args": {
+          "description": "Optional. The optional arguments line to be passed to the init script.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "gcpSecretManagerSecretUri": {
+          "description": "The resource name of the secret manager secret hosting the init script. Both global and regional secrets are supported with format below: Global secret: projects/{project}/secrets/{secret}/versions/{version} Regional secret: projects/{project}/locations/{location}/secrets/{secret}/versions/{version} Example: projects/1234567890/secrets/script_1/versions/1. Accept version number only, not support version alias. User can't configure both gcp_secret_manager_secret_uri and gcs_uri.",
+          "type": "string"
+        },
+        "gcsGeneration": {
+          "description": "The generation of the init script stored in Gloud Storage. This is the required field to identify the version of the init script. User can get the genetaion from `gcloud storage objects describe gs://BUCKET_NAME/OBJECT_NAME --format=\"value(generation)\"` or from the \"Version history\" tab of the object in the Cloud Console UI.",
+          "format": "int64",
+          "type": "string"
+        },
+        "gcsUri": {
+          "description": "The Cloud Storage URI for storing the init script. Format: gs://BUCKET_NAME/OBJECT_NAME The service account on the node pool must have read access to the object. User can't configure both gcs_uri and gcp_secret_manager_secret_uri.",
+          "type": "string"
         }
       },
       "type": "object"
@@ -5670,6 +5992,10 @@
       "description": "Parameters that can be configured on Linux nodes.",
       "id": "LinuxNodeConfig",
       "properties": {
+        "accurateTimeConfig": {
+          "$ref": "AccurateTimeConfig",
+          "description": "Optional. The accurate time configuration for the node pool."
+        },
         "cgroupMode": {
           "description": "cgroup_mode specifies the cgroup mode to be used on the node.",
           "enum": [
@@ -5684,6 +6010,10 @@
           ],
           "type": "string"
         },
+        "customNodeInit": {
+          "$ref": "CustomNodeInit",
+          "description": "Optional. Allow users to run arbitrary bash script or container on the node."
+        },
         "hugepages": {
           "$ref": "HugepagesConfig",
           "description": "Optional. Amounts for 2M and 1G hugepages"
@@ -5691,6 +6021,10 @@
         "nodeKernelModuleLoading": {
           "$ref": "NodeKernelModuleLoading",
           "description": "Optional. Configuration for kernel module loading on nodes. When enabled, the node pool will be provisioned with a Container-Optimized OS image that enforces kernel module signature verification."
+        },
+        "swapConfig": {
+          "$ref": "SwapConfig",
+          "description": "Optional. Enables and configures swap space on nodes. If omitted, swap is disabled."
         },
         "sysctls": {
           "additionalProperties": {
@@ -5896,6 +6230,10 @@
       "description": "Configuration for the Lustre CSI driver.",
       "id": "LustreCsiDriverConfig",
       "properties": {
+        "disableMultiNic": {
+          "description": "When set to true, this disables multi-NIC support for the Lustre CSI driver. By default, GKE enables multi-NIC support, which allows the Lustre CSI driver to automatically detect and configure all suitable network interfaces on a node to maximize I/O performance for demanding workloads.",
+          "type": "boolean"
+        },
         "enableLegacyLustrePort": {
           "deprecated": true,
           "description": "If set to true, the Lustre CSI driver will install Lustre kernel modules using port 6988. This serves as a workaround for a port conflict with the gke-metadata-server. This field is required ONLY under the following conditions: 1. The GKE node version is older than 1.33.2-gke.4655000. 2. You're connecting to a Lustre instance that has the 'gke-support-enabled' flag. Deprecated: This flag is no longer required as of GKE node version 1.33.2-gke.4655000, unless you are connecting to a Lustre instance that has the `gke-support-enabled` flag.",
@@ -5945,6 +6283,10 @@
       "description": "MaintenancePolicy defines the maintenance policy to be used for the cluster.",
       "id": "MaintenancePolicy",
       "properties": {
+        "disruptionBudget": {
+          "$ref": "DisruptionBudget",
+          "description": "Optional. The upgrade disruption budget for the cluster control plane."
+        },
         "resourceVersion": {
           "description": "A hash identifying the version of this policy, so that updates to fields of the policy won't accidentally undo intermediate changes (and so that users of the API unaware of some fields won't accidentally remove other fields). Make a `get()` request to the cluster to get the current resource version and include it with requests to set the policy.",
           "type": "string"
@@ -5971,9 +6313,24 @@
           "description": "Exceptions to maintenance window. Non-emergency maintenance should not occur in these windows.",
           "type": "object"
         },
+        "recurringMaintenanceWindow": {
+          "$ref": "RecurringMaintenanceWindow",
+          "description": "RecurringMaintenanceWindow specifies some number of recurring time periods for maintenance to occur. The time windows may be overlapping. If no maintenance windows are set, maintenance can occur at any time. Alternative to RecurringWindow, with renamed fields."
+        },
         "recurringWindow": {
           "$ref": "RecurringTimeWindow",
           "description": "RecurringWindow specifies some number of recurring time periods for maintenance to occur. The time windows may be overlapping. If no maintenance windows are set, maintenance can occur at any time."
+        }
+      },
+      "type": "object"
+    },
+    "ManagedMachineLearningDiagnosticsConfig": {
+      "description": "ManagedMachineLearningDiagnosticsConfig is the configuration for the GKE Managed Machine Learning Diagnostics pipeline.",
+      "id": "ManagedMachineLearningDiagnosticsConfig",
+      "properties": {
+        "enabled": {
+          "description": "Enable/Disable Managed Machine Learning Diagnostics.",
+          "type": "boolean"
         }
       },
       "type": "object"
@@ -6460,6 +6817,11 @@
           "$ref": "ConfidentialNodes",
           "description": "Confidential nodes config. All the nodes in the node pool will be Confidential VM once enabled."
         },
+        "consolidationDelay": {
+          "description": "Consolidation delay defines duration after which the Cluster Autoscaler can scale down underutilized nodes. If not set, nodes are scaled down by default behavior, i.e. according to the chosen autoscaling profile.",
+          "format": "google-duration",
+          "type": "string"
+        },
         "containerdConfig": {
           "$ref": "ContainerdConfig",
           "description": "Parameters for containerd customization."
@@ -6508,6 +6870,10 @@
           "$ref": "GcfsConfig",
           "description": "Google Container File System (image streaming) configs."
         },
+        "gpuDirectConfig": {
+          "$ref": "GPUDirectConfig",
+          "description": "The configuration for GPU Direct"
+        },
         "gvnic": {
           "$ref": "VirtualNIC",
           "description": "Enable or disable gvnic in the node pool."
@@ -6524,7 +6890,7 @@
           "additionalProperties": {
             "type": "string"
           },
-          "description": "The map of Kubernetes labels (key/value pairs) to be applied to each node. These will added in addition to any default label(s) that Kubernetes may apply to the node. In case of conflict in label keys, the applied set may differ depending on the Kubernetes version -- it's best to assume the behavior is undefined and conflicts should be avoided. For more information, including usage and the valid values, see: https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/",
+          "description": "The Kubernetes labels (key/value pairs) to apply to each node. The values in this field are added to the set of default labels Kubernetes applies to nodes. This field has the following restrictions: * Labels must use a valid Kubernetes syntax and character set, as defined in https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#syntax-and-character-set. * This field supports up to 1,024 total characters in a single request. Depending on the Kubernetes version, keys in this field might conflict with the keys of the default labels, which might change which of your labels are applied to the nodes. Assume that the behavior is unpredictable and avoid label key conflicts. For more information about the default labels, see: https://kubernetes.io/docs/reference/labels-annotations-taints/",
           "type": "object"
         },
         "linuxNodeConfig": {
@@ -6653,6 +7019,10 @@
           },
           "type": "array"
         },
+        "taintConfig": {
+          "$ref": "TaintConfig",
+          "description": "Optional. The taint configuration for the node pool."
+        },
         "taints": {
           "description": "List of kubernetes taints to be applied to each node. For more information, including usage and the valid values, see: https://kubernetes.io/docs/concepts/configuration/taint-and-toleration/",
           "items": {
@@ -6695,7 +7065,7 @@
       "type": "object"
     },
     "NodeDrainConfig": {
-      "description": "NodeDrainConfig contains the node drain related configurations for this nodepool.",
+      "description": "NodeDrainConfig contains the node drain related configurations for this node pool.",
       "id": "NodeDrainConfig",
       "properties": {
         "respectPdbDuringNodePoolDeletion": {
@@ -6758,6 +7128,10 @@
           "description": "Control the CPU management policy on the node. See https://kubernetes.io/docs/tasks/administer-cluster/cpu-management-policies/ The following values are allowed. * \"none\": the default, which represents the existing scheduling behavior. * \"static\": allows pods with certain resource characteristics to be granted increased CPU affinity and exclusivity on the node. The default value is 'none' if unspecified.",
           "type": "string"
         },
+        "crashLoopBackOff": {
+          "$ref": "CrashLoopBackOffConfig",
+          "description": "Optional. Contains configuration options to modify node-level parameters for container restart behavior."
+        },
         "evictionMaxPodGracePeriodSeconds": {
           "description": "Optional. eviction_max_pod_grace_period_seconds is the maximum allowed grace period (in seconds) to use when terminating pods in response to a soft eviction threshold being met. This value effectively caps the Pod's terminationGracePeriodSeconds value during soft evictions. Default: 0. Range: [0, 300].",
           "format": "int32",
@@ -6811,6 +7185,16 @@
           "format": "int64",
           "type": "string"
         },
+        "shutdownGracePeriodCriticalPodsSeconds": {
+          "description": "Optional. shutdown_grace_period_critical_pods_seconds is the maximum allowed grace period (in seconds) used to terminate critical pods during a node shutdown. This value should be \u003c= shutdown_grace_period_seconds, and is only valid if shutdown_grace_period_seconds is set. https://kubernetes.io/docs/concepts/cluster-administration/node-shutdown/ Range: [0, 120].",
+          "format": "int32",
+          "type": "integer"
+        },
+        "shutdownGracePeriodSeconds": {
+          "description": "Optional. shutdown_grace_period_seconds is the maximum allowed grace period (in seconds) the total duration that the node should delay the shutdown during a graceful shutdown. This is the total grace period for pod termination for both regular and critical pods. https://kubernetes.io/docs/concepts/cluster-administration/node-shutdown/ If set to 0, node will not enable the graceful node shutdown functionality. This field is only valid for Spot VMs. Allowed values: 0, 30, 120.",
+          "format": "int32",
+          "type": "integer"
+        },
         "singleProcessOomKill": {
           "description": "Optional. Defines whether to enable single process OOM killer. If true, will prevent the memory.oom.group flag from being set for container cgroups in cgroups v2. This causes processes in the container to be OOM killed individually instead of as a group.",
           "type": "boolean"
@@ -6859,6 +7243,10 @@
       "description": "Parameters for node pool-level network config.",
       "id": "NodeNetworkConfig",
       "properties": {
+        "acceleratorNetworkProfile": {
+          "description": "Immutable. The accelerator network profile for the node pool. For now the only valid value is \"auto\". If specified, the network configuration of the nodes in this node pool will be managed by this profile for the supported machine types, zone, etc.",
+          "type": "string"
+        },
         "additionalNodeNetworkConfigs": {
           "description": "We specify the additional node networks for this node pool using this list. Each node network corresponds to an additional interface",
           "items": {
@@ -6892,7 +7280,7 @@
         },
         "podCidrOverprovisionConfig": {
           "$ref": "PodCIDROverprovisionConfig",
-          "description": "[PRIVATE FIELD] Pod CIDR size overprovisioning config for the nodepool. Pod CIDR size per node depends on max_pods_per_node. By default, the value of max_pods_per_node is rounded off to next power of 2 and we then double that to get the size of pod CIDR block per node. Example: max_pods_per_node of 30 would result in 64 IPs (/26). This config can disable the doubling of IPs (we still round off to next power of 2) Example: max_pods_per_node of 30 will result in 32 IPs (/27) when overprovisioning is disabled."
+          "description": "[PRIVATE FIELD] Pod CIDR size overprovisioning config for the node pool. Pod CIDR size per node depends on max_pods_per_node. By default, the value of max_pods_per_node is rounded off to next power of 2 and we then double that to get the size of pod CIDR block per node. Example: max_pods_per_node of 30 would result in 64 IPs (/26). This config can disable the doubling of IPs (we still round off to next power of 2) Example: max_pods_per_node of 30 will result in 32 IPs (/27) when overprovisioning is disabled."
         },
         "podIpv4CidrBlock": {
           "description": "The IP address range for pod IPs in this node pool. Only applicable if `create_pod_range` is true. Set to blank to have a range chosen with the default size. Set to /netmask (e.g. `/14`) to have a range chosen with a specific netmask. Set to a [CIDR](https://en.wikipedia.org/wiki/Classless_Inter-Domain_Routing) notation (e.g. `10.96.0.0/14`) to pick a specific range to use. Only applicable if `ip_allocation_policy.use_ip_aliases` is true. This field cannot be changed after the node pool has been created.",
@@ -6909,7 +7297,7 @@
           "type": "string"
         },
         "subnetwork": {
-          "description": "The subnetwork path for the node pool. Format: projects/{project}/regions/{region}/subnetworks/{subnetwork} If the cluster is associated with multiple subnetworks, the subnetwork for the node pool is picked based on the IP utilization during node pool creation and is immutable.",
+          "description": "Optional. The subnetwork name/path for the node pool. Format: projects/{project}/regions/{region}/subnetworks/{subnetwork} If the cluster is associated with multiple subnetworks, the subnetwork can be either: - A user supplied subnetwork name during node pool creation (e.g., `my-subnet`). The name must be between 1 and 63 characters long, start with a letter, contain only letters, numbers, and hyphens, and end with a letter or a number. - A full subnetwork path during node pool creation, such as `projects/gke-project/regions/us-central1/subnetworks/my-subnet` - A subnetwork path picked based on the IP utilization during node pool creation and is immutable.",
           "type": "string"
         }
       },
@@ -7087,7 +7475,7 @@
           "type": "boolean"
         },
         "locationPolicy": {
-          "description": "Location policy used when scaling up a nodepool.",
+          "description": "Location policy used when scaling up a node pool.",
           "enum": [
             "LOCATION_POLICY_UNSPECIFIED",
             "BALANCED",
@@ -7135,7 +7523,7 @@
       "type": "object"
     },
     "NodePoolLoggingConfig": {
-      "description": "NodePoolLoggingConfig specifies logging configuration for nodepools.",
+      "description": "NodePoolLoggingConfig specifies logging configuration for node pools.",
       "id": "NodePoolLoggingConfig",
       "properties": {
         "variantConfig": {
@@ -7146,7 +7534,7 @@
       "type": "object"
     },
     "NodePoolUpgradeInfo": {
-      "description": "NodePoolUpgradeInfo contains the upgrade information of a nodepool.",
+      "description": "NodePoolUpgradeInfo contains the upgrade information of a node pool.",
       "id": "NodePoolUpgradeInfo",
       "properties": {
         "autoUpgradeStatus": {
@@ -7169,11 +7557,11 @@
           "type": "array"
         },
         "endOfExtendedSupportTimestamp": {
-          "description": "The nodepool's current minor version's end of extended support timestamp.",
+          "description": "The node pool's current minor version's end of extended support timestamp.",
           "type": "string"
         },
         "endOfStandardSupportTimestamp": {
-          "description": "The nodepool's current minor version's end of standard support timestamp.",
+          "description": "The node pool's current minor version's end of standard support timestamp.",
           "type": "string"
         },
         "minorTargetVersion": {
@@ -7211,6 +7599,17 @@
             "$ref": "UpgradeDetails"
           },
           "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "NodeReadinessConfig": {
+      "description": "Configuration for the GKE Node Readiness Controller.",
+      "id": "NodeReadinessConfig",
+      "properties": {
+        "enabled": {
+          "description": "Optional. Whether the GKE Node Readiness Controller is enabled for this cluster.",
+          "type": "boolean"
         }
       },
       "type": "object"
@@ -7603,6 +8002,17 @@
       },
       "type": "object"
     },
+    "PodSnapshotConfig": {
+      "description": "PodSnapshotConfig is the configuration for GKE Pod Snapshots feature.",
+      "id": "PodSnapshotConfig",
+      "properties": {
+        "enabled": {
+          "description": "Whether or not the Pod Snapshots feature is enabled.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
     "PrivateClusterConfig": {
       "description": "Configuration options for private clusters.",
       "id": "PrivateClusterConfig",
@@ -7718,7 +8128,7 @@
       "id": "QueuedProvisioning",
       "properties": {
         "enabled": {
-          "description": "Denotes that this nodepool is QRM specific, meaning nodes can be only obtained through queuing via the Cluster Autoscaler ProvisioningRequest API.",
+          "description": "Denotes that this node pool is QRM specific, meaning nodes can be only obtained through queuing via the Cluster Autoscaler ProvisioningRequest API.",
           "type": "boolean"
         }
       },
@@ -7798,6 +8208,30 @@
       },
       "type": "object"
     },
+    "RecurringMaintenanceWindow": {
+      "description": "Represents an arbitrary window of time that recurs. Will replace RecurringTimeWindow.",
+      "id": "RecurringMaintenanceWindow",
+      "properties": {
+        "delayUntil": {
+          "$ref": "Date",
+          "description": "Optional. Specifies the date before which will not be scheduled. Depending on the recurrence, this may be the date the first window appears. Days are measured in the UTC timezone. This setting must be used when INTERVAL\u003e1 or FREQ=WEEKLY/MONTHLY and no BYDAY specified."
+        },
+        "recurrence": {
+          "description": "Required. An RRULE (https://tools.ietf.org/html/rfc5545#section-3.8.5.3) for how this window recurs. For example, to have something repeat every weekday, you'd use: `FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR` To repeat some window daily (equivalent to the DailyMaintenanceWindow): `FREQ=DAILY` For the first weekend of every month: `FREQ=MONTHLY;BYSETPOS=1;BYDAY=SA,SU` The FREQ values of HOURLY, MINUTELY, and SECONDLY are not supported.",
+          "type": "string"
+        },
+        "windowDuration": {
+          "description": "Required. Duration of the window.",
+          "format": "google-duration",
+          "type": "string"
+        },
+        "windowStartTime": {
+          "$ref": "TimeOfDay",
+          "description": "Required. Start time of the window on days that it is scheduled, assuming UTC timezone."
+        }
+      },
+      "type": "object"
+    },
     "RecurringTimeWindow": {
       "description": "Represents an arbitrary window of time that recurs.",
       "id": "RecurringTimeWindow",
@@ -7843,7 +8277,7 @@
           "type": "array"
         },
         "server": {
-          "description": "Defines the host name of the registry server, which will be used to create configuration file as /etc/containerd/hosts.d//hosts.toml. It supports fully qualified domain names (FQDN) and IP addresses: Specifying port is supported. Wildcards are NOT supported. Examples: - my.customdomain.com - 10.0.1.2:5000",
+          "description": "Defines the host name of the registry server, which will be used to create configuration file as /etc/containerd/hosts.d//hosts.toml. It supports fully qualified domain names (FQDN) and IP addresses: Specifying port is supported, while scheme and path are NOT supported. Wildcards are NOT supported. Examples: - `my.customdomain.com` - `10.0.1.2:5000`",
           "type": "string"
         }
       },
@@ -8086,6 +8520,17 @@
       },
       "type": "object"
     },
+    "ScheduleUpgradeConfig": {
+      "description": "Configuration for scheduled upgrades on the cluster.",
+      "id": "ScheduleUpgradeConfig",
+      "properties": {
+        "enabled": {
+          "description": "Optional. Whether or not scheduled upgrades are enabled.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
     "SecondaryBootDisk": {
       "description": "SecondaryBootDisk represents a persistent disk attached to a node with special configurations based on its mode.",
       "id": "SecondaryBootDisk",
@@ -8125,6 +8570,21 @@
         },
         "rotationConfig": {
           "$ref": "RotationConfig",
+          "description": "Rotation config for secret manager."
+        }
+      },
+      "type": "object"
+    },
+    "SecretSyncConfig": {
+      "description": "Configuration for sync Secret Manager secrets as k8s secrets.",
+      "id": "SecretSyncConfig",
+      "properties": {
+        "enabled": {
+          "description": "Enable/Disable Secret Sync Config.",
+          "type": "boolean"
+        },
+        "rotationConfig": {
+          "$ref": "SyncRotationConfig",
           "description": "Rotation config for secret manager."
         }
       },
@@ -8205,11 +8665,17 @@
             "BASIC",
             "ENTERPRISE"
           ],
+          "enumDeprecated": [
+            false,
+            false,
+            false,
+            true
+          ],
           "enumDescriptions": [
             "Default value not specified.",
             "Disables Security Posture features on the cluster.",
             "Applies Security Posture features on the cluster.",
-            "Applies the Security Posture off cluster Enterprise level features."
+            "Deprecated: Security Posture Enterprise features are no longer supported. For more details, see https://cloud.google.com/kubernetes-engine/docs/deprecations/posture-management-deprecation. Applies the Security Posture off cluster Enterprise level features."
           ],
           "type": "string"
         },
@@ -8221,10 +8687,16 @@
             "VULNERABILITY_BASIC",
             "VULNERABILITY_ENTERPRISE"
           ],
+          "enumDeprecated": [
+            false,
+            false,
+            true,
+            false
+          ],
           "enumDescriptions": [
             "Default value not specified.",
             "Disables vulnerability scanning on the cluster.",
-            "Applies basic vulnerability scanning on the cluster.",
+            "Deprecated: Basic vulnerability scanning is no longer supported. For more details, see https://cloud.google.com/kubernetes-engine/docs/deprecations/posture-management-deprecation. Applies basic vulnerability scanning on the cluster.",
             "Applies the Security Posture's vulnerability on cluster Enterprise level features."
           ],
           "type": "string"
@@ -8711,6 +9183,28 @@
       },
       "type": "object"
     },
+    "SliceControllerConfig": {
+      "description": "Configuration for the Slice Controller.",
+      "id": "SliceControllerConfig",
+      "properties": {
+        "enabled": {
+          "description": "Optional. Indicates whether Slice Controller is enabled in the cluster.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "SlurmOperatorConfig": {
+      "description": "Configuration for the Slurm Operator.",
+      "id": "SlurmOperatorConfig",
+      "properties": {
+        "enabled": {
+          "description": "When enabled, it runs a Slurm Operator that manages the set of compute pods for Slurm Cluster.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
     "SoleTenantConfig": {
       "description": "SoleTenantConfig contains the NodeAffinities to specify what shared sole tenant node groups should back the node pool.",
       "id": "SoleTenantConfig",
@@ -8900,6 +9394,97 @@
       },
       "type": "object"
     },
+    "SwapConfig": {
+      "description": "Configuration for swap memory on a node pool.",
+      "id": "SwapConfig",
+      "properties": {
+        "bootDiskProfile": {
+          "$ref": "BootDiskProfile",
+          "description": "Swap on the node's boot disk."
+        },
+        "dedicatedLocalSsdProfile": {
+          "$ref": "DedicatedLocalSsdProfile",
+          "description": "Provisions a new, separate local NVMe SSD exclusively for swap."
+        },
+        "enabled": {
+          "description": "Optional. Enables or disables swap for the node pool.",
+          "type": "boolean"
+        },
+        "encryptionConfig": {
+          "$ref": "EncryptionConfig",
+          "description": "Optional. If omitted, swap space is encrypted by default."
+        },
+        "ephemeralLocalSsdProfile": {
+          "$ref": "EphemeralLocalSsdProfile",
+          "description": "Swap on the local SSD shared with pod ephemeral storage."
+        }
+      },
+      "type": "object"
+    },
+    "SyncRotationConfig": {
+      "description": "SyncRotationConfig is config for secret manager auto rotation.",
+      "id": "SyncRotationConfig",
+      "properties": {
+        "enabled": {
+          "description": "Whether the rotation is enabled.",
+          "type": "boolean"
+        },
+        "rotationInterval": {
+          "description": "The interval between two consecutive rotations. Default rotation interval is 2 minutes.",
+          "format": "google-duration",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "TaintConfig": {
+      "description": "TaintConfig contains the configuration for the taints of the node pool.",
+      "id": "TaintConfig",
+      "properties": {
+        "architectureTaintBehavior": {
+          "description": "Optional. Controls architecture tainting behavior.",
+          "enum": [
+            "ARCHITECTURE_TAINT_BEHAVIOR_UNSPECIFIED",
+            "NONE",
+            "ARM"
+          ],
+          "enumDescriptions": [
+            "Specifies that the behavior is unspecified, defaults to ARM.",
+            "Disables default architecture taints on the node pool.",
+            "Taints all the nodes in the node pool with the default ARM taint."
+          ],
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "TimeOfDay": {
+      "description": "Represents a time of day. The date and time zone are either not significant or are specified elsewhere. An API may choose to allow leap seconds. Related types are google.type.Date and `google.protobuf.Timestamp`.",
+      "id": "TimeOfDay",
+      "properties": {
+        "hours": {
+          "description": "Hours of a day in 24 hour format. Must be greater than or equal to 0 and typically must be less than or equal to 23. An API may choose to allow the value \"24:00:00\" for scenarios like business closing time.",
+          "format": "int32",
+          "type": "integer"
+        },
+        "minutes": {
+          "description": "Minutes of an hour. Must be greater than or equal to 0 and less than or equal to 59.",
+          "format": "int32",
+          "type": "integer"
+        },
+        "nanos": {
+          "description": "Fractions of seconds, in nanoseconds. Must be greater than or equal to 0 and less than or equal to 999,999,999.",
+          "format": "int32",
+          "type": "integer"
+        },
+        "seconds": {
+          "description": "Seconds of a minute. Must be greater than or equal to 0 and typically must be less than or equal to 59. An API may allow the value 60 if it allows leap-seconds.",
+          "format": "int32",
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
     "TimeWindow": {
       "description": "Represents an arbitrary window of time.",
       "id": "TimeWindow",
@@ -9031,6 +9616,11 @@
           "$ref": "ConfidentialNodes",
           "description": "Confidential nodes config. All the nodes in the node pool will be Confidential VM once enabled."
         },
+        "consolidationDelay": {
+          "description": "Consolidation delay defines duration after which the Cluster Autoscaler can scale down underutilized nodes. If not set, nodes are scaled down by default behavior, i.e. according to the chosen autoscaling profile.",
+          "format": "google-duration",
+          "type": "string"
+        },
         "containerdConfig": {
           "$ref": "ContainerdConfig",
           "description": "The desired containerd config for nodes in the node pool. Initiates an upgrade operation that recreates the nodes with the new config."
@@ -9148,6 +9738,10 @@
         "tags": {
           "$ref": "NetworkTags",
           "description": "The desired network tags to be applied to all nodes in the node pool. If this field is not present, the tags will not be changed. Otherwise, the existing network tags will be *replaced* with the provided tags."
+        },
+        "taintConfig": {
+          "$ref": "TaintConfig",
+          "description": "The taint configuration for the node pool."
         },
         "taints": {
           "$ref": "NodeTaints",
@@ -9386,6 +9980,7 @@
           "description": "Output only. The state of the upgrade.",
           "enum": [
             "STATE_UNSPECIFIED",
+            "SCHEDULED",
             "STARTED",
             "SUCCEEDED",
             "FAILED",
@@ -9393,6 +9988,7 @@
           ],
           "enumDescriptions": [
             "STATE_UNSPECIFIED indicates the state is unspecified.",
+            "SCHEDULED indicates the upgrade was scheduled.",
             "STARTED indicates the upgrade has started.",
             "SUCCEEDED indicates the upgrade has completed successfully.",
             "FAILED indicates the upgrade has failed.",
@@ -9431,12 +10027,14 @@
           "enum": [
             "NODE_POOL_UPDATE_STRATEGY_UNSPECIFIED",
             "BLUE_GREEN",
-            "SURGE"
+            "SURGE",
+            "SHORT_LIVED"
           ],
           "enumDescriptions": [
             "Default value if unset. GKE internally defaults the update strategy to SURGE for unspecified strategies.",
             "blue-green upgrade.",
-            "SURGE is the traditional way of upgrade a node pool. max_surge and max_unavailable determines the level of upgrade parallelism."
+            "SURGE is the traditional way of upgrade a node pool. max_surge and max_unavailable determines the level of upgrade parallelism.",
+            "SHORT_LIVED is the dedicated upgrade strategy for QueuedProvisioning and flex start node pools scaled up only by enqueueing to the Dynamic Workload Scheduler (DWS)."
           ],
           "type": "string"
         }
