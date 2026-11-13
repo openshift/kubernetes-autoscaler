@@ -40,6 +40,7 @@ import (
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/builder"
 	coreoptions "sigs.k8s.io/cluster-autoscaler/pkg/core/options"
+	"sigs.k8s.io/cluster-autoscaler/pkg/processors/nodegroupset"
 	caserrors "sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/gpu"
 )
@@ -196,6 +197,8 @@ func (p *provider) GetNodeGpuConfig(ctx context.Context, node *corev1.Node) *clo
 
 // BuildOpenShift builds CloudProvider implementation for machine api.
 func BuildOpenShift(opts *coreoptions.AutoscalerOptions, do cloudprovider.NodeGroupDiscoveryOptions, rl *cloudprovider.ResourceLimiter) cloudprovider.CloudProvider {
+	configureNodeGroupSetProcessor(opts)
+
 	var clusterapiProvider cloudprovider.CloudProvider = nil
 	// allow to override clusterapi provider creation for environments that don't have clusterapi.
 	if capiOverride := os.Getenv("OPENSHIFT_CLUSTERAPI_DISABLE"); len(capiOverride) == 0 {
@@ -276,4 +279,14 @@ func BuildOpenShift(opts *coreoptions.AutoscalerOptions, do cloudprovider.NodeGr
 		controller,
 		clusterapiProvider,
 	)
+}
+
+func configureNodeGroupSetProcessor(opts *coreoptions.AutoscalerOptions) {
+	// The generic default does not propagate configured ignored labels or ratios.
+	if opts.Processors != nil {
+		opts.Processors.NodeGroupSetProcessor = nodegroupset.NewDefaultNodeGroupSetProcessor(
+			opts.AutoscalingOptions.BalancingExtraIgnoredLabels,
+			opts.AutoscalingOptions.NodeGroupSetRatios,
+		)
+	}
 }

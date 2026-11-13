@@ -36,6 +36,7 @@ import (
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/builder"
 	coreoptions "sigs.k8s.io/cluster-autoscaler/pkg/core/options"
+	"sigs.k8s.io/cluster-autoscaler/pkg/processors/nodegroupset"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/scaledowncandidates"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/gpu"
@@ -168,6 +169,8 @@ func newProvider(
 
 // BuildClusterAPI builds CloudProvider implementation for machine api.
 func BuildClusterAPI(opts *coreoptions.AutoscalerOptions, do cloudprovider.NodeGroupDiscoveryOptions, rl *cloudprovider.ResourceLimiter) cloudprovider.CloudProvider {
+	configureNodeGroupSetProcessor(opts)
+
 	managementKubeconfig := opts.CloudConfig
 	if managementKubeconfig == "" && !opts.ClusterAPICloudConfigAuthoritative {
 		managementKubeconfig = opts.KubeClientOpts.KubeConfigPath
@@ -234,4 +237,14 @@ func BuildClusterAPI(opts *coreoptions.AutoscalerOptions, do cloudprovider.NodeG
 	}
 
 	return newProvider(ProviderName, rl, controller)
+}
+
+func configureNodeGroupSetProcessor(opts *coreoptions.AutoscalerOptions) {
+	// The generic default does not propagate configured ignored labels or ratios.
+	if opts.Processors != nil {
+		opts.Processors.NodeGroupSetProcessor = nodegroupset.NewDefaultNodeGroupSetProcessor(
+			opts.AutoscalingOptions.BalancingExtraIgnoredLabels,
+			opts.AutoscalingOptions.NodeGroupSetRatios,
+		)
+	}
 }

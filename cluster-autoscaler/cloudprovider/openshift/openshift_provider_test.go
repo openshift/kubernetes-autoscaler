@@ -22,10 +22,66 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
+	"sigs.k8s.io/cluster-autoscaler/pkg/config"
+	coreoptions "sigs.k8s.io/cluster-autoscaler/pkg/core/options"
+	"sigs.k8s.io/cluster-autoscaler/pkg/processors"
+	"sigs.k8s.io/cluster-autoscaler/pkg/processors/nodegroupset"
+	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
+	testutils "sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 )
+
+func TestConfigureNodeGroupSetProcessor(t *testing.T) {
+	const machineSetLabel = "machine.openshift.io/cluster-api-machineset"
+	a := testutils.BuildTestNode("worker-a", 4000, 10<<30)
+	a.Labels[machineSetLabel] = "workers-a"
+	b := a.DeepCopy()
+	b.Name = "worker-b"
+	b.Labels[machineSetLabel] = "workers-b"
+	// Resource differences ensure each configured tolerance is exercised.
+	b.Status.Capacity[corev1.ResourceMemory] = resource.MustParse("11Gi")
+	b.Status.Allocatable[corev1.ResourceCPU] = resource.MustParse("3")
+	pod := framework.NewPodInfo(testutils.BuildTestPod("workload", 1000, 0), nil)
+	aInfo, bInfo := framework.NewNodeInfo(a, nil), framework.NewNodeInfo(b, nil, pod)
+
+	for _, tc := range []struct {
+		name                      string
+		ignoreLabel               bool
+		memory, allocatable, free float64
+		wantSimilar               bool
+	}{
+		{"configured options", true, 0.5, 0.5, 0.5, true},
+		{"ignored label missing", false, 0.5, 0.5, 0.5, false},
+		{"strict memory tolerance", true, 0.01, 0.5, 0.5, false},
+		{"strict allocatable tolerance", true, 0.5, 0.01, 0.5, false},
+		{"strict free tolerance", true, 0.5, 0.5, 0.01, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			options := config.AutoscalingOptions{
+				NodeGroupSetRatios: config.NodeGroupDifferenceRatios{
+					MaxCapacityMemoryDifferenceRatio: tc.memory,
+					MaxAllocatableDifferenceRatio:    tc.allocatable,
+					MaxFreeDifferenceRatio:           tc.free,
+				},
+			}
+			if tc.ignoreLabel {
+				options.BalancingExtraIgnoredLabels = []string{machineSetLabel}
+			}
+			opts := &coreoptions.AutoscalerOptions{
+				AutoscalingOptions: options,
+				Processors:         processors.DefaultProcessors(options),
+			}
+			configureNodeGroupSetProcessor(opts)
+			comparator := opts.Processors.NodeGroupSetProcessor.(*nodegroupset.BalancingNodeGroupSetProcessor).Comparator
+			if got := comparator(aInfo, bInfo); got != tc.wantSimilar {
+				t.Errorf("node similarity = %v, want %v", got, tc.wantSimilar)
+			}
+		})
+	}
+}
 
 func TestProviderConstructorProperties(t *testing.T) {
 	resourceLimits := cloudprovider.ResourceLimiter{}
