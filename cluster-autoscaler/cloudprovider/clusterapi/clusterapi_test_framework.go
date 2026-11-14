@@ -556,6 +556,7 @@ type testMachineController struct {
 	stopCh           chan struct{}
 	testingTb        testing.TB
 	dynamicClientset *fakedynamic.FakeDynamicClient
+	discoveryClient  *fakediscovery.FakeDiscovery
 }
 
 // NewTestMachineController returns a new machineController wrapped by a test harness and associated with a testing interface.
@@ -766,6 +767,7 @@ func NewTestMachineController(t testing.TB) *testMachineController {
 		stopCh:            stopCh,
 		testingTb:         t,
 		dynamicClientset:  dynamicClientset,
+		discoveryClient:   discoveryClient,
 	}
 }
 
