@@ -128,6 +128,7 @@ func mustCreateTestController(t testing.TB, testConfigs ...*testConfig) (*machin
 					APIResources: []metav1.APIResource{
 						{
 							Name: "machinetemplates",
+							Kind: machineTemplateKind,
 						},
 					},
 				},
