@@ -29,6 +29,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	fakediscovery "k8s.io/client-go/discovery/fake"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/utils/ptr"
 )
@@ -637,5 +638,123 @@ func TestCanScaleFromZero(t *testing.T) {
 				t.Errorf("expected %v, got %v", tc.canScale, canScale)
 			}
 		})
+	}
+}
+
+// The autoscaler main loop rebuilds scalable resource wrappers on every
+// iteration, so kind version discovery must be cached at the controller
+// level. Uncached, each rebuild issues live ServerGroups() and
+// ServerResourcesForGroupVersion() calls per node group, which exceeds the
+// discovery client's rate limits on large clusters and stalls the loop.
+func TestReadInfrastructureReferenceResourceCachesDiscovery(t *testing.T) {
+	mdTestConfig := createMachineDeploymentTestConfig(RandomString(6), RandomString(6), RandomString(6), 1, nil,
+		map[string]string{cpuStatusKey: "1", memoryStatusKey: "4G"})
+	controller, stop := mustCreateTestController(t, mdTestConfig)
+	defer stop()
+	discoveryClient := controller.managementDiscoveryClient.(*fakediscovery.FakeDiscovery)
+
+	discoveryCallsBefore := len(discoveryClient.Actions())
+
+	// Simulate two loop iterations: two wrappers over the same MachineDeployment.
+	for i := 0; i < 2; i++ {
+		sr, err := newUnstructuredScalableResource(controller, mdTestConfig.machineDeployment)
+		if err != nil {
+			t.Fatal(err)
+		}
+		infra, err := sr.readInfrastructureReferenceResource()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if infra == nil {
+			t.Fatal("expected infrastructure reference resource to be resolved")
+		}
+	}
+
+	// One resolution round is 1 ServerGroups + 1 ServerResourcesForGroupVersion
+	// action. The second wrapper must hit the controller cache.
+	discoveryCalls := len(discoveryClient.Actions()) - discoveryCallsBefore
+	t.Logf("discovery actions issued: %d", discoveryCalls)
+	if discoveryCalls != 2 {
+		t.Errorf("expected exactly one discovery round (2 actions) across wrapper rebuilds, got %d actions", discoveryCalls)
+	}
+
+	// Once the TTL expires, the next resolution must re-query discovery and
+	// refresh the cache entry.
+	controller.kindVersionCache.Range(func(key, value any) bool {
+		entry := value.(kindVersionCacheEntry)
+		entry.cachedAt = time.Now().Add(-2 * kindVersionCacheTTL)
+		controller.kindVersionCache.Store(key, entry)
+		return true
+	})
+
+	sr, err := newUnstructuredScalableResource(controller, mdTestConfig.machineDeployment)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sr.readInfrastructureReferenceResource(); err != nil {
+		t.Fatal(err)
+	}
+
+	discoveryCalls = len(discoveryClient.Actions()) - discoveryCallsBefore
+	if discoveryCalls != 4 {
+		t.Errorf("expected rediscovery after TTL expiration (4 actions total), got %d actions", discoveryCalls)
+	}
+
+	// Confirm the refreshed cache entry serves subsequent lookups within TTL.
+	sr, err = newUnstructuredScalableResource(controller, mdTestConfig.machineDeployment)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sr.readInfrastructureReferenceResource(); err != nil {
+		t.Fatal(err)
+	}
+
+	discoveryCalls = len(discoveryClient.Actions()) - discoveryCallsBefore
+	if discoveryCalls != 4 {
+		t.Errorf("expected refreshed cache entry to be reused within TTL (4 actions total), got %d actions", discoveryCalls)
+	}
+}
+
+// TestReadInfrastructureReferenceResourceScalesWithoutExtraDiscovery reproduces
+// the incident shape: many node groups whose scalable resource wrappers are
+// rebuilt on every main loop iteration. Without caching, each wrapper rebuild
+// issues a full discovery round, which exhausts the discovery client's rate
+// limits on large clusters.
+func TestReadInfrastructureReferenceResourceScalesWithoutExtraDiscovery(t *testing.T) {
+	const nodeGroups = 50
+	const loopIterations = 2
+
+	mdTestConfigs := createMachineDeploymentTestConfigs(RandomString(6), RandomString(6), RandomString(6), nodeGroups, 0, nil,
+		map[string]string{cpuStatusKey: "1", memoryStatusKey: "4G"})
+	// All deployments reference the same template, so register it only once.
+	for _, config := range mdTestConfigs[1:] {
+		config.machineTemplate = nil
+	}
+	controller, stop := mustCreateTestController(t, mdTestConfigs...)
+	defer stop()
+	discoveryClient := controller.managementDiscoveryClient.(*fakediscovery.FakeDiscovery)
+
+	discoveryCallsBefore := len(discoveryClient.Actions())
+
+	for iter := 0; iter < loopIterations; iter++ {
+		for _, config := range mdTestConfigs {
+			sr, err := newUnstructuredScalableResource(controller, config.machineDeployment)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := sr.readInfrastructureReferenceResource(); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	// All node groups share one (apiGroup, kind) pair, so the whole run must
+	// cost a single discovery round: 1 ServerGroups + 1
+	// ServerResourcesForGroupVersion action.
+	discoveryCalls := len(discoveryClient.Actions()) - discoveryCallsBefore
+	t.Logf("discovery actions issued for %d node groups across %d loop iterations: %d", nodeGroups, loopIterations, discoveryCalls)
+	if discoveryCalls != 2 {
+		t.Errorf("expected exactly one discovery round (2 actions) for %d node groups across %d loop iterations, got %d actions",
+			nodeGroups, loopIterations, discoveryCalls)
 	}
 }
