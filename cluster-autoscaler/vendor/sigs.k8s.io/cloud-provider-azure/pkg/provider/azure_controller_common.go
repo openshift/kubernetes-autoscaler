@@ -25,10 +25,12 @@ import (
 	"strings"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
-	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/compute/armcompute/v6"
-	"k8s.io/klog/v2"
+	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/compute/armcompute/v7"
 
 	"sigs.k8s.io/cloud-provider-azure/pkg/azclient"
+	azclientutils "sigs.k8s.io/cloud-provider-azure/pkg/azclient/utils"
+	"sigs.k8s.io/cloud-provider-azure/pkg/azclient/virtualmachineclient"
+	"sigs.k8s.io/cloud-provider-azure/pkg/log"
 )
 
 const (
@@ -54,7 +56,23 @@ type ExtendedLocation struct {
 	Type string `json:"type,omitempty"`
 }
 
+func updateVirtualMachine(
+	ctx context.Context,
+	client virtualmachineclient.Interface,
+	resourceGroupName,
+	vmName string,
+) (*armcompute.VirtualMachine, error) {
+	resp, err := azclientutils.NewPollerWrapper(
+		client.BeginUpdate(ctx, resourceGroupName, vmName, armcompute.VirtualMachineUpdate{}, nil),
+	).WaitforPollerResp(ctx)
+	if err != nil || resp == nil {
+		return nil, err
+	}
+	return &resp.VirtualMachine, nil
+}
+
 func FilterNonExistingDisks(ctx context.Context, clientFactory azclient.ClientFactory, unfilteredDisks []*armcompute.DataDisk) []*armcompute.DataDisk {
+	logger := log.FromContextOrBackground(ctx).WithName("FilterNonExistingDisks")
 	filteredDisks := []*armcompute.DataDisk{}
 	for _, disk := range unfilteredDisks {
 		filter := false
@@ -62,12 +80,12 @@ func FilterNonExistingDisks(ctx context.Context, clientFactory azclient.ClientFa
 			diSKURI := *disk.ManagedDisk.ID
 			exist, err := checkDiskExists(ctx, clientFactory, diSKURI)
 			if err != nil {
-				klog.Errorf("checkDiskExists(%s) failed with error: %v", diSKURI, err)
+				logger.Error(err, "checkDiskExists failed", "diskURI", diSKURI)
 			} else {
 				// only filter disk when checkDiskExists returns <false, nil>
 				filter = !exist
 				if filter {
-					klog.Errorf("disk(%s) does not exist, removed from data disk list", diSKURI)
+					logger.Error(nil, "disk does not exist, removed from data disk list", "diskURI", diSKURI)
 				}
 			}
 		}

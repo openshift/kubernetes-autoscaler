@@ -22,20 +22,30 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/netip"
 	"regexp"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
-	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/network/armnetwork/v6"
+	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/network/armnetwork/v9"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/klog/v2"
 	"k8s.io/utils/ptr"
 
 	azcache "sigs.k8s.io/cloud-provider-azure/pkg/cache"
 	"sigs.k8s.io/cloud-provider-azure/pkg/consts"
+	"sigs.k8s.io/cloud-provider-azure/pkg/log"
+	providererrors "sigs.k8s.io/cloud-provider-azure/pkg/provider/errors"
 	"sigs.k8s.io/cloud-provider-azure/pkg/util/deepcopy"
+)
+
+var (
+	azureReservedIPPrefixes = []netip.Prefix{
+		netip.MustParsePrefix("100.64.0.0/10"),
+		netip.MustParsePrefix("168.63.129.16/32"),
+	}
 )
 
 // CreateOrUpdatePIP invokes az.NetworkClientFactory.GetPublicIPAddressClient().CreateOrUpdate with exponential backoff retry
@@ -43,8 +53,10 @@ func (az *Cloud) CreateOrUpdatePIP(service *v1.Service, pipResourceGroup string,
 	ctx, cancel := getContextWithCancel()
 	defer cancel()
 
+	logger := log.FromContextOrBackground(ctx).WithName("CreateOrUpdatePIP")
+
 	_, rerr := az.NetworkClientFactory.GetPublicIPAddressClient().CreateOrUpdate(ctx, pipResourceGroup, ptr.Deref(pip.Name, ""), *pip)
-	klog.V(10).Infof("NetworkClientFactory.GetPublicIPAddressClient().CreateOrUpdate(%s, %s): end", pipResourceGroup, ptr.Deref(pip.Name, ""))
+	logger.V(10).Info("NetworkClientFactory.GetPublicIPAddressClient().CreateOrUpdate end", "pipResourceGroup", pipResourceGroup, "pipName", ptr.Deref(pip.Name, ""))
 	if rerr == nil {
 		// Invalidate the cache right after updating
 		_ = az.pipCache.Delete(pipResourceGroup)
@@ -59,7 +71,7 @@ func (az *Cloud) CreateOrUpdatePIP(service *v1.Service, pipResourceGroup string,
 	var respError *azcore.ResponseError
 	if errors.As(rerr, &respError) && respError != nil {
 		if respError.StatusCode == http.StatusPreconditionFailed {
-			klog.V(3).Infof("PublicIP cache for (%s, %s) is cleanup because of http.StatusPreconditionFailed", pipResourceGroup, ptr.Deref(pip.Name, ""))
+			logger.V(3).Info("PublicIP cache is cleanup because of http.StatusPreconditionFailed", "pipResourceGroup", pipResourceGroup, "pipName", ptr.Deref(pip.Name, ""))
 			_ = az.pipCache.Delete(pipResourceGroup)
 		}
 	}
@@ -67,7 +79,7 @@ func (az *Cloud) CreateOrUpdatePIP(service *v1.Service, pipResourceGroup string,
 	retryErrorMessage := rerr.Error()
 	// Invalidate the cache because another new operation has canceled the current request.
 	if strings.Contains(strings.ToLower(retryErrorMessage), consts.OperationCanceledErrorMessage) {
-		klog.V(3).Infof("PublicIP cache for (%s, %s) is cleanup because CreateOrUpdate is canceled by another operation", pipResourceGroup, ptr.Deref(pip.Name, ""))
+		logger.V(3).Info("PublicIP cache is cleanup because CreateOrUpdate is canceled by another operation", "pipResourceGroup", pipResourceGroup, "pipName", ptr.Deref(pip.Name, ""))
 		_ = az.pipCache.Delete(pipResourceGroup)
 	}
 
@@ -78,10 +90,11 @@ func (az *Cloud) CreateOrUpdatePIP(service *v1.Service, pipResourceGroup string,
 func (az *Cloud) DeletePublicIP(service *v1.Service, pipResourceGroup string, pipName string) error {
 	ctx, cancel := getContextWithCancel()
 	defer cancel()
+	logger := log.FromContextOrBackground(ctx).WithName("DeletePublicIP")
 
 	rerr := az.NetworkClientFactory.GetPublicIPAddressClient().Delete(ctx, pipResourceGroup, pipName)
 	if rerr != nil {
-		klog.Errorf("NetworkClientFactory.GetPublicIPAddressClient().Delete(%s) failed: %s", pipName, rerr.Error())
+		logger.Error(rerr, "NetworkClientFactory.GetPublicIPAddressClient().Delete failed", "pipName", pipName)
 		az.Event(service, v1.EventTypeWarning, "DeletePublicIPAddress", rerr.Error())
 
 		if strings.Contains(rerr.Error(), consts.CannotDeletePublicIPErrorMessageCode) {
@@ -155,16 +168,24 @@ func (az *Cloud) listPIP(ctx context.Context, pipResourceGroup string, crt azcac
 	var ret []*armnetwork.PublicIPAddress
 	pips.Range(func(_, value interface{}) bool {
 		pip := value.(*armnetwork.PublicIPAddress)
-		ret = append(ret, pip)
+		// Deep-copy so callers cannot mutate the cache via the returned slice.
+		// This mirrors getPublicIPAddress and keeps failed PUTs from poisoning the cache.
+		ret = append(ret, deepcopy.Copy(pip).(*armnetwork.PublicIPAddress))
 		return true
 	})
 	return ret, nil
 }
 
 func (az *Cloud) findMatchedPIP(ctx context.Context, loadBalancerIP, pipName, pipResourceGroup string) (pip *armnetwork.PublicIPAddress, err error) {
+	if loadBalancerIP != "" && !az.IsStackCloud() {
+		if err := validatePublicIPCandidate(loadBalancerIP); err != nil {
+			return nil, err
+		}
+	}
+
 	pips, err := az.listPIP(ctx, pipResourceGroup, azcache.CacheReadTypeDefault)
 	if err != nil {
-		return nil, fmt.Errorf("findMatchedPIPByLoadBalancerIP: failed to listPIP: %w", err)
+		return nil, fmt.Errorf("findMatchedPIP: failed to listPIP: %w", err)
 	}
 
 	if loadBalancerIP != "" {
@@ -214,11 +235,35 @@ func (az *Cloud) findMatchedPIPByLoadBalancerIP(ctx context.Context, pips []*arm
 
 		pip, err = getExpectedPIPFromListByIPAddress(pipList, loadBalancerIP)
 		if err != nil {
-			return nil, fmt.Errorf("findMatchedPIPByLoadBalancerIP: cannot find public IP with IP address %s in resource group %s", loadBalancerIP, pipResourceGroup)
+			return nil, fmt.Errorf("findMatchedPIPByLoadBalancerIP: cannot find public IP with IP address %s in resource group %s: %w", loadBalancerIP, pipResourceGroup, err)
 		}
 	}
 
 	return pip, nil
+}
+
+func validatePublicIPCandidate(ip string) error {
+	addr, err := netip.ParseAddr(ip)
+	if err != nil {
+		return providererrors.NewInvalidLoadBalancerIPError(ip)
+	}
+	addr = addr.Unmap()
+	if !addr.IsGlobalUnicast() || addr.IsPrivate() || isAzureReservedIP(addr) {
+		return providererrors.NewNonPublicLoadBalancerIPError(ip)
+	}
+	return nil
+}
+
+// isAzureReservedIP reports whether addr belongs to an Azure reserved Virtual
+// Network address range not covered by netip.Addr.IsPrivate:
+// https://learn.microsoft.com/azure/virtual-network/virtual-networks-faq#what-address-ranges-can-i-use-in-my-virtual-networks
+func isAzureReservedIP(addr netip.Addr) bool {
+	for _, prefix := range azureReservedIPPrefixes {
+		if prefix.Contains(addr) {
+			return true
+		}
+	}
+	return false
 }
 
 func getExpectedPIPFromListByIPAddress(pips []*armnetwork.PublicIPAddress, ip string) (*armnetwork.PublicIPAddress, error) {

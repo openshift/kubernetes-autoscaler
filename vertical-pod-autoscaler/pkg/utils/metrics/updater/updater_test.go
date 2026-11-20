@@ -150,6 +150,42 @@ func TestRecordFailedEviction(t *testing.T) {
 	}
 }
 
+func TestRecordInPlaceInfeasibleCached(t *testing.T) {
+	testCases := []struct {
+		desc         string
+		vpaSize      int
+		log2         string
+		vpaName      string
+		vpaNamespace string
+	}{
+		{
+			desc:         "VPA size 2",
+			vpaSize:      2,
+			log2:         "1",
+			vpaName:      "vpa-2",
+			vpaNamespace: "vpa-2-ns",
+		},
+		{
+			desc:         "VPA size 20",
+			vpaSize:      20,
+			log2:         "4",
+			vpaName:      "vpa-20",
+			vpaNamespace: "vpa-20-ns",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.desc, func(t *testing.T) {
+			t.Cleanup(inPlaceInfeasibleCachedCount.Reset)
+			RecordInPlaceInfeasibleCached(tc.vpaSize, tc.vpaName, tc.vpaNamespace)
+			val := testutil.ToFloat64(inPlaceInfeasibleCachedCount.WithLabelValues(tc.log2, tc.vpaName, tc.vpaNamespace))
+			if val != 1 {
+				t.Errorf("Unexpected value for inPlaceInfeasibleCachedCount metric with labels (%s, %s): got %v, want 1", tc.log2, tc.vpaName, val)
+			}
+		})
+	}
+}
+
 func TestAddInPlaceUpdatedPod(t *testing.T) {
 	testCases := []struct {
 		desc         string
@@ -220,6 +256,33 @@ func TestRecordFailedInPlaceUpdate(t *testing.T) {
 			val := testutil.ToFloat64(failedInPlaceUpdateAttempts.WithLabelValues(tc.log2, tc.reason, tc.vpaName, tc.vpaNamespace))
 			if val != 1 {
 				t.Errorf("Unexpected value for FailedInPlaceUpdate metric with labels (%s, %s): got %v, want 1", tc.log2, tc.reason, val)
+			}
+		})
+	}
+}
+
+func TestRecordAdmissionControllerStatusInvalid(t *testing.T) {
+	testCases := []struct {
+		desc   string
+		reason string
+	}{
+		{
+			desc:   "error reason",
+			reason: "error",
+		},
+		{
+			desc:   "invalid reason",
+			reason: "invalid",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.desc, func(t *testing.T) {
+			t.Cleanup(admissionControllerStatusInvalidCount.Reset)
+			RecordAdmissionControllerStatusInvalid(tc.reason)
+			val := testutil.ToFloat64(admissionControllerStatusInvalidCount.WithLabelValues(tc.reason))
+			if val != 1 {
+				t.Errorf("Unexpected value for admissionControllerStatusInvalidCount metric with label %s: got %v, want 1", tc.reason, val)
 			}
 		})
 	}

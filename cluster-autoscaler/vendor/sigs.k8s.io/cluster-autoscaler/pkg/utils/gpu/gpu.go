@@ -1,0 +1,220 @@
+/*
+Copyright 2017 The Kubernetes Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package gpu
+
+import (
+	"context"
+	"fmt"
+	"strings"
+
+	apiv1 "k8s.io/api/core/v1"
+	"k8s.io/klog/v2"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
+	podutils "sigs.k8s.io/cluster-autoscaler/pkg/utils/pod"
+)
+
+const (
+	// ResourceIntelGaudi is the name of the Intel Gaudi resource.
+	ResourceIntelGaudi = "habana.ai/gaudi"
+	// ResourceIntelGPU is the name of the Intel GPU resource (Xe driver).
+	ResourceIntelGPU = "gpu.intel.com/xe"
+	// ResourceAMDGPU is the name of the AMD GPU resource.
+	ResourceAMDGPU = "amd.com/gpu"
+	// ResourceNvidiaGPU is the name of the Nvidia GPU resource.
+	ResourceNvidiaGPU = "nvidia.com/gpu"
+	// ResourceDirectX is the name of the DirectX resource on windows.
+	ResourceDirectX = "microsoft.com/directx"
+	// DefaultGPUType is the type of GPU used in NAP if the user
+	// don't specify what type of GPU his pod wants.
+	DefaultGPUType = "nvidia-tesla-k80"
+)
+
+// GPUVendorResourceNames centralized list of all known GPU vendor extended resource names.
+// Extend this slice if new vendor resource names are added.
+var GPUVendorResourceNames = []apiv1.ResourceName{
+	ResourceNvidiaGPU,
+	ResourceIntelGaudi,
+	ResourceIntelGPU,
+	ResourceAMDGPU,
+	ResourceDirectX,
+}
+
+// IsGPUResource returns true for known GPU resources and NVIDIA MIG or time-sliced resources.
+func IsGPUResource(resourceName apiv1.ResourceName) bool {
+	for _, gpuVendorResourceName := range GPUVendorResourceNames {
+		if resourceName == gpuVendorResourceName {
+			return true
+		}
+	}
+	return IsNvidiaGPUResource(resourceName)
+}
+
+// IsNvidiaGPUResource returns true for NVIDIA whole-GPU, MIG, or time-sliced resources.
+func IsNvidiaGPUResource(resourceName apiv1.ResourceName) bool {
+	resource := string(resourceName)
+	return resourceName == ResourceNvidiaGPU || resource == "nvidia.com/gpu.shared" || strings.HasPrefix(resource, "nvidia.com/mig-")
+}
+
+const (
+	// MetricsGenericGPU - for when there is no information about GPU type
+	MetricsGenericGPU = "generic"
+	// MetricsMissingGPU - for when there's a label, but GPU didn't appear
+	MetricsMissingGPU = "missing-gpu"
+	// MetricsUnexpectedLabelGPU - for when there's a label, but no GPU at all
+	MetricsUnexpectedLabelGPU = "unexpected-label"
+	// MetricsUnknownGPU - for when GPU type is unknown
+	MetricsUnknownGPU = "not-listed"
+	// MetricsErrorGPU - for when there was an error obtaining GPU type
+	MetricsErrorGPU = "error"
+	// MetricsNoGPU - for when there is no GPU and no label all
+	MetricsNoGPU = ""
+)
+
+// GetGpuInfoForMetrics returns the name of the custom resource and the GPU used on the node or empty string if there's no GPU
+// if the GPU type is unknown, "generic" is returned
+// NOTE: current implementation is GKE/GCE-specific
+func GetGpuInfoForMetrics(ctx context.Context, gpuConfig *cloudprovider.GpuConfig, availableGPUTypes map[string]struct{}, node *apiv1.Node, nodeGroup cloudprovider.NodeGroup) (gpuResource string, gpuType string) {
+	// There is no sign of GPU
+	logger := klog.FromContext(ctx)
+	if gpuConfig == nil {
+		return "", MetricsNoGPU
+	}
+
+	resourceName := gpuConfig.ExtendedResourceName
+	capacity, capacityFound := node.Status.Capacity[resourceName]
+	// There is no label value, fallback to generic solution
+	if gpuConfig.Type == "" && capacityFound && !capacity.IsZero() {
+		return resourceName.String(), MetricsGenericGPU
+	}
+
+	// GPU is exposed using DRA, capacity won't be present
+	if gpuConfig.ExposedViaDra() {
+		draResourceName := fmt.Sprintf("dra_%s", gpuConfig.DraDriverName)
+		return draResourceName, validateGpuType(availableGPUTypes, gpuConfig.Type)
+	}
+
+	// GKE-specific label & capacity are present - consistent state
+	if capacityFound {
+		return resourceName.String(), validateGpuType(availableGPUTypes, gpuConfig.Type)
+	}
+
+	// GKE-specific label present but no capacity (yet?) - check the node template
+	if nodeGroup != nil {
+		template, err := nodeGroup.TemplateNodeInfo(ctx)
+		if err != nil {
+			logger.Info("Failed to build template for getting GPU metrics", "node", klog.KObj(node), "err", err)
+			return resourceName.String(), MetricsErrorGPU
+		}
+
+		if _, found := template.Node().Status.Capacity[resourceName]; found {
+			return resourceName.String(), MetricsMissingGPU
+		}
+		// if template does not define GPUs we assume node will not have any even if it has gpu label
+		logger.Info("Template does not define GPUs even though node from its node group does", "node", klog.KObj(node))
+		return resourceName.String(), MetricsUnexpectedLabelGPU
+	}
+
+	return resourceName.String(), MetricsUnexpectedLabelGPU
+}
+
+func validateGpuType(availableGPUTypes map[string]struct{}, gpu string) string {
+	if _, found := availableGPUTypes[gpu]; found {
+		return gpu
+	}
+	return MetricsUnknownGPU
+}
+
+// NodeHasGpu returns true if a given node has GPU hardware.
+// The result will be true if there is hardware capability. It doesn't matter
+// if the drivers are installed and GPU is ready to use.
+func NodeHasGpu(GPULabel string, node *apiv1.Node) bool {
+	_, hasGpuLabel := node.Labels[GPULabel]
+	if hasGpuLabel {
+		return true
+	}
+	// Check for extended resources as well
+	return NodeHasGpuResourceAllocatable(node)
+}
+
+// NodeHasGpuAllocatable returns the GPU allocatable value and whether the node has GPU allocatable resources.
+// It only returns quantities for resources that represent whole GPUs. MIG and time-sliced
+// resource quantities represent slices or replicas and must not be used as physical GPU counts.
+func NodeHasGpuAllocatable(node *apiv1.Node) (gpuAllocatableValue int64, hasGpuAllocatable bool) {
+	for _, gpuVendorResourceName := range GPUVendorResourceNames {
+		gpuAllocatable, found := node.Status.Allocatable[gpuVendorResourceName]
+		if found && !gpuAllocatable.IsZero() {
+			return gpuAllocatable.Value(), true
+		}
+	}
+	return 0, false
+}
+
+// NodeHasGpuResourceAllocatable returns whether the node advertises any non-zero GPU resource.
+func NodeHasGpuResourceAllocatable(node *apiv1.Node) bool {
+	for resourceName, allocatable := range node.Status.Allocatable {
+		if IsGPUResource(resourceName) && !allocatable.IsZero() {
+			return true
+		}
+	}
+	return false
+}
+
+// PodRequestsGpu returns true if a given pod has GPU request.
+func PodRequestsGpu(pod *apiv1.Pod) bool {
+	podRequests := podutils.PodRequests(pod)
+	for resourceName := range podRequests {
+		if IsGPUResource(resourceName) {
+			return true
+		}
+	}
+	return false
+}
+
+// DetectNodeGPUResourceName inspects the node's allocatable resources and returns the first
+// known GPU extended resource name that has non-zero allocatable. Known resource names are
+// preferred for deterministic results. Falls back to Nvidia if none are found.
+func DetectNodeGPUResourceName(node *apiv1.Node) apiv1.ResourceName {
+	for _, rn := range GPUVendorResourceNames {
+		if qty, ok := node.Status.Allocatable[rn]; ok && !qty.IsZero() {
+			return rn
+		}
+	}
+	var detected apiv1.ResourceName
+	for resourceName, allocatable := range node.Status.Allocatable {
+		if IsGPUResource(resourceName) && !allocatable.IsZero() && (detected == "" || resourceName < detected) {
+			detected = resourceName
+		}
+	}
+	if detected != "" {
+		return detected
+	}
+	return ResourceNvidiaGPU
+}
+
+// GetNodeGPUFromCloudProvider returns the GPU the node has. Returned GPU has the GPU label of the
+// passed in cloud provider. If the node doesn't have a GPU, returns nil.
+func GetNodeGPUFromCloudProvider(ctx context.Context, provider cloudprovider.CloudProvider, node *apiv1.Node) *cloudprovider.GpuConfig {
+	gpuLabel := provider.GPULabel(ctx)
+	if NodeHasGpu(gpuLabel, node) {
+		return &cloudprovider.GpuConfig{
+			Label:                gpuLabel,
+			Type:                 node.Labels[gpuLabel],
+			ExtendedResourceName: DetectNodeGPUResourceName(node),
+		}
+	}
+	return nil
+}
